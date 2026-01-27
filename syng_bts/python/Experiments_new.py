@@ -81,6 +81,7 @@ def PilotExperiment(
     dat_pd = df
     data_pd = dat_pd.select_dtypes(include=np.number)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
+    colnames = data_pd.columns
 
     # log2 transformation
     oridata = preprocessinglog2(oridata)
@@ -382,6 +383,7 @@ def PilotExperiment(
                     savepathnew=savepathnew,  # path to save newly generated samples
                     rawdata=rawdata,  # raw data tensor with samples in row, features in column
                     rawlabels=rawlabels,  # abels for each sample, n_samples * 1, will not be used in AE or VAE
+                    colnames=colnames,
                     batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
                     random_seed=random_seed,
                     modelname=modelname,  # choose from "VAE", "AE"
@@ -492,18 +494,18 @@ def ApplyExperiment(
     batch_frac,
     learning_rate,
     epoch,
-    val_ratio = 0.2,       # Control whether separate the dataset in-function
+    val_ratio=0.2,  # Control whether separate the dataset in-function
     early_stop_num=None,
     off_aug=None,
     AE_head_num=2,
     Gaussian_head_num=9,
     pre_model=None,
     save_model=None,
-    use_scheduler = False,
-    step_size = 10,
-    gamma = 0.5
-    cap = False,           # Whether capping new samples or not
-    random_seed = 123
+    use_scheduler=False,
+    step_size=10,
+    gamma=0.5,
+    cap=False,  # Whether capping new samples or not
+    random_seed=123,
 ):
     r"""
         This function trains VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP
@@ -533,7 +535,7 @@ def ApplyExperiment(
     early_stop_num : int
             if loss does not improve for early_stop_num epochs, the training will stop. Default value is 30. Only take effect when epoch == None.
     off_aug : string (AE_head or Gaussian_head or None)
-            choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect. 
+            choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect.
             If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
     AE_head_num : int
             how many folds of AEhead augmentation needed. Default value is 2, Only take effect when off_aug == "AE_head"
@@ -731,27 +733,27 @@ def ApplyExperiment(
             savepathnew=savepathnew,  # path to save newly generated samples
             rawdata=rawdata,  # raw data tensor with samples in row, features in column
             rawlabels=rawlabels,  # abels for each sample, n_samples * 1, will not be used in AE or VAE
-            colnames = colnames,  # colnames saved
+            colnames=colnames,  # colnames saved
             batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
             random_seed=random_seed,
             modelname=modelname,  # choose from "VAE", "AE"
             num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
             learning_rate=learning_rate,
-            val_ratio = val_ratio, # validation set ratio
+            val_ratio=val_ratio,  # validation set ratio
             kl_weight=kl_weight,  # only take effect if model name is VAE, default value is
             early_stop=early_stop,  # whether use early stopping rule
             early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
             pre_model=pre_model,  # load pre-trained model from transfer learning
             save_model=save_model,  # save model for transfer learning, specify the path if want to save model
-            cap = cap, # whether capping the new samples
+            cap=cap,  # whether capping the new samples
             loss_fn="MSE",  # only choose WMSE if you know the weights, ow. choose MSE by default
             save_recons=False,  # whether save reconstructed data, if True, savepath must be provided
             new_size=new_size,  # how many new samples you want to generate
             save_new=True,  # whether save new samples, if True, savepathnew must be provided
             plot=False,
-            use_scheduler = use_scheduler,
-            step_size = step_size,
-            gamma = gamma
+            use_scheduler=use_scheduler,
+            step_size=step_size,
+            gamma=gamma,
         )  # whether plot reconstructed samples' heatmap
 
         print("VAEs model training finished.")

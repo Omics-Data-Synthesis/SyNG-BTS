@@ -1,1 +1,78 @@
-#from .python.Experiments_new import PilotExperiment
+"""
+SyNG-BTS: Synthesis of Next Generation Bulk Transcriptomic Sequencing
+
+A data augmentation tool for synthesizing transcriptomics data with realistic
+distributions using deep generative models (VAE, GAN, Flow-based models).
+
+Example usage:
+    from syng_bts import PilotExperiment, ApplyExperiment
+
+    # Run a pilot experiment
+    PilotExperiment(
+        dataname="SKCMPositive_4",
+        pilot_size=[100],
+        model="VAE1-10",
+        batch_frac=0.1,
+        learning_rate=0.0005,
+        epoch=None,
+        early_stop_num=30
+    )
+
+For more information, see:
+- Documentation: https://syng-bts.readthedocs.io/
+- GitHub: https://github.com/LXQin/SyNG-BTS
+- Paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC11899567/
+"""
+
+__version__ = "2.4.0"
+__author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
+__email__ = "qinl@mskcc.org"
+__license__ = "AGPL-3.0"
+
+# Import main experiment functions
+from .experiments import (
+    PilotExperiment,
+    ApplyExperiment,
+    TransferExperiment,
+)
+
+# Create alias for backward compatibility
+Transfer = TransferExperiment
+
+# Import evaluation functions
+from .evaluations import (
+    heatmap_eval,
+    UMAP_eval,
+    evaluation,
+)
+
+# Import models (for advanced users who want to use models directly)
+from .helper_models import (
+    AE,
+    VAE,
+    CVAE,
+    GAN,
+)
+
+# Define public API
+__all__ = [
+    # Version info
+    "__version__",
+    "__author__",
+    "__email__",
+    "__license__",
+    # Main experiment functions
+    "PilotExperiment",
+    "ApplyExperiment",
+    "TransferExperiment",
+    "Transfer",  # Alias for TransferExperiment
+    # Evaluation functions
+    "heatmap_eval",
+    "UMAP_eval",
+    "evaluation",
+    # Model classes (for advanced usage)
+    "AE",
+    "VAE",
+    "CVAE",
+    "GAN",
+]

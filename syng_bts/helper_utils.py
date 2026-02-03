@@ -7,7 +7,6 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import os
 import random
-from pathlib import Path
 import torch.nn.functional as F
 
 
@@ -230,18 +229,9 @@ def plot_recons_samples(
         plt.show()
 
     if savepath is not None:
-        components = savepath.split("/")
-        directory = "/".join(savepath.split("/")[:2])
-        os.makedirs(directory, exist_ok=True)
-        for i in range(2, len(components) - 1):
-            directory = directory + "/" + components[i]
-            os.makedirs(directory, exist_ok=True)
-            print("Directory created: " + directory)
-
-        file_path = savepath
-        # used to be savepath instead of file_path
+        # Directory is pre-created by get_output_path() in experiments.py
         np.savetxt(
-            file_path,
+            savepath,
             torch.cat((orig_all, decoded_all), dim=0).detach().numpy(),
             delimiter=",",
         )
@@ -387,17 +377,7 @@ def plot_new_samples(
             plt.show()
 
         if savepathnew is not None:
-            if isinstance(savepathnew, Path):
-                path_components = savepathnew.parts
-            else:
-                path_components = str(savepathnew).split("/")
-            directory = "/".join(path_components[:2])
-            os.makedirs(directory, exist_ok=True)
-            for i in range(2, len(path_components) - 1):
-                directory = directory + "/" + path_components[i]
-                os.makedirs(directory, exist_ok=True)
-                print("Directory created: " + directory)
-            # used to be savepath instead of file_path
+            # Directory is pre-created by get_output_path() in experiments.py
             np.savetxt(savepathnew, new_images.detach().numpy(), delimiter=",")
         else:
             return new_images

@@ -1,12 +1,13 @@
-import umap.umap_ as umap
+import umap.umap_ as umap  # noqa: F401
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from umap import UMAP
-import os
+from pathlib import Path
+from typing import Optional, Union
 
-import importlib.resources as pkg_resources
+from .data_utils import load_dataset
 
 
 def heatmap_eval(dat_real, dat_generated=None, save=False):
@@ -160,37 +161,72 @@ def UMAP_eval(
 def evaluation(
     generated_input: str = "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.csv",
     real_input: str = "BRCASubtypeSel_test.csv",
+    data_dir: Optional[Union[str, Path]] = None,
 ):
     r"""
-    This method provides preprocessing of the input data prior to creating the visualizations.
-    This can also be used as inspiration for other ways of using the above evaluation methods.
+    Preprocessing and visualization of generated vs real data.
 
-    generated_input : string
-        the generated dataset; a default set is also provided as an example
-    real_input : string
-        the real original dataset; a default set is also provided as an example
+    This method preprocesses the input data and creates visualizations
+    comparing generated and real datasets.
 
+    Parameters
+    ----------
+    generated_input : str
+        Filename of the generated dataset. A default example is provided.
+    real_input : str
+        Filename of the real original dataset. A default example is provided.
+    data_dir : str, Path, or None
+        Directory containing the data files. If None, tries bundled package data.
+
+    Examples
+    --------
+    >>> from syng_bts import evaluation
+    >>> evaluation()  # Uses bundled example data
+    >>> evaluation(data_dir="./my_data")  # Uses custom data directory
     """
-    train_path = "../Case/BRCASubtype/" + generated_input
-    if (
-        generated_input == "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.csv"
-        and not os.path.exists(path=train_path)
-    ):
-        with pkg_resources.open_text(
-            "syng_bts.Case.BRCASubtype",
-            "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.csv",
-        ) as data_file:
-            generated = pd.read_csv(data_file)
+    # Load generated data
+    generated_name = generated_input.replace(".csv", "")
+    if data_dir is not None:
+        generated_path = Path(data_dir) / generated_input
+        if generated_path.exists():
+            generated = pd.read_csv(generated_path, header=0)
+        else:
+            generated = load_dataset(generated_name, data_path=generated_path)
     else:
-        generated = pd.read_csv(train_path, header=0)
-    test_path = "../Case/BRCASubtype/" + real_input
-    if real_input == "BRCASubtypeSel_test.csv" and not os.path.exists(path=test_path):
-        with pkg_resources.open_text(
-            "syng_bts.Case.BRCASubtype", "BRCASubtypeSel_test.csv"
-        ) as data_file:
-            real = pd.read_csv(data_file)
+        try:
+            generated = load_dataset(generated_name)
+        except FileNotFoundError:
+            # Legacy path fallback
+            legacy_path = Path("../Case/BRCASubtype") / generated_input
+            if legacy_path.exists():
+                generated = pd.read_csv(legacy_path, header=0)
+            else:
+                raise FileNotFoundError(
+                    f"Could not find generated data '{generated_input}'. "
+                    f"Specify data_dir parameter."
+                )
+
+    # Load real data
+    real_name = real_input.replace(".csv", "")
+    if data_dir is not None:
+        real_path = Path(data_dir) / real_input
+        if real_path.exists():
+            real = pd.read_csv(real_path, header=0)
+        else:
+            real = load_dataset(real_name, data_path=real_path)
     else:
-        real = pd.read_csv(test_path, header=0)
+        try:
+            real = load_dataset(real_name)
+        except FileNotFoundError:
+            # Legacy path fallback
+            legacy_path = Path("../Case/BRCASubtype") / real_input
+            if legacy_path.exists():
+                real = pd.read_csv(legacy_path, header=0)
+            else:
+                raise FileNotFoundError(
+                    f"Could not find real data '{real_input}'. "
+                    f"Specify data_dir parameter."
+                )
 
     # Define the default group level
     level0 = real["groups"].iloc[0]

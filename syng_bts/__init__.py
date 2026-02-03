@@ -54,6 +54,13 @@ from .helper_models import (
     GAN,
 )
 
+# Import data utilities
+from .data_utils import (
+    load_dataset,
+    set_default_output_dir,
+    get_output_dir,
+)
+
 # Define public API
 __all__ = [
     # Version info
@@ -75,4 +82,8 @@ __all__ = [
     "VAE",
     "CVAE",
     "GAN",
+    # Data utilities
+    "load_dataset",
+    "set_default_output_dir",
+    "get_output_dir",
 ]

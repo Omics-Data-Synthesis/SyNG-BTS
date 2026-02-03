@@ -6,28 +6,30 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 from pathlib import Path
+from typing import Optional, Union, List
 from .helper_utils import *
 from .helper_training import *
+from .data_utils import load_dataset, get_output_path, ensure_dir
 import re
 
 sns.set()
 
-import importlib.resources as pkg_resources
-
 
 # %% Define pilot experiments functions
 def PilotExperiment(
-    dataname,
-    pilot_size,
-    model,
-    batch_frac,
-    learning_rate,
-    epoch,
-    early_stop_num=30,
-    off_aug=None,
-    AE_head_num=2,
-    Gaussian_head_num=9,
-    pre_model=None,
+    dataname: str,
+    pilot_size: List[int],
+    model: str,
+    batch_frac: float,
+    learning_rate: float,
+    epoch: Optional[int],
+    early_stop_num: int = 30,
+    off_aug: Optional[str] = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    pre_model: Optional[str] = None,
+    data_dir: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
 ):
     r"""
     This function trains VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP with several pilot sizes given data, model, batch_size, learning_rate, epoch, off_aug and pre_model.
@@ -58,20 +60,39 @@ def PilotExperiment(
             how many folds of Gaussianhead augmentation needed. Default value is 9, Only take effect when off_aug == "Gaussian_head"
     pre_model : string
                     transfer learning input model. If pre_model == None, no transfer learning
+    data_dir : str, Path, or None
+               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+    output_dir : str, Path, or None
+                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
 
     """
-    # read in data
-
-    path = "../RealData/" + dataname + ".csv"
-
-    # just use an if statement for datasets that are already built in
-    if dataname == "SKCMPositive_4" and not os.path.exists(path):
-        with pkg_resources.open_text(
-            "syng_bts.RealData", "SKCMPositive_4.csv"
-        ) as data_file:
-            df = pd.read_csv(data_file)
+    # Set up output directory
+    if output_dir is not None:
+        output_dir = Path(output_dir)
     else:
-        df = pd.read_csv(path, header=0)
+        output_dir = Path.cwd()
+
+    # Read in data
+    data_path = None
+    if data_dir is not None:
+        data_path = Path(data_dir) / f"{dataname}.csv"
+
+    try:
+        # Try loading from specified path or bundled data
+        df = load_dataset(dataname, data_path=data_path)
+        print(f"1. Read data: {dataname}")
+    except FileNotFoundError:
+        # Fallback to legacy path for backward compatibility
+        legacy_path = Path("../RealData") / f"{dataname}.csv"
+        if legacy_path.exists():
+            df = pd.read_csv(legacy_path, header=0)
+            print(f"1. Read data, path is {legacy_path}")
+        else:
+            raise FileNotFoundError(
+                f"Could not find dataset '{dataname}'. "
+                f"Specify data_dir or ensure the file exists."
+            )
+
     dat_pd = df
     data_pd = dat_pd.select_dtypes(include=np.number)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
@@ -90,8 +111,6 @@ def PilotExperiment(
     # create 0-1 labels, this function use the first element in groups as 0.
     # also create blurlabels.
     orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
-
-    print("1. Read data, path is " + path)
 
     # get model name and kl_weight if modelname is some autoencoder
     if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
@@ -184,127 +203,45 @@ def PilotExperiment(
             if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
                 rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
 
-            savepath = (
-                "../ReconsData/"
-                + dataname
-                + "_"
-                + model
-                + "_"
-                + str(n_pilot)
-                + "_Draw"
-                + str(rand_pilot)
-                + ".csv"
-            )
-            savepathnew = (
-                "../GeneratedData/"
-                + dataname
-                + "_"
-                + model
-                + "_"
-                + str(n_pilot)
-                + "_Draw"
-                + str(rand_pilot)
-                + ".csv"
-            )
-            losspath = (
-                "../Loss/"
-                + dataname
-                + "_"
-                + model
-                + "_"
-                + str(n_pilot)
-                + "_Draw"
-                + str(rand_pilot)
-                + ".csv"
-            )
+            # Build output file names
+            base_name = f"{dataname}_{model}_{n_pilot}_Draw{rand_pilot}.csv"
+            savepath = str(get_output_path(output_dir, "ReconsData", base_name))
+            savepathnew = str(get_output_path(output_dir, "GeneratedData", base_name))
+            losspath = str(get_output_path(output_dir, "Loss", base_name))
 
             # whether or not add Gaussian_head augmentation
             if Gaussian_head:
                 rawdata, rawlabels = Gaussian_aug(
                     rawdata, rawlabels, multiplier=[Gaussian_head_num]
                 )
-                savepath = (
-                    "../ReconsData/"
-                    + dataname
-                    + "_Gaussianhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                # Update paths for Gaussian head augmentation
+                gauss_base_name = (
+                    f"{dataname}_Gaussianhead_{model}_{n_pilot}_Draw{rand_pilot}.csv"
                 )
-                savepathnew = (
-                    "../GeneratedData/"
-                    + dataname
-                    + "_Gaussianhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                savepath = str(
+                    get_output_path(output_dir, "ReconsData", gauss_base_name)
                 )
-                losspath = (
-                    "../Loss/"
-                    + dataname
-                    + "_"
-                    + model
-                    + "_Gaussianhead_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                savepathnew = str(
+                    get_output_path(output_dir, "GeneratedData", gauss_base_name)
                 )
+                losspath = str(get_output_path(output_dir, "Loss", gauss_base_name))
                 print("Gaussian head is added.")
 
             # if AE_head = True, for each pilot size, 2 iterative AE reconstruction will be conducted first
             # resulting in n_pilot * 4 samples, and the extended samples will be input to the model specified by modelname
             if AE_head:
-                savepath = (
-                    "../ReconsData/"
-                    + dataname
-                    + "_AEhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                # Update paths for AE head augmentation
+                ae_base_name = (
+                    f"{dataname}_AEhead_{model}_{n_pilot}_Draw{rand_pilot}.csv"
                 )
-                savepathnew = (
-                    "../GeneratedData/"
-                    + dataname
-                    + "_AEhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                savepath = str(get_output_path(output_dir, "ReconsData", ae_base_name))
+                savepathnew = str(
+                    get_output_path(output_dir, "GeneratedData", ae_base_name)
                 )
-                savepathextend = (
-                    "../ExtendData/"
-                    + dataname
-                    + "_AEhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
+                savepathextend = str(
+                    get_output_path(output_dir, "ExtendData", ae_base_name)
                 )
-                losspath = (
-                    "../Loss/"
-                    + dataname
-                    + "_AEhead_"
-                    + model
-                    + "_"
-                    + str(n_pilot)
-                    + "_Draw"
-                    + str(rand_pilot)
-                    + ".csv"
-                )
+                losspath = str(get_output_path(output_dir, "Loss", ae_base_name))
                 print("AE reconstruction head is added, reconstruction starting ...")
                 feed_data, feed_labels = training_iter(
                     iter_times=AE_head_num,  # how many times to iterative, will get pilot_size * 2^iter_times reconstructed samples
@@ -360,15 +297,7 @@ def PilotExperiment(
                         "generator": log_dict["train_generator_loss_per_batch"],
                     }
                 )
-                # create directory if not exists
-                components = losspath.split("/")
-                directory = "/".join(losspath.split("/")[:2])
-                # print("Directory created: " + directory)
-                os.makedirs(directory, exist_ok=True)
-                for i in range(2, len(components) - 1):
-                    directory = directory + "/" + components[i]
-                    os.makedirs(directory, exist_ok=True)
-                    print("Directory created: " + directory)
+                # Directory is already created by get_output_path
                 log_pd.to_csv(Path(losspath), index=False)
 
             elif "AE" in modelname:
@@ -402,15 +331,7 @@ def PilotExperiment(
                         "recons": log_dict["train_reconstruction_loss_per_batch"],
                     }
                 )
-                # create directory if not exists
-                components = losspath.split("/")
-                directory = "/".join(losspath.split("/")[:2])
-                # print("Directory created: " + directory)
-                os.makedirs(directory, exist_ok=True)
-                for i in range(2, len(components) - 1):
-                    directory = directory + "/" + components[i]
-                    os.makedirs(directory, exist_ok=True)
-                    print("Directory created: " + directory)
+                # Directory is already created by get_output_path
                 log_pd.to_csv(Path(losspath), index=False)
             elif "maf" in modelname:
                 training_flows(
@@ -480,85 +401,112 @@ def PilotExperiment(
 
 # %% Define application of experiment
 def ApplyExperiment(
-    path,
-    dataname,
-    apply_log,
-    new_size,
-    model,
-    batch_frac,
-    learning_rate,
-    epoch,
-    val_ratio=0.2,  # Control whether separate the dataset in-function
-    early_stop_num=None,
-    off_aug=None,
-    AE_head_num=2,
-    Gaussian_head_num=9,
-    pre_model=None,
-    save_model=None,
-    use_scheduler=False,
-    step_size=10,
-    gamma=0.5,
-    cap=False,  # Whether capping new samples or not
-    random_seed=123,
+    path: Optional[Union[str, Path]] = None,
+    dataname: str = "",
+    apply_log: bool = True,
+    new_size: Union[int, List[int]] = 500,
+    model: str = "VAE1-10",
+    batch_frac: float = 0.1,
+    learning_rate: float = 0.0005,
+    epoch: Optional[int] = None,
+    val_ratio: float = 0.2,
+    early_stop_num: Optional[int] = None,
+    off_aug: Optional[str] = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    pre_model: Optional[str] = None,
+    save_model: Optional[str] = None,
+    use_scheduler: bool = False,
+    step_size: int = 10,
+    gamma: float = 0.5,
+    cap: bool = False,
+    random_seed: int = 123,
+    data_dir: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
 ):
     r"""
-        This function trains VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP
-        given data, model, batch_size, learning_rate, epoch, off_aug and pre_model
-        and generate new samples with size specified by the users.
+    Train deep generative models and generate new samples.
+
+    This function trains VAE, CVAE, GAN, WGAN, WGANGP, MAF, GLOW, or RealNVP
+    given data, model parameters, and generates new samples of specified size.
 
     Parameters
     ----------
-    path : string
-            path for reading real data and saving new data
-    dataname : string
-            pure data name without .csv. Eg: BRCASubtypeSel_train
-    apply_log : boolean
-            logical whether apply log transformation before training
-    new_size : int
-            the number of generated samples. If CVAE is called, the group sample size will be new_size/2.
-    model : string
-            ame of the model to be trained
-    batch_frac : float
-            batch fraction
-    learning_rate : float
-            learning rate
-    epoch : int
-            choose from None (early_stop), or any interger, if choose None, early_stop_num will take effect
-    val_ratio : float
-            the ratio of validation set
-    early_stop_num : int
-            if loss does not improve for early_stop_num epochs, the training will stop. Default value is 30. Only take effect when epoch == None.
-    off_aug : string (AE_head or Gaussian_head or None)
-            choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect.
-            If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
-    AE_head_num : int
-            how many folds of AEhead augmentation needed. Default value is 2, Only take effect when off_aug == "AE_head"
-    Gaussian_head_num : int
-            how many folds of Gaussianhead augmentation needed. Default value is 9, Only take effect when off_aug == "Gaussian_head"
-    pre_model : string
-            transfer learning input model. If pre_model == None, no transfer learning
-    save_model : string
-            if the trained model should be saved, specify the path and name of the saved model
-    use_scheduler : boolean
-            turn on/off scheduler for training
-    step_size : int
-            step size for scheduler
-    gamma : float
-            gamma for scheduler
-    cap : boolean
-            whether capping new samples
-    random_seed : int
+    path : str or None, default=None
+        DEPRECATED: Use data_dir and output_dir instead.
+        Legacy path for reading real data and saving new data.
+    dataname : str
+        Pure data name without .csv extension. E.g., "BRCASubtypeSel_train"
+    apply_log : bool, default=True
+        Whether to apply log2 transformation before training.
+    new_size : int or list of int
+        Number of generated samples. For CVAE, group sample size is new_size/2.
+    model : str, default="VAE1-10"
+        Name of the model to train.
+    batch_frac : float, default=0.1
+        Batch fraction (proportion of data per batch).
+    learning_rate : float, default=0.0005
+        Learning rate for training.
+    epoch : int or None
+        Number of epochs, or None for early stopping.
+    val_ratio : float, default=0.2
+        Ratio of validation set.
+    early_stop_num : int or None
+        Stop training if loss doesn't improve for this many epochs.
+    off_aug : str or None
+        Offline augmentation: "AE_head", "Gaussian_head", or None.
+    AE_head_num : int, default=2
+        Fold multiplier for AE head augmentation.
+    Gaussian_head_num : int, default=9
+        Fold multiplier for Gaussian head augmentation.
+    pre_model : str or None
+        Path to pre-trained model for transfer learning.
+    save_model : str or None
+        Path to save the trained model.
+    use_scheduler : bool, default=False
+        Whether to use learning rate scheduler.
+    step_size : int, default=10
+        Step size for scheduler.
+    gamma : float, default=0.5
+        Gamma for scheduler.
+    cap : bool, default=False
+        Whether to cap new samples.
+    random_seed : int, default=123
+        Random seed for reproducibility.
+    data_dir : str, Path, or None
+               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+    output_dir : str, Path, or None
+                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
     """
-
-    read_path = path + dataname + ".csv"
-    # just use an if statement for datasets that are already built in
-    if dataname == "BRCASubtypeSel" and not os.path.exists(path):
-        with pkg_resources.open_text(
-            "syng_bts.Case.BRCASubtype", "BRCASubtypeSel.csv"
-        ) as data_file:
-            df = pd.read_csv(data_file)
+    # Handle path parameter for backward compatibility
+    if output_dir is None and path is not None:
+        output_dir = Path(path)
+    elif output_dir is not None:
+        output_dir = Path(output_dir)
     else:
-        df = pd.read_csv(read_path, header=0)
+        output_dir = Path.cwd()
+
+    if data_dir is None and path is not None:
+        data_dir = Path(path)
+
+    # Read in data
+    if data_dir is not None:
+        read_path = Path(data_dir) / f"{dataname}.csv"
+    else:
+        read_path = Path(f"{dataname}.csv")
+
+    try:
+        if read_path.exists():
+            df = pd.read_csv(read_path, header=0)
+        else:
+            # Try loading from bundled data
+            df = load_dataset(dataname, data_path=read_path)
+    except FileNotFoundError:
+        # Fallback for bundled datasets
+        df = load_dataset(dataname)
+
+    print(f"1. Read data: {dataname}")
+
     dat_pd = df
     data_pd = dat_pd.select_dtypes(include=np.number)
     if "groups" in data_pd.columns:
@@ -574,7 +522,6 @@ def ApplyExperiment(
         groups = None
 
     orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
-    print("1. Read data, path is " + read_path)
 
     # get model name and kl_weight if modelname is some autoencoder
     if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
@@ -634,24 +581,26 @@ def ApplyExperiment(
     # hyperparameters
     # random_seed = 123
 
-    savepath = path + dataname + "_" + model + "_recons.csv"
-    savepathnew = path + dataname + "_" + model + "_generated.csv"
-    losspath = path + dataname + "_" + model + "_loss.csv"
+    # Build output paths using output_dir
+    savepath = str(output_dir / f"{dataname}_{model}_recons.csv")
+    savepathnew = str(output_dir / f"{dataname}_{model}_generated.csv")
+    losspath = str(output_dir / f"{dataname}_{model}_loss.csv")
+    ensure_dir(output_dir)
 
     if Gaussian_head:
         rawdata, rawlabels = Gaussian_aug(
             rawdata, rawlabels, multiplier=[Gaussian_head_num]
         )
-        savepath = path + dataname + "_Gaussianhead_" + model + "_recons.csv"
-        savepathnew = path + dataname + "_Gaussianhead_" + model + "_generated.csv"
-        losspath = path + dataname + "_Gaussianhead_" + model + "_loss.csv"
+        savepath = str(output_dir / f"{dataname}_Gaussianhead_{model}_recons.csv")
+        savepathnew = str(output_dir / f"{dataname}_Gaussianhead_{model}_generated.csv")
+        losspath = str(output_dir / f"{dataname}_Gaussianhead_{model}_loss.csv")
         print("Gaussian head is added.")
 
     if AE_head:
-        savepathextend = path + dataname + "_AEhead_" + model + "_extend.csv"
-        savepath = path + dataname + "_AEhead_" + model + "_recons.csv"
-        savepathnew = path + dataname + "_AEhead_" + model + "_generated.csv"
-        losspath = path + dataname + "_AEhead_" + model + "_loss.csv"
+        savepathextend = str(output_dir / f"{dataname}_AEhead_{model}_extend.csv")
+        savepath = str(output_dir / f"{dataname}_AEhead_{model}_recons.csv")
+        savepathnew = str(output_dir / f"{dataname}_AEhead_{model}_generated.csv")
+        losspath = str(output_dir / f"{dataname}_AEhead_{model}_loss.csv")
         print("AE reconstruction head is added, reconstruction starting ...")
         feed_data, feed_labels = training_iter(
             iter_times=AE_head_num,  # how many times to iterative, will get pilot_size * 2^iter_times reconstructed samples
@@ -709,16 +658,7 @@ def ApplyExperiment(
                 "generator": log_dict["train_generator_loss_per_batch"],
             }
         )
-        # create directory if not exists
-        # temp fix to paths
-        components = losspath.split("/")
-        directory = "/".join(losspath.split("/")[:2])
-        # print("Directory created: " + directory)
-        os.makedirs(directory, exist_ok=True)
-        for i in range(2, len(components) - 1):
-            directory = directory + "/" + components[i]
-            os.makedirs(directory, exist_ok=True)
-            print("Directory created: " + directory)
+        # Directory is already ensured to exist
         log_pd.to_csv(Path(losspath), index=False)
 
     elif "AE" in modelname:
@@ -757,16 +697,7 @@ def ApplyExperiment(
                 "recons": log_dict["val_reconstruction_loss_per_batch"],
             }
         )
-        # create directory if not exists
-        # temp fix to paths
-        components = losspath.split("/")
-        directory = "/".join(losspath.split("/")[:2])
-        print("Directory created: " + directory)
-        os.makedirs(directory, exist_ok=True)
-        for i in range(2, len(components) - 1):
-            directory = directory + "/" + components[i]
-            os.makedirs(directory, exist_ok=True)
-            print("Directory created: " + directory)
+        # Directory is already ensured to exist
         log_pd.to_csv(Path(losspath), index=False)
     elif "maf" in modelname:
         training_flows(
@@ -836,55 +767,73 @@ def ApplyExperiment(
 
 # %% Define transfer learing
 def TransferExperiment(
-    pilot_size,
-    fromname,
-    toname,
-    fromsize,
-    model,
-    new_size=500,
-    apply_log=True,
-    epoch=None,
-    batch_frac=0.1,
-    learning_rate=0.0005,
-    off_aug=None,
+    pilot_size: Optional[List[int]] = None,
+    fromname: str = "",
+    toname: str = "",
+    fromsize: int = 500,
+    model: str = "VAE1-10",
+    new_size: int = 500,
+    apply_log: bool = True,
+    epoch: Optional[int] = None,
+    batch_frac: float = 0.1,
+    learning_rate: float = 0.0005,
+    off_aug: Optional[str] = None,
+    data_dir: Optional[Union[str, Path]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
 ):
     """
-    This function runs transfer learning using VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP.
-    The model will be first trained on the pre-training dataset, and then the trained model will be saved, and the fine-tuning dataset will be trained on the save model.
-    The fine tuning model training can be pilot experiments or apply experiments depending on the input of the pilot_size.
-    Make sure data files for pre_model training and fine tuning model training are in the folder Transfer/.
+    Run transfer learning using deep generative models.
+
+    This function trains VAE, CVAE, GAN, WGAN, WGANGP, MAF, GLOW, or RealNVP
+    using transfer learning. The model is first trained on the pre-training
+    dataset, then fine-tuned on the target dataset.
 
     Parameters
     ----------
-    pilot_size : int
-                    if None, the fine tuning model will be apply experiment and new_size will take effect
-                    otherwise, the fine tuning model will be trained using pilot experiments
-    fromname : string
-                name of the pretraining dataset
-    toname : string
-                name of the fine tuning dataset
-    fromsize : int
-                number of samples when pre-training the model
-    new_size : int
-                if apply experiment, this will be the sample size of generated samples
-    apply_log : boolean
-                logical whether apply log transformation before training
-    model : string
-                name of the model to be trained
-    batch_frac : float
-                batch fraction
-    learning_rate : float
-              learning rate
-    epoch : int
-            choose from None (early_stop), or any interger, if choose None, early_stop_num will take effect
-    off_aug : string (AE_head or Gaussian_head or None)
-            choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect. If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
+    pilot_size : list of int or None
+        If None, uses ApplyExperiment for fine-tuning and new_size takes effect.
+        Otherwise, uses PilotExperiment with the specified pilot sizes.
+    fromname : str
+        Name of the pre-training dataset (without .csv extension).
+    toname : str
+        Name of the fine-tuning dataset (without .csv extension).
+    fromsize : int, default=500
+        Number of samples to generate when pre-training.
+    new_size : int, default=500
+        Sample size for generated samples in ApplyExperiment mode.
+    apply_log : bool, default=True
+        Whether to apply log2 transformation before training.
+    model : str, default="VAE1-10"
+        Name of the model to train.
+    batch_frac : float, default=0.1
+        Batch fraction.
+    learning_rate : float, default=0.0005
+        Learning rate.
+    epoch : int or None
+        Number of epochs, or None for early stopping.
+    off_aug : str or None
+        Offline augmentation: "AE_head", "Gaussian_head", or None.
+    data_dir : str, Path, or None
+               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+    output_dir : str, Path, or None
+                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
     """
+    # Set up directories
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+    else:
+        output_dir = Path.cwd()
 
-    path = "../Transfer/"
-    save_model = "../Transfer/" + toname + "_from" + fromname + "_" + model + ".pt"
+    if data_dir is not None:
+        data_dir = Path(data_dir)
+
+    # Create transfer subdirectory for models
+    transfer_dir = output_dir / "Transfer"
+    ensure_dir(transfer_dir)
+
+    save_model_path = str(transfer_dir / f"{toname}_from{fromname}_{model}.pt")
+
     ApplyExperiment(
-        path=path,
         dataname=fromname,
         apply_log=apply_log,
         new_size=[fromsize],
@@ -897,11 +846,13 @@ def TransferExperiment(
         AE_head_num=2,
         Gaussian_head_num=9,
         pre_model=None,
-        save_model=save_model,
+        save_model=save_model_path,
+        data_dir=data_dir,
+        output_dir=transfer_dir,
     )
 
     # training toname using pre-model
-    pre_model = "../Transfer/" + toname + "_from" + fromname + "_" + model + ".pt"
+    pre_model_path = save_model_path
     if pilot_size is not None:
         PilotExperiment(
             dataname=toname,
@@ -909,16 +860,17 @@ def TransferExperiment(
             model=model,
             batch_frac=batch_frac,
             learning_rate=learning_rate,
-            pre_model=pre_model,
+            pre_model=pre_model_path,
             epoch=epoch,
             off_aug=off_aug,
             early_stop_num=30,
             AE_head_num=2,
             Gaussian_head_num=9,
+            data_dir=data_dir,
+            output_dir=output_dir,
         )
     else:
         ApplyExperiment(
-            path=path,
             dataname=toname,
             apply_log=apply_log,
             new_size=[new_size],
@@ -930,6 +882,8 @@ def TransferExperiment(
             off_aug=off_aug,
             AE_head_num=2,
             Gaussian_head_num=9,
-            pre_model=pre_model,
+            pre_model=pre_model_path,
             save_model=None,
+            data_dir=data_dir,
+            output_dir=transfer_dir,
         )

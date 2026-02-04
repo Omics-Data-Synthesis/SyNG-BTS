@@ -1,11 +1,19 @@
 # ============================================
-# Project-specific output directories
+# Project-specific output directories and files
 # ============================================
 # These directories are created during training/experiments
 GeneratedData/
 ReconsData/
 ExtendData/
 Loss/
+TestOutput/
+runs/
+
+# Generated output files (can appear anywhere)
+*.csvplot
+*_generated.csv
+*_loss.csv
+*.pt
 
 # ============================================
 # Development and Python

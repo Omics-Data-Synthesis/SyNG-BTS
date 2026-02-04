@@ -24,7 +24,19 @@ For more information, see:
 - Paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC11899567/
 """
 
-__version__ = "2.4.0"
+# Dynamic version from package metadata (set in pyproject.toml)
+try:
+    from importlib.metadata import version, PackageNotFoundError
+
+    try:
+        __version__ = version("syng-bts")
+    except PackageNotFoundError:
+        # Package is not installed (running from source)
+        __version__ = "2.5.0"
+except ImportError:
+    # Python < 3.8 fallback
+    __version__ = "2.5.0"
+
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
 __license__ = "AGPL-3.0"

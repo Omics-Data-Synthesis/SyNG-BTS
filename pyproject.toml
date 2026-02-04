@@ -1,0 +1,163 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "syng-bts"
+version = "2.5.0"
+description = "Synthesis of Next Generation Bulk Transcriptomic Sequencing - A data augmentation tool for transcriptomics data using deep generative models"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.8"
+authors = [
+    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
+    { name = "Yunhui Qi" },
+    { name = "Xinyi Wang" },
+    { name = "Yannick Dueren" },
+]
+maintainers = [
+    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
+]
+keywords = [
+    "transcriptomics",
+    "data-augmentation",
+    "deep-learning",
+    "VAE",
+    "GAN",
+    "generative-models",
+    "bioinformatics",
+    "RNA-seq",
+    "machine-learning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+# Core runtime dependencies
+dependencies = [
+    "torch>=1.3.1",
+    "pandas>=1.0.5",
+    "numpy>=1.19.1",
+    "scipy>=1.4.1",
+    "matplotlib>=2.2.3",
+    "seaborn>=0.9.0",
+    "tqdm>=4.26.0",
+    "tensorboardX>=2.5.0",
+    "umap-learn>=0.5.6",
+]
+
+[project.optional-dependencies]
+# Documentation dependencies
+docs = [
+    "sphinx>=7.1.2",
+    "sphinx-rtd-theme>=1.3.0",
+    "nbsphinx>=0.9.0",
+    "pandoc>=2.3",
+]
+
+# Development dependencies
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+
+# All optional dependencies
+all = [
+    "syng-bts[docs,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/LXQin/SyNG-BTS"
+Documentation = "https://syng-bts.readthedocs.io/"
+Repository = "https://github.com/LXQin/SyNG-BTS.git"
+Issues = "https://github.com/LXQin/SyNG-BTS/issues"
+
+[tool.setuptools]
+packages = ["syng_bts"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"syng_bts.RealData" = ["*.csv"]
+"syng_bts.Transfer" = ["*.csv"]
+"syng_bts.Case.BRCASubtype" = ["*.csv"]
+"syng_bts.Case.LIHCSubtype" = ["*.csv"]
+
+# Ruff configuration
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Unused imports in __init__.py
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+# mypy configuration
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = [
+    "build",
+    "dist",
+    ".venv",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["syng_bts"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

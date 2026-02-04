@@ -1,0 +1,23 @@
+# MANIFEST.in - Include data files in source distributions
+# This ensures CSV data files are included when building sdist packages
+
+# Include all CSV data files
+recursive-include syng_bts/data *.csv
+
+# Include package metadata
+include LICENSE
+include README.md
+include pyproject.toml
+
+# Include documentation source
+recursive-include docs *.rst *.py *.bat Makefile
+
+# Exclude generated files and caches
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.egg-info
+global-exclude .DS_Store
+global-exclude *.csvplot
+global-exclude *_generated.csv
+global-exclude *_loss.csv

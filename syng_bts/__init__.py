@@ -69,6 +69,7 @@ from .helper_models import (
 # Import data utilities
 from .data_utils import (
     load_dataset,
+    list_bundled_datasets,
     set_default_output_dir,
     get_output_dir,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "GAN",
     # Data utilities
     "load_dataset",
+    "list_bundled_datasets",
     "set_default_output_dir",
     "get_output_dir",
 ]

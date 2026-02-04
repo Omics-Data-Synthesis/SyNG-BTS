@@ -89,14 +89,16 @@ Repository = "https://github.com/LXQin/SyNG-BTS.git"
 Issues = "https://github.com/LXQin/SyNG-BTS/issues"
 
 [tool.setuptools]
-packages = ["syng_bts"]
+packages = ["syng_bts", "syng_bts.data"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"syng_bts.RealData" = ["*.csv"]
-"syng_bts.Transfer" = ["*.csv"]
-"syng_bts.Case.BRCASubtype" = ["*.csv"]
-"syng_bts.Case.LIHCSubtype" = ["*.csv"]
+"syng_bts.data" = [
+    "examples/*.csv",
+    "transfer/*.csv",
+    "case/brca_subtype/*.csv",
+    "case/lihc_subtype/*.csv",
+]
 
 # Ruff configuration
 [tool.ruff]

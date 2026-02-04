@@ -114,14 +114,14 @@ def get_output_path(
     return full_dir / filename
 
 
-def load_bundled_data(package: str, filename: str) -> pd.DataFrame:
+def load_bundled_data(subdir: str, filename: str) -> pd.DataFrame:
     """
-    Load a bundled CSV data file from the package.
+    Load a bundled CSV data file from the package's data directory.
 
     Parameters
     ----------
-    package : str
-        The package name (e.g., "syng_bts.RealData").
+    subdir : str
+        The subdirectory within syng_bts/data/ (e.g., "examples", "transfer").
     filename : str
         The filename to load.
 
@@ -131,26 +131,39 @@ def load_bundled_data(package: str, filename: str) -> pd.DataFrame:
         The loaded data.
     """
     try:
-        # Try modern importlib.resources approach first
-        source = files(package).joinpath(filename)
-        with as_file(source) as path:
+        # Construct the path within the data package
+        data_package = files("syng_bts.data")
+        # Navigate through subdirectories
+        resource = data_package
+        for part in subdir.split("/"):
+            resource = resource.joinpath(part)
+        resource = resource.joinpath(filename)
+
+        with as_file(resource) as path:
             return pd.read_csv(path, header=0)
-    except (TypeError, AttributeError):
-        # Fallback for older Python versions
-        with pkg_resources.open_text(package, filename) as f:
-            return pd.read_csv(f, header=0)
+    except (TypeError, AttributeError, FileNotFoundError) as e:
+        # Fallback: try direct file path (for development/editable installs)
+        import syng_bts
+
+        package_dir = Path(syng_bts.__file__).parent
+        file_path = package_dir / "data" / subdir / filename
+        if file_path.exists():
+            return pd.read_csv(file_path, header=0)
+        raise FileNotFoundError(
+            f"Could not find bundled data file: {subdir}/{filename}"
+        ) from e
 
 
 def load_data(
     dataname: str,
     data_path: Union[str, Path, None] = None,
-    bundled_package: Optional[str] = None,
+    bundled_info: Optional[tuple] = None,
 ) -> pd.DataFrame:
     """
     Load data from a file path or bundled package resource.
 
     First tries to load from the specified path. If the file doesn't exist
-    and a bundled_package is specified, tries to load from package resources.
+    and bundled_info is specified, tries to load from package resources.
 
     Parameters
     ----------
@@ -159,8 +172,8 @@ def load_data(
     data_path : str, Path, or None
         Path to the data file or directory containing the file.
         If a directory, will look for {dataname}.csv in it.
-    bundled_package : str, optional
-        Package name to load bundled data from if file not found.
+    bundled_info : tuple, optional
+        Tuple of (subdir, filename) to load bundled data from if file not found.
 
     Returns
     -------
@@ -188,29 +201,49 @@ def load_data(
     if file_path.exists():
         return pd.read_csv(file_path, header=0)
 
-    # Try loading from bundled package
-    if bundled_package is not None:
+    # Try loading from bundled data
+    if bundled_info is not None:
         try:
-            return load_bundled_data(bundled_package, filename)
+            subdir, bundled_filename = bundled_info
+            return load_bundled_data(subdir, bundled_filename)
         except (FileNotFoundError, ModuleNotFoundError):
             pass
 
     raise FileNotFoundError(
         f"Could not find data '{dataname}'. "
         f"Looked in: {file_path}"
-        + (f" and package '{bundled_package}'" if bundled_package else "")
+        + (f" and bundled data '{bundled_info}'" if bundled_info else "")
     )
 
 
-# Map of known bundled datasets to their package locations
+# Map of known bundled datasets to their package locations and subdirectories
+# Format: "dataset_name": ("subdir_path", "filename.csv")
 BUNDLED_DATASETS = {
-    "SKCMPositive_4": "syng_bts.RealData",
-    "BRCASubtypeSel": "syng_bts.Case.BRCASubtype",
-    "BRCASubtypeSel_test": "syng_bts.Case.BRCASubtype",
-    "BRCASubtypeSel_train": "syng_bts.Case.BRCASubtype",
-    "BRCASubtypeSel_train_epoch285_CVAE1-20_generated": "syng_bts.Case.BRCASubtype",
-    "BRCA": "syng_bts.Transfer",
-    "PRAD": "syng_bts.Transfer",
+    # Example datasets
+    "SKCMPositive_4": ("examples", "SKCMPositive_4.csv"),
+    # Transfer learning datasets
+    "BRCA": ("transfer", "BRCA.csv"),
+    "PRAD": ("transfer", "PRAD.csv"),
+    # BRCA subtype case study
+    "BRCASubtypeSel": ("case/brca_subtype", "BRCASubtypeSel.csv"),
+    "BRCASubtypeSel_test": ("case/brca_subtype", "BRCASubtypeSel_test.csv"),
+    "BRCASubtypeSel_train": ("case/brca_subtype", "BRCASubtypeSel_train.csv"),
+    # LIHC subtype case study
+    "LIHCSubtypeFamInd": ("case/lihc_subtype", "LIHCSubtypeFamInd.csv"),
+    "LIHCSubtypeFamInd_DESeq": ("case/lihc_subtype", "LIHCSubtypeFamInd_DESeq.csv"),
+    "LIHCSubtypeFamInd_test74": ("case/lihc_subtype", "LIHCSubtypeFamInd_test74.csv"),
+    "LIHCSubtypeFamInd_test74_DESeq": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_test74_DESeq.csv",
+    ),
+    "LIHCSubtypeFamInd_train294": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_train294.csv",
+    ),
+    "LIHCSubtypeFamInd_train294_DESeq": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_train294_DESeq.csv",
+    ),
 }
 
 
@@ -235,6 +268,26 @@ def load_dataset(
     -------
     pd.DataFrame
         The loaded data.
+
+    Examples
+    --------
+    >>> from syng_bts import load_dataset
+    >>> # Load bundled example data
+    >>> data = load_dataset("SKCMPositive_4")
+    >>> # Load from custom path
+    >>> data = load_dataset("my_data", data_path="./my_data_dir/")
     """
-    bundled_package = BUNDLED_DATASETS.get(dataname)
-    return load_data(dataname, data_path, bundled_package)
+    bundled_info = BUNDLED_DATASETS.get(dataname)
+    return load_data(dataname, data_path, bundled_info)
+
+
+def list_bundled_datasets() -> list:
+    """
+    List all available bundled datasets.
+
+    Returns
+    -------
+    list
+        List of dataset names that can be loaded with load_dataset().
+    """
+    return list(BUNDLED_DATASETS.keys())

@@ -22,7 +22,7 @@ def PilotExperiment(
     model: str,
     batch_frac: float,
     learning_rate: float,
-    epoch: Optional[int],
+    epoch: int = None,
     early_stop_num: int = 30,
     off_aug: Optional[str] = None,
     AE_head_num: int = 2,

@@ -178,11 +178,6 @@ def evaluation(
     data_dir : str, Path, or None
         Directory containing the data files. If None, tries bundled package data.
 
-    Examples
-    --------
-    >>> from syng_bts import evaluation
-    >>> evaluation()  # Uses bundled example data
-    >>> evaluation(data_dir="./my_data")  # Uses custom data directory
     """
     # Load generated data
     generated_name = generated_input.replace(".csv", "")

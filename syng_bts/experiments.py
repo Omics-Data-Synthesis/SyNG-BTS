@@ -39,31 +39,31 @@ def PilotExperiment(
     Parameters
     ----------
     dataname : string
-               pure data name without .csv. Eg: SKCMPositive_4
+        pure data name without .csv. Eg: SKCMPositive_4
     pilot_size : list
-                 a list including potential pilot sizes
+        a list including potential pilot sizes
     model : string
-            name of the model to be trained
+        name of the model to be trained
     batch_frac : float
-                  batch fraction
+        batch fraction
     learning_rate : float
-            learning rate
+        learning rate
     epoch : int
                             choose from None (early_stop), or any integer, if choose None, early_stop_num will take effect
     early_stop_num : int
-          if loss does not improve for early_stop_num epochs, the training will stop. Default value is 30. Only take effect when epoch == “None”
+        if loss does not improve for early_stop_num epochs, the training will stop. Default value is 30. Only take effect when epoch == “None”
     off_aug : string (AE_head or Gaussian_head or None)
-                        choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect. If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
+        choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect. If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
     AE_head_num : int
-                how many folds of AEhead augmentation needed. Default value is 2, Only take effect when off_aug == "AE_head"
+        how many folds of AEhead augmentation needed. Default value is 2, Only take effect when off_aug == "AE_head"
     Gaussian_head_num : int
-            how many folds of Gaussianhead augmentation needed. Default value is 9, Only take effect when off_aug == "Gaussian_head"
+        how many folds of Gaussianhead augmentation needed. Default value is 9, Only take effect when off_aug == "Gaussian_head"
     pre_model : string
-                    transfer learning input model. If pre_model == None, no transfer learning
+        transfer learning input model. If pre_model == None, no transfer learning
     data_dir : str, Path, or None
-               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
     output_dir : str, Path, or None
-                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
 
     """
     # Set up output directory
@@ -474,9 +474,9 @@ def ApplyExperiment(
     random_seed : int, default=123
         Random seed for reproducibility.
     data_dir : str, Path, or None
-               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
     output_dir : str, Path, or None
-                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
     """
     # Handle path parameter for backward compatibility
     if output_dir is None and path is not None:
@@ -814,9 +814,9 @@ def TransferExperiment(
     off_aug : str or None
         Offline augmentation: "AE_head", "Gaussian_head", or None.
     data_dir : str, Path, or None
-               Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
     output_dir : str, Path, or None
-                 Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
     """
     # Set up directories
     if output_dir is not None:

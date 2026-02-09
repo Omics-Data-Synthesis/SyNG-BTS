@@ -208,3 +208,83 @@ class TestDirectoryCreation:
         expected_dir = temp_dir / "NonExistent"
         assert not expected_dir.exists()
         assert output_path == expected_dir / "test.csv"
+
+
+class TestDataLoadingEdgeCases:
+    """Test edge cases and error handling in data loading."""
+
+    def test_load_dataset_empty_name(self):
+        """Test loading with empty dataset name raises error."""
+        from syng_bts import load_dataset
+
+        with pytest.raises((FileNotFoundError, ValueError)):
+            load_dataset("")
+
+    def test_load_dataset_with_extension(self):
+        """Test load_dataset handles name with .csv extension."""
+        from syng_bts import load_dataset
+
+        # Should work even if user includes .csv
+        # The function should strip it or handle gracefully
+        try:
+            data = load_dataset("SKCMPositive_4.csv")
+            assert isinstance(data, pd.DataFrame)
+        except FileNotFoundError:
+            # Also acceptable - function expects name without extension
+            pass
+
+    def test_load_dataset_path_types(self, temp_dir, sample_data):
+        """Test load_dataset accepts both str and Path for data_path."""
+        from syng_bts import load_dataset
+
+        # Save sample data
+        csv_path = temp_dir / "path_test.csv"
+        sample_data.to_csv(csv_path, index=False)
+
+        # Test with Path object
+        data1 = load_dataset("path_test", data_path=temp_dir)
+        assert len(data1) == 20
+
+        # Test with string
+        data2 = load_dataset("path_test", data_path=str(temp_dir))
+        assert len(data2) == 20
+
+
+class TestOutputPathEdgeCases:
+    """Test edge cases in output path handling."""
+
+    def test_ensure_dir_with_string_path(self, temp_dir):
+        """Test ensure_dir works with string paths."""
+        from syng_bts.data_utils import ensure_dir
+
+        new_dir = str(temp_dir / "string_path_test")
+        result = ensure_dir(new_dir)
+
+        assert Path(new_dir).exists()
+
+    def test_get_output_path_nested_subdirs(self, temp_dir):
+        """Test get_output_path with deeply nested subdirectories."""
+        from syng_bts.data_utils import get_output_path
+
+        output_path = get_output_path(
+            output_dir=temp_dir,
+            subdir="level1/level2/level3",
+            filename="deep.csv",
+            create_dir=True,
+        )
+
+        expected_dir = temp_dir / "level1" / "level2" / "level3"
+        assert expected_dir.exists()
+        assert output_path == expected_dir / "deep.csv"
+
+    def test_set_output_dir_with_string(self, temp_dir):
+        """Test set_default_output_dir works with string paths."""
+        from syng_bts import set_default_output_dir, get_output_dir
+
+        set_default_output_dir(str(temp_dir))
+        output_dir = get_output_dir()
+
+        assert output_dir == temp_dir
+
+        # Reset
+        set_default_output_dir(None)

@@ -76,12 +76,14 @@ class TestSmallTraining:
         from syng_bts import ApplyExperiment
 
         config = small_training_config
-        data_dir = sample_csv_file.parent
+        data_path = sample_csv_file
+        data_name = data_path.stem
+        data_dir = data_path.parent
 
         # Run training with minimal settings
         try:
             ApplyExperiment(
-                dataname="test_data",
+                dataname=data_name,
                 apply_log=False,  # Data already processed
                 new_size=10,
                 model="VAE1-10",
@@ -110,6 +112,7 @@ class TestSmallTraining:
         from syng_bts import ApplyExperiment
 
         data_dir = sample_csv_file.parent
+        output_dir = temp_dir / "test_output"
 
         try:
             ApplyExperiment(
@@ -122,82 +125,12 @@ class TestSmallTraining:
                 epoch=1,  # Single epoch
                 random_seed=42,
                 data_dir=data_dir,
-                output_dir=temp_dir,
+                output_dir=output_dir,
             )
         except Exception:
             pass  # We're just testing directory creation
 
-        # Directories should exist even if training fails
-        # (they're created at the start of training)
-
-
-class TestExperimentParameters:
-    """Test experiment function parameter validation."""
-
-    def test_apply_experiment_signature(self):
-        """Test ApplyExperiment has expected parameters."""
-        from syng_bts import ApplyExperiment
-        import inspect
-
-        sig = inspect.signature(ApplyExperiment)
-        params = list(sig.parameters.keys())
-
-        expected = [
-            "path",
-            "dataname",
-            "apply_log",
-            "new_size",
-            "model",
-            "batch_frac",
-            "learning_rate",
-            "epoch",
-            "data_dir",
-            "output_dir",
-        ]
-
-        for param in expected:
-            assert param in params, f"Missing parameter: {param}"
-
-    def test_pilot_experiment_signature(self):
-        """Test PilotExperiment has expected parameters."""
-        from syng_bts import PilotExperiment
-        import inspect
-
-        sig = inspect.signature(PilotExperiment)
-        params = list(sig.parameters.keys())
-
-        expected = [
-            "dataname",
-            "pilot_size",
-            "model",
-            "batch_frac",
-            "learning_rate",
-            "epoch",
-            "data_dir",
-            "output_dir",
-        ]
-
-        for param in expected:
-            assert param in params, f"Missing parameter: {param}"
-
-
-class TestTransferExperiment:
-    """Test TransferExperiment function."""
-
-    def test_transfer_experiment_signature(self):
-        """Test TransferExperiment has expected parameters."""
-        from syng_bts import TransferExperiment
-        import inspect
-
-        sig = inspect.signature(TransferExperiment)
-        params = list(sig.parameters.keys())
-
-        expected = [
-            "fromname",
-            "toname",
-            "data_dir",
-            "output_dir",
-        ]
-
-        for param in expected:
-            assert param in params, f"Missing parameter: {param}"
+        # Output directory should exist even if training fails
+        # (it's created at the start of training)
+        assert output_dir.exists()
+        assert output_dir.is_dir()

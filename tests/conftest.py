@@ -1,5 +1,18 @@
 """
 Pytest configuration and fixtures for SyNG-BTS tests.
+
+This module provides shared test fixtures for all test modules including:
+- temp_dir: Temporary directory with automatic cleanup
+- sample_data: Small transcriptomics-like DataFrame (20x50)
+- sample_data_with_labels: Sample data with binary class labels
+- sample_csv_file: Temporary CSV file for testing I/O
+- small_training_config: Minimal training parameters for fast tests
+
+Usage:
+    pytest tests/ -v              # Run all tests
+    pytest tests/ -m slow         # Run only slow tests
+    pytest tests/ -m "not slow"   # Skip slow tests
+    pytest tests/ --cov=syng_bts  # Run with coverage
 """
 
 import tempfile
@@ -52,7 +65,11 @@ def sample_csv_file(temp_dir, sample_data):
 
 @pytest.fixture
 def small_training_config():
-    """Return a minimal training configuration for fast testing."""
+    """Return a minimal training configuration for fast testing.
+
+    Configuration uses very few epochs and small batch sizes
+    to allow integration tests to run quickly.
+    """
     return {
         "pilot_size": [10],
         "model": "VAE1-10",
@@ -62,4 +79,5 @@ def small_training_config():
         "early_stop_num": 5,
         "AE_head_num": 1,
         "Gaussian_head_num": 2,
+        "random_seed": 42,
     }

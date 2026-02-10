@@ -202,6 +202,34 @@ Full documentation is available at [syng-bts.readthedocs.io](https://syng-bts.re
 - [API Reference](https://syng-bts.readthedocs.io/en/latest/methods.html)
 - [Examples & Tutorials](https://syng-bts.readthedocs.io/en/latest/evals.html)
 
+## Development
+
+### Quick Setup
+
+```bash
+git clone https://github.com/LXQin/SyNG-BTS.git
+cd SyNG-BTS
+make init-dev  # Install package + dev dependencies
+```
+
+### Makefile Commands
+
+The project includes a Makefile for common development tasks:
+
+| Command | Description |
+|---------|-------------|
+| `make help` | Show all available commands |
+| `make install` | Install package in editable mode |
+| `make install-dev` | Install development dependencies |
+| `make init-dev` | Full dev setup (install + dev deps in venv) |
+| `make test` | Run tests with pytest |
+| `make test-cov` | Run tests with coverage report |
+| `make lint` | Check code with ruff |
+| `make format` | Auto-format code with ruff |
+| `make check` | Run lint + tests |
+| `make docs` | Build documentation |
+| `make clean` | Remove build artifacts |
+
 ## Citation
 
 If you use SyNG-BTS in your research, please cite:

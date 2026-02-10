@@ -22,7 +22,7 @@ def PilotExperiment(
     model: str,
     batch_frac: float,
     learning_rate: float,
-    epoch: int = None,
+    epoch: Optional[int] = None,
     early_stop_num: int = 30,
     off_aug: Optional[str] = None,
     AE_head_num: int = 2,
@@ -30,7 +30,7 @@ def PilotExperiment(
     pre_model: Optional[str] = None,
     data_dir: Optional[Union[str, Path]] = None,
     output_dir: Optional[Union[str, Path]] = None,
-):
+) -> None:
     r"""
     This function trains VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP with several pilot sizes given data, model, batch_size, learning_rate, epoch, off_aug and pre_model.
     For each pilot size, there will be 5 random draws from the original dataset.
@@ -423,7 +423,7 @@ def ApplyExperiment(
     random_seed: int = 123,
     data_dir: Optional[Union[str, Path]] = None,
     output_dir: Optional[Union[str, Path]] = None,
-):
+) -> None:
     r"""
     Train deep generative models and generate new samples.
 
@@ -780,7 +780,7 @@ def TransferExperiment(
     off_aug: Optional[str] = None,
     data_dir: Optional[Union[str, Path]] = None,
     output_dir: Optional[Union[str, Path]] = None,
-):
+) -> None:
     """
     Run transfer learning using deep generative models.
 

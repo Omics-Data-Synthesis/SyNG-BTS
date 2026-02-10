@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from umap import UMAP
 from pathlib import Path
 from typing import Optional, Union
@@ -10,19 +11,31 @@ from typing import Optional, Union
 from .data_utils import load_dataset
 
 
-def heatmap_eval(dat_real, dat_generated=None, save=False):
+def heatmap_eval(
+    dat_real: pd.DataFrame,
+    dat_generated: Optional[pd.DataFrame] = None,
+    save: bool = False,
+) -> Optional[Figure]:
     r"""
-    This function creates a heatmap visualization comparing the generated data and the real data.
-    dat_generated is applicable only if 2 sets of data is available.
+    Create a heatmap visualization comparing generated data and real data.
+
+    If only one dataset is provided, displays a single heatmap. If both
+    real and generated data are provided, displays them side by side.
 
     Parameters
-    -----------
-    dat_real: pd.DataFrame
-            the original copy of the data
+    ----------
+    dat_real : pd.DataFrame
+        The original/real data.
     dat_generated : pd.DataFrame, optional
-            the generated data
-    save: bool, optional
-            if save = True, return figures
+        The generated data. If None, only dat_real is plotted.
+    save : bool, default=False
+        If True, return the figure instead of displaying it.
+
+    Returns
+    -------
+    Figure or None
+        If save=True, returns the matplotlib Figure. Otherwise, displays
+        the figure and returns None.
     """
     if dat_generated is None:
         # Only plot dat_real if dat_generated is None
@@ -56,30 +69,38 @@ def heatmap_eval(dat_real, dat_generated=None, save=False):
 
 
 def UMAP_eval(
-    dat_generated,
-    dat_real,
-    groups_generated=None,
-    groups_real=None,
-    random_state=42,
-    legend_pos="best",
-):
+    dat_generated: Optional[pd.DataFrame],
+    dat_real: pd.DataFrame,
+    groups_generated: Optional[pd.Series] = None,
+    groups_real: Optional[pd.Series] = None,
+    random_state: int = 42,
+    legend_pos: str = "best",
+) -> None:
     r"""
-    This function creates a UMAP visualization comparing the generated data and the real data.
-    If only 1 set of data is available, dat_generated and groups_generated should have None as inputs.
+    Create a UMAP visualization comparing generated data and real data.
+
+    Uses UMAP dimensionality reduction to visualize high-dimensional
+    data in 2D, with optional group coloring.
 
     Parameters
-    -----------
+    ----------
     dat_generated : pd.DataFrame or None
-            the generated data, input None if unavailable
-    dat_real: pd.DataFrame
-            the original copy of the data
-    groups_generated : pd.Series or None
-            the groups generated, input None if unavailable
-    groups_real : pd.Series or None
-            the real groups, input None if unavailable
-    legend_pos : string
-            legend location
+        The generated data. If None, only dat_real is visualized.
+    dat_real : pd.DataFrame
+        The original/real data.
+    groups_generated : pd.Series or None, optional
+        Group labels for generated samples. Used for coloring/styling.
+    groups_real : pd.Series or None, optional
+        Group labels for real samples. Used for coloring/styling.
+    random_state : int, default=42
+        Random seed for UMAP reproducibility.
+    legend_pos : str, default="best"
+        Legend position ("best", "upper right", "lower left", etc.).
 
+    Returns
+    -------
+    None
+        Displays the UMAP plot.
     """
 
     if dat_generated is None:
@@ -162,12 +183,12 @@ def evaluation(
     generated_input: str = "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.csv",
     real_input: str = "BRCASubtypeSel_test.csv",
     data_dir: Optional[Union[str, Path]] = None,
-):
+) -> None:
     r"""
     Preprocessing and visualization of generated vs real data.
 
     This method preprocesses the input data and creates visualizations
-    comparing generated and real datasets.
+    comparing generated and real datasets using heatmaps and UMAP plots.
 
     Parameters
     ----------
@@ -178,6 +199,10 @@ def evaluation(
     data_dir : str, Path, or None
         Directory containing the data files. If None, tries bundled package data.
 
+    Returns
+    -------
+    None
+        Displays visualization plots.
     """
     # Load generated data
     generated_name = generated_input.replace(".csv", "")

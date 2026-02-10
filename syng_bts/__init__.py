@@ -72,7 +72,12 @@ from .data_utils import (
     list_bundled_datasets,
     set_default_output_dir,
     get_output_dir,
+    resolve_data,
+    derive_dataname,
 )
+
+# Import result objects
+from .result import SyngResult, PilotResult
 
 # Define public API
 __all__ = [
@@ -100,4 +105,9 @@ __all__ = [
     "list_bundled_datasets",
     "set_default_output_dir",
     "get_output_dir",
+    "resolve_data",
+    "derive_dataname",
+    # Result objects
+    "SyngResult",
+    "PilotResult",
 ]

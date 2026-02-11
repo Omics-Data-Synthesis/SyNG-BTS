@@ -4,14 +4,13 @@
 
 from .helper_utils import (
     set_all_seeds,
-    plot_recons_samples,
-    plot_new_samples,
-    plot_training_loss,
-    plot_multiple_training_losses,
+    reconstruct_samples,
+    generate_samples,
 )
 from . import helper_train as ht
 from .helper_models import AE, VAE, CVAE, GAN
 import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import TensorDataset
@@ -27,6 +26,114 @@ from tensorboardX import SummaryWriter
 import math
 import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.data import random_split
+
+
+# ---------------------------------------------------------------------------
+# Private plotting helpers (moved from helper_utils; will be removed later)
+# ---------------------------------------------------------------------------
+
+
+def _plot_training_loss(
+    minibatch_losses, num_epochs, averaging_iterations=100, custom_label=""
+):
+    iter_per_epoch = len(minibatch_losses) // num_epochs
+
+    plt.figure()
+    ax1 = plt.subplot(1, 1, 1)
+    ax1.plot(
+        range(len(minibatch_losses)),
+        (minibatch_losses),
+        label=f"Minibatch Loss{custom_label}",
+    )
+    ax1.set_xlabel("Iterations")
+    ax1.set_ylabel("Loss")
+
+    if len(minibatch_losses) < 1001:
+        num_losses = len(minibatch_losses) // 2
+    else:
+        num_losses = 1000
+
+    ax1.set_ylim([0, np.max(minibatch_losses[num_losses:]) * 1.5])
+
+    ax1.plot(
+        np.convolve(
+            minibatch_losses,
+            np.ones(averaging_iterations) / averaging_iterations,
+            mode="valid",
+        ),
+        label=f"Running Average{custom_label}",
+    )
+    ax1.legend()
+
+    ax2 = ax1.twiny()
+    newlabel = list(range(num_epochs + 1))
+    newpos = [e * iter_per_epoch for e in newlabel]
+    ax2.set_xticks(newpos[::10])
+    ax2.set_xticklabels(newlabel[::10])
+    ax2.xaxis.set_ticks_position("bottom")
+    ax2.xaxis.set_label_position("bottom")
+    ax2.spines["bottom"].set_position(("outward", 45))
+    ax2.set_xlabel("Epochs")
+    ax2.set_xlim(ax1.get_xlim())
+
+    plt.tight_layout()
+
+
+def _plot_multiple_training_losses(
+    losses_list, num_epochs, averaging_iterations=100, custom_labels_list=None
+):
+    for i, _ in enumerate(losses_list):
+        if not len(losses_list[i]) == len(losses_list[0]):
+            raise ValueError(
+                "All loss tensors need to have the same number of elements."
+            )
+
+    if custom_labels_list is None:
+        custom_labels_list = [str(i) for i, _ in enumerate(losses_list)]
+
+    iter_per_epoch = len(losses_list[0]) // num_epochs
+
+    plt.figure()
+    ax1 = plt.subplot(1, 1, 1)
+
+    for i, minibatch_loss_tensor in enumerate(losses_list):
+        ax1.plot(
+            range(len(minibatch_loss_tensor)),
+            (minibatch_loss_tensor),
+            label=f"Minibatch Loss{custom_labels_list[i]}",
+        )
+        ax1.set_xlabel("Iterations")
+        ax1.set_ylabel("Loss")
+
+        ax1.plot(
+            np.convolve(
+                minibatch_loss_tensor,
+                np.ones(averaging_iterations) / averaging_iterations,
+                mode="valid",
+            ),
+            color="black",
+        )
+
+    if len(losses_list[0]) < 1000:
+        num_losses = len(losses_list[0]) // 2
+    else:
+        num_losses = 1000
+    maxes = [np.max(losses_list[i][num_losses:]) for i, _ in enumerate(losses_list)]
+    ax1.set_ylim([0, np.max(maxes) * 1.5])
+    ax1.legend()
+
+    ax2 = ax1.twiny()
+    newlabel = list(range(num_epochs + 1))
+    newpos = [e * iter_per_epoch for e in newlabel]
+    ax2.set_xticks(newpos[::10])
+    ax2.set_xticklabels(newlabel[::10])
+    ax2.xaxis.set_ticks_position("bottom")
+    ax2.xaxis.set_label_position("bottom")
+    ax2.spines["bottom"].set_position(("outward", 45))
+    ax2.set_xlabel("Epochs")
+    ax2.set_xlim(ax1.get_xlim())
+
+    plt.tight_layout()
 
 
 # %%
@@ -122,74 +229,47 @@ def training_AEs(
             save_model=save_model,
             scheduler=scheduler,
         )
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_reconstruction_loss_per_batch"],
             num_epochs,
             custom_label=" (reconstruction)",
         )
         plt.show()
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_kl_loss_per_batch"], num_epochs, custom_label=" (KL)"
         )
         plt.show()
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_combined_loss_per_batch"],
             num_epochs,
             custom_label=" (combined)",
         )
         plt.show()
 
-        if early_stop:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="CVAE",
-                    plot=plot,
-                )
+        final_model = best_model if early_stop else model
+        if save_recons:
+            recons_data, _ = reconstruct_samples(
+                model=final_model,
+                modelname="CVAE",
+                data_loader=train_loader,
+                n_features=num_features,
+            )
+            np.savetxt(savepath, recons_data.numpy(), delimiter=",")
+            if plot:
+                sns.heatmap(recons_data.numpy(), cmap="YlGnBu")
                 plt.show()
-            if save_new:
-                # plot and save new generated data
-                plot_new_samples(
-                    model=best_model,
-                    savepathnew=savepathnew,
-                    latent_size=32,
-                    modelname="CVAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
-                plt.show()
-        else:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="CVAE",
-                    plot=plot,
-                )
-                plt.show()
-            if save_new:
-                # plot and save new generated data
-                plot_new_samples(
-                    model=model,
-                    savepathnew=savepathnew,
-                    latent_size=32,
-                    modelname="CVAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
+        if save_new:
+            new_data = generate_samples(
+                model=final_model,
+                modelname="CVAE",
+                latent_size=32,
+                num_images=new_size,
+                col_max=col_max,
+                col_sd=col_sd,
+            )
+            np.savetxt(savepathnew, new_data.detach().numpy(), delimiter=",")
+            if plot:
+                sns.heatmap(new_data.detach().numpy(), cmap="YlGnBu")
                 plt.show()
     elif modelname == "VAE":
         log_dict, best_model = ht.train_VAE(
@@ -209,121 +289,49 @@ def training_AEs(
             scheduler=scheduler,
         )
 
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_reconstruction_loss_per_batch"],
             num_epochs,
             custom_label=" (reconstruction)",
         )
         plt.show()
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_kl_loss_per_batch"], num_epochs, custom_label=" (KL)"
         )
         plt.show()
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_combined_loss_per_batch"],
             num_epochs,
             custom_label=" (combined)",
         )
         plt.show()
 
-        if early_stop:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
-                plt.show()
-            else:
-                plot_recons_samples(
-                    savepath=None,
-                    data_loader=train_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
-                plt.show()
-            if save_new:
-                # plot and save new generated data
-                plot_new_samples(
-                    model=best_model,
-                    savepathnew=savepathnew,
-                    latent_size=32,
-                    modelname="VAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
-                plt.show()
-            else:
-                plot_new_samples(
-                    model=best_model,
-                    savepathnew=None,
-                    latent_size=32,
-                    modelname="VAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
-                plt.show()
-        else:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
-                plt.show()
-            else:
-                plot_recons_samples(
-                    savepath=None,
-                    data_loader=train_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
-                plt.show()
-            if save_new:
-                # plot and save new generated data
-                plot_new_samples(
-                    model=model,
-                    savepathnew=savepathnew,
-                    latent_size=32,
-                    modelname="VAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
-                plt.show()
-            else:
-                plot_new_samples(
-                    model=model,
-                    savepathnew=None,
-                    latent_size=32,
-                    modelname="VAE",
-                    num_images=new_size,
-                    plot=plot,
-                    colnames=colnames,
-                    col_max=col_max,
-                    col_sd=col_sd,
-                )
-                plt.show()
+        final_model = best_model if early_stop else model
+        recons_data, _ = reconstruct_samples(
+            model=final_model,
+            modelname="VAE",
+            data_loader=train_loader,
+            n_features=num_features,
+        )
+        if save_recons:
+            np.savetxt(savepath, recons_data.numpy(), delimiter=",")
+        if plot:
+            sns.heatmap(recons_data.numpy(), cmap="YlGnBu")
+            plt.show()
+
+        new_data = generate_samples(
+            model=final_model,
+            modelname="VAE",
+            latent_size=32,
+            num_images=new_size,
+            col_max=col_max,
+            col_sd=col_sd,
+        )
+        if save_new:
+            np.savetxt(savepathnew, new_data.detach().numpy(), delimiter=",")
+        if plot:
+            sns.heatmap(new_data.detach().numpy(), cmap="YlGnBu")
+            plt.show()
 
     else:
         log_dict, best_model = ht.train_AE(
@@ -339,34 +347,22 @@ def training_AEs(
             logging_interval=50,
             save_model=save_model,
         )
-        plot_training_loss(
+        _plot_training_loss(
             log_dict["val_loss_per_batch"], num_epochs, custom_label=" loss"
         )
         plt.show()
 
-        if early_stop:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="AE",
-                    plot=plot,
-                )
-                plt.show()
-        else:
-            if save_recons:
-                # Plot generated data
-                plot_recons_samples(
-                    savepath=savepath,
-                    data_loader=train_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="AE",
-                    plot=plot,
-                )
+        final_model = best_model if early_stop else model
+        if save_recons:
+            recons_data, _ = reconstruct_samples(
+                model=final_model,
+                modelname="AE",
+                data_loader=train_loader,
+                n_features=num_features,
+            )
+            np.savetxt(savepath, recons_data.numpy(), delimiter=",")
+            if plot:
+                sns.heatmap(recons_data.numpy(), cmap="YlGnBu")
                 plt.show()
     return log_dict
 
@@ -450,7 +446,7 @@ def training_GANs(
             save_model=save_model,
         )
 
-    plot_multiple_training_losses(
+    _plot_multiple_training_losses(
         losses_list=(
             log_dict["train_discriminator_loss_per_batch"],
             log_dict["train_generator_loss_per_batch"],
@@ -460,50 +456,18 @@ def training_GANs(
     )
     plt.show()
 
-    if early_stop:
-        if save_new:
-            # plot and save new generated data
-            plot_new_samples(
-                model=best_model,
-                savepathnew=savepathnew,
-                latent_size=latent_dim,
-                modelname="GANs",
-                num_images=new_size,
-                plot=plot,
-            )
-            plt.show()
-        else:
-            plot_new_samples(
-                model=best_model,
-                savepathnew=None,
-                latent_size=latent_dim,
-                modelname="GANs",
-                num_images=new_size,
-                plot=plot,
-            )
-            plt.show()
-    else:
-        if save_new:
-            # plot and save new generated data
-            plot_new_samples(
-                model=model,
-                savepathnew=savepathnew,
-                latent_size=latent_dim,
-                modelname="GANs",
-                num_images=new_size,
-                plot=plot,
-            )
-            plt.show()
-        else:
-            plot_new_samples(
-                model=model,
-                savepathnew=None,
-                latent_size=latent_dim,
-                modelname="GANs",
-                num_images=new_size,
-                plot=plot,
-            )
-            plt.show()
+    final_model = best_model if early_stop else model
+    new_data = generate_samples(
+        model=final_model,
+        modelname="GANs",
+        latent_size=latent_dim,
+        num_images=new_size,
+    )
+    if save_new:
+        np.savetxt(savepathnew, new_data.detach().numpy(), delimiter=",")
+    if plot:
+        sns.heatmap(new_data.detach().numpy(), cmap="YlGnBu")
+        plt.show()
 
     return log_dict
 
@@ -554,28 +518,20 @@ def training_iter(
                 save_model=None,
             )
             # Loss
-            plot_training_loss(
+            _plot_training_loss(
                 log_dict["train_loss_per_batch"], num_epochs, custom_label=" (combined)"
             )
             plt.show()
-            if early_stop:
-                feed_data_gen, feed_labels = plot_recons_samples(
-                    savepath=None,
-                    data_loader=feed_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="AE",
-                    plot=plot,
-                )
-            else:
-                feed_data_gen, feed_labels = plot_recons_samples(
-                    savepath=None,
-                    data_loader=feed_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="AE",
-                    plot=plot,
-                )
+            final_model = best_model if early_stop else model
+            feed_data_gen, feed_labels = reconstruct_samples(
+                model=final_model,
+                modelname="AE",
+                data_loader=feed_loader,
+                n_features=num_features,
+            )
+            if plot:
+                sns.heatmap(feed_data_gen.numpy(), cmap="YlGnBu")
+                plt.show()
             # add labels to the generated data
             if feed_labels.dim() == 1:
                 feed_labels = feed_labels.unsqueeze(1).float()
@@ -628,38 +584,30 @@ def training_iter(
             )
 
             # Loss
-            plot_training_loss(
+            _plot_training_loss(
                 log_dict["train_reconstruction_loss_per_batch"],
                 num_epochs,
                 custom_label=" (reconstruction)",
             )
-            plot_training_loss(
+            _plot_training_loss(
                 log_dict["train_kl_loss_per_batch"], num_epochs, custom_label=" (KL)"
             )
-            plot_training_loss(
+            _plot_training_loss(
                 log_dict["train_combined_loss_per_batch"],
                 num_epochs,
                 custom_label=" (combined)",
             )
             plt.show()
-            if early_stop:
-                feed_data_gen, feed_labels = plot_recons_samples(
-                    savepath=None,
-                    data_loader=feed_loader,
-                    model=best_model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
-            else:
-                feed_data_gen, feed_labels = plot_recons_samples(
-                    savepath=None,
-                    data_loader=feed_loader,
-                    model=model,
-                    n_features=num_features,
-                    modelname="VAE",
-                    plot=plot,
-                )
+            final_model = best_model if early_stop else model
+            feed_data_gen, feed_labels = reconstruct_samples(
+                model=final_model,
+                modelname="VAE",
+                data_loader=feed_loader,
+                n_features=num_features,
+            )
+            if plot:
+                sns.heatmap(feed_data_gen.numpy(), cmap="YlGnBu")
+                plt.show()
             # add labels to the generated data
             if feed_labels.dim() == 1:
                 feed_labels = feed_labels.unsqueeze(1).float()
@@ -949,9 +897,6 @@ def training_flows(
 
         ## Without validation version
 
-        # if epoch >= 70:
-        #     plot_new_samples(model=model, savepathnew=savepathnew.replace('.csv', f'_epoch_{epoch}.csv'), latent_size=num_hidden, modelname=modelname,
-        #                      num_images=new_size, plot=plot)
         if early_stop:
             if (
                 (epoch - best_train_epoch >= early_stop_num)
@@ -979,13 +924,15 @@ def training_flows(
 
     if save_model is not None:
         torch.save(best_model.state_dict(), save_model)
-    # plot and save new generated data
-    plot_new_samples(
+    # Generate new samples
+    new_data = generate_samples(
         model=best_model,
-        savepathnew=savepathnew,
-        latent_size=num_hidden,
         modelname=modelname,
+        latent_size=num_hidden,
         num_images=new_size,
-        plot=plot,
     )
-    plt.show()
+    if savepathnew is not None:
+        np.savetxt(savepathnew, new_data.detach().numpy(), delimiter=",")
+    if plot:
+        sns.heatmap(new_data.detach().numpy(), cmap="YlGnBu")
+        plt.show()

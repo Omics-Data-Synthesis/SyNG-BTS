@@ -132,6 +132,75 @@ class TestSyngResult:
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
+    def test_plot_loss_dual_axis(self, sample_generated):
+        """Test plot_loss renders a dual x-axis when num_epochs is in metadata."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import SyngResult
+
+        loss = pd.DataFrame({"kl": np.random.rand(500), "recons": np.random.rand(500)})
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=loss,
+            metadata={"model": "VAE1-10", "num_epochs": 10},
+        )
+        fig = result.plot_loss()
+        assert isinstance(fig, plt.Figure)
+        # Should have two axes: the primary and the twinned epoch axis
+        axes = fig.get_axes()
+        assert len(axes) == 2
+        # The second axis should have "Epochs" as xlabel
+        assert axes[1].get_xlabel() == "Epochs"
+        plt.close(fig)
+
+    def test_plot_loss_single_axis_fallback(self, sample_generated):
+        """Test plot_loss falls back to single axis when num_epochs is absent."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import SyngResult
+
+        loss = pd.DataFrame({"loss": np.random.rand(200)})
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=loss,
+            metadata={"model": "AE"},
+        )
+        fig = result.plot_loss()
+        axes = fig.get_axes()
+        # Only the primary axis
+        assert len(axes) == 1
+        plt.close(fig)
+
+    def test_plot_loss_ylim_scaling(self, sample_generated):
+        """Test plot_loss applies y-axis scaling to ignore the initial spike."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import SyngResult
+
+        # Create a loss series with a huge initial spike
+        vals = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
+        loss = pd.DataFrame({"loss": vals})
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=loss,
+            metadata={"model": "AE"},
+        )
+        fig = result.plot_loss()
+        ax = fig.get_axes()[0]
+        ylim = ax.get_ylim()
+        # The upper ylim should be much less than the spike (1000)
+        assert ylim[1] < 100, f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        plt.close(fig)
+
     def test_plot_loss_short_series(self, sample_generated):
         """Test plot_loss with fewer data points than averaging window."""
         from syng_bts import SyngResult
@@ -147,6 +216,55 @@ class TestSyngResult:
         import matplotlib.pyplot as plt
 
         fig = result.plot_loss(averaging_iterations=100)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_heatmap_generated(self, sample_result):
+        """Test plot_heatmap returns a heatmap figure for generated data."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = sample_result.plot_heatmap("generated")
+        assert isinstance(fig, plt.Figure)
+        # Title should mention "Generated"
+        ax = fig.get_axes()[0]
+        assert "Generated" in ax.get_title()
+        plt.close(fig)
+
+    def test_plot_heatmap_reconstructed(self, sample_result_full):
+        """Test plot_heatmap returns a heatmap figure for reconstructed data."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = sample_result_full.plot_heatmap("reconstructed")
+        assert isinstance(fig, plt.Figure)
+        ax = fig.get_axes()
+        # seaborn heatmaps produce axes; just check it returned a figure
+        assert len(ax) >= 1
+        plt.close(fig)
+
+    def test_plot_heatmap_reconstructed_missing(self, sample_result):
+        """Test plot_heatmap raises ValueError when reconstructed data is None."""
+        with pytest.raises(ValueError, match="No reconstructed data"):
+            sample_result.plot_heatmap("reconstructed")
+
+    def test_plot_heatmap_invalid_which(self, sample_result):
+        """Test plot_heatmap raises ValueError for unknown 'which' value."""
+        with pytest.raises(ValueError, match="Unknown value"):
+            sample_result.plot_heatmap("invalid")
+
+    def test_plot_heatmap_default(self, sample_result):
+        """Test plot_heatmap defaults to 'generated'."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = sample_result.plot_heatmap()
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
@@ -288,7 +406,21 @@ class TestPilotResult:
         import matplotlib.pyplot as plt
 
         figs = pilot_result.plot_loss()
+        assert isinstance(figs, dict)
         assert len(figs) == 4
         for fig in figs.values():
             assert isinstance(fig, plt.Figure)
             plt.close(fig)
+
+    def test_plot_loss_aggregate(self, pilot_result):
+        """Test plot_loss(aggregate=True) returns a single Figure."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig = pilot_result.plot_loss(aggregate=True)
+        assert isinstance(fig, plt.Figure)
+        # Should have at least one axis
+        assert len(fig.get_axes()) >= 1
+        plt.close(fig)

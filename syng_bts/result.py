@@ -15,6 +15,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import torch
 
 
@@ -120,6 +121,11 @@ class SyngResult:
     def plot_loss(self, averaging_iterations: int = 100) -> plt.Figure:
         """Plot the training loss curve(s).
 
+        When ``metadata["num_epochs"]`` is available, a secondary x-axis
+        showing epoch numbers is drawn below the primary iteration axis.
+        The y-axis is automatically scaled to avoid the initial loss spike
+        dominating the view.
+
         Parameters
         ----------
         averaging_iterations : int
@@ -130,21 +136,105 @@ class SyngResult:
         matplotlib.figure.Figure
             The figure object (not shown; caller decides when to display).
         """
-        fig, ax = plt.subplots()
+        fig, ax1 = plt.subplots()
+
+        all_values: list[np.ndarray] = []
         for col in self.loss.columns:
             values = self.loss[col].to_numpy()
-            ax.plot(values, alpha=0.4, label=col)
+            all_values.append(values)
+            ax1.plot(
+                range(len(values)),
+                values,
+                alpha=0.4,
+                label=f"Minibatch Loss ({col})",
+            )
             if len(values) > averaging_iterations:
                 kernel = np.ones(averaging_iterations) / averaging_iterations
                 smoothed = np.convolve(values, kernel, mode="valid")
-                ax.plot(
+                ax1.plot(
                     range(averaging_iterations - 1, len(values)),
                     smoothed,
-                    label=f"{col} (avg)",
+                    label=f"Running Average ({col})",
                 )
-        ax.set_xlabel("Iterations")
-        ax.set_ylabel("Loss")
-        ax.legend()
+
+        ax1.set_xlabel("Iterations")
+        ax1.set_ylabel("Loss")
+
+        # --- Y-axis scaling: ignore the initial spike ---
+        if all_values:
+            max_len = max(len(v) for v in all_values)
+            if max_len < 1001:
+                skip = max_len // 2
+            else:
+                skip = 1000
+            later_max = max(
+                (float(np.max(v[skip:])) for v in all_values if len(v) > skip),
+                default=0.0,
+            )
+            if later_max > 0:
+                ax1.set_ylim([0, later_max * 1.5])
+
+        ax1.legend()
+
+        # --- Dual x-axis: epochs on a secondary bottom axis ---
+        num_epochs = self.metadata.get("num_epochs")
+        if num_epochs and all_values:
+            series_len = max(len(v) for v in all_values)
+            iter_per_epoch = series_len // num_epochs if num_epochs > 0 else 0
+            if iter_per_epoch > 0:
+                ax2 = ax1.twiny()
+                epoch_labels = list(range(num_epochs + 1))
+                epoch_positions = [e * iter_per_epoch for e in epoch_labels]
+
+                ax2.set_xticks(epoch_positions[::10])
+                ax2.set_xticklabels(epoch_labels[::10])
+
+                ax2.xaxis.set_ticks_position("bottom")
+                ax2.xaxis.set_label_position("bottom")
+                ax2.spines["bottom"].set_position(("outward", 45))
+                ax2.set_xlabel("Epochs")
+                ax2.set_xlim(ax1.get_xlim())
+
+        fig.tight_layout()
+        return fig
+
+    def plot_heatmap(self, which: str = "generated") -> plt.Figure:
+        """Render a seaborn heatmap of generated or reconstructed data.
+
+        Parameters
+        ----------
+        which : str
+            ``"generated"`` or ``"reconstructed"``.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The heatmap figure (not shown; caller decides when to display).
+
+        Raises
+        ------
+        ValueError
+            If *which* is ``"reconstructed"`` but no reconstructed data exists,
+            or if *which* is not a recognised value.
+        """
+        if which == "generated":
+            df = self.generated_data
+        elif which == "reconstructed":
+            if self.reconstructed_data is None:
+                raise ValueError(
+                    "No reconstructed data available in this result. "
+                    "Reconstructed data is only produced by AE/VAE/CVAE models."
+                )
+            df = self.reconstructed_data
+        else:
+            raise ValueError(
+                f"Unknown value which={which!r}; "
+                f"expected 'generated' or 'reconstructed'."
+            )
+
+        fig, ax = plt.subplots()
+        sns.heatmap(df.to_numpy(), cmap="YlGnBu", ax=ax)
+        ax.set_title(f"{which.capitalize()} data")
         fig.tight_layout()
         return fig
 
@@ -256,15 +346,53 @@ class PilotResult:
             all_paths[(pilot_size, draw)] = result.save(out, prefix=run_prefix)
         return all_paths
 
-    def plot_loss(self) -> dict[tuple[int, int], plt.Figure]:
+    def plot_loss(
+        self,
+        aggregate: bool = False,
+        averaging_iterations: int = 100,
+    ) -> dict[tuple[int, int], plt.Figure] | plt.Figure:
         """Plot loss curves for every run.
+
+        Parameters
+        ----------
+        aggregate : bool
+            When ``True``, overlay all runs on a single figure colour-coded
+            by ``(pilot_size, draw)``. When ``False`` (default), return one
+            figure per run.
+        averaging_iterations : int
+            Window size for the running-average overlay (only used in
+            per-run mode).
 
         Returns
         -------
-        dict[tuple[int, int], Figure]
-            Mapping of ``(pilot_size, draw)`` → figure.
+        dict[tuple[int, int], Figure] or Figure
+            Per-run dict when ``aggregate=False``; single figure when
+            ``aggregate=True``.
         """
-        return {key: result.plot_loss() for key, result in sorted(self.runs.items())}
+        if not aggregate:
+            return {
+                key: result.plot_loss(averaging_iterations=averaging_iterations)
+                for key, result in sorted(self.runs.items())
+            }
+
+        # --- Aggregate mode: all runs on one figure ---
+        fig, ax = plt.subplots()
+        cmap = plt.colormaps["tab10"]
+        for idx, ((ps, draw), result) in enumerate(sorted(self.runs.items())):
+            colour = cmap(idx % 10)
+            for col in result.loss.columns:
+                values = result.loss[col].to_numpy()
+                ax.plot(
+                    values,
+                    alpha=0.5,
+                    color=colour,
+                    label=f"pilot={ps} draw={draw} ({col})",
+                )
+        ax.set_xlabel("Iterations")
+        ax.set_ylabel("Loss")
+        ax.legend(fontsize="x-small")
+        fig.tight_layout()
+        return fig
 
     def summary(self) -> str:
         """Return an aggregate summary of all pilot runs.

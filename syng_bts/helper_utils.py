@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
-
-import torch
-import numpy as np
 import os
 import random
+
+import numpy as np
+import torch
 
 
 def preprocessinglog2(dataset):
@@ -171,7 +170,15 @@ def reconstruct_samples(
 
         with torch.no_grad():
             if modelname == "CVAE":
-                encoded, z_mean, z_log_var, decoded_images = model(features, lab)
+                # Ensure labels_batch is 2D for concatenation
+                labels_for_model = (
+                    labels_batch.unsqueeze(1)
+                    if labels_batch.dim() == 1
+                    else labels_batch
+                )
+                encoded, z_mean, z_log_var, decoded_images = model(
+                    features, labels_for_model
+                )
             elif modelname == "VAE":
                 encoded, z_mean, z_log_var, decoded_images = model(features)
             else:

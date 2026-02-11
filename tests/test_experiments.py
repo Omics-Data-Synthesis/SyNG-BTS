@@ -2,41 +2,45 @@
 Tests for experiment functions including integration training tests.
 """
 
-import pytest
 import pandas as pd
-import numpy as np
-from pathlib import Path
+import pytest
+
+from syng_bts import generate, pilot_study, transfer
+from syng_bts.result import SyngResult
 
 
 class TestExperimentImports:
     """Test experiment functions are importable."""
 
-    def test_pilot_experiment_import(self):
-        """Test PilotExperiment can be imported."""
-        from syng_bts import PilotExperiment
+    def test_generate_import(self):
+        """Test generate can be imported."""
+        from syng_bts import generate
 
-        assert PilotExperiment is not None
-        assert callable(PilotExperiment)
+        assert generate is not None
+        assert callable(generate)
 
-    def test_apply_experiment_import(self):
-        """Test ApplyExperiment can be imported."""
-        from syng_bts import ApplyExperiment
+    def test_pilot_study_import(self):
+        """Test pilot_study can be imported."""
 
-        assert ApplyExperiment is not None
-        assert callable(ApplyExperiment)
+        assert pilot_study is not None
+        assert callable(pilot_study)
 
-    def test_transfer_experiment_import(self):
-        """Test TransferExperiment can be imported."""
-        from syng_bts import TransferExperiment
+    def test_transfer_import(self):
+        """Test transfer can be imported."""
 
-        assert TransferExperiment is not None
-        assert callable(TransferExperiment)
+        assert transfer is not None
+        assert callable(transfer)
 
-    def test_transfer_alias(self):
-        """Test Transfer is alias for TransferExperiment."""
-        from syng_bts import Transfer, TransferExperiment
+    def test_legacy_names_not_importable(self):
+        """Legacy function names should not be importable."""
+        with pytest.raises(ImportError):
+            from syng_bts import PilotExperiment  # noqa: F401
 
-        assert Transfer is TransferExperiment
+        with pytest.raises(ImportError):
+            from syng_bts import ApplyExperiment  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import TransferExperiment  # noqa: F401
 
 
 class TestTrainingHelpers:
@@ -69,68 +73,45 @@ class TestSmallTraining:
     Run with: pytest -m slow
     """
 
-    def test_apply_experiment_vae_training(
+    def test_generate_vae_training(
         self, temp_dir, sample_csv_file, small_training_config
     ):
-        """Test ApplyExperiment trains VAE on small data."""
-        from syng_bts import ApplyExperiment
-
+        """Test generate() trains VAE on small data."""
         config = small_training_config
         data_path = sample_csv_file
-        data_name = data_path.stem
-        data_dir = data_path.parent
 
-        # Run training with minimal settings
-        try:
-            ApplyExperiment(
-                dataname=data_name,
-                apply_log=False,  # Data already processed
-                new_size=10,
-                model="VAE1-10",
-                batch_frac=config["batch_frac"],
-                learning_rate=config["learning_rate"],
-                epoch=config["epoch"],  # Very few epochs
-                random_seed=config["random_seed"],
-                data_dir=data_dir,
-                output_dir=temp_dir,
-            )
+        result = generate(
+            data=data_path,
+            apply_log=False,
+            new_size=10,
+            model="VAE1-10",
+            batch_frac=config["batch_frac"],
+            learning_rate=config["learning_rate"],
+            epoch=config["epoch"],
+            random_seed=config["random_seed"],
+            output_dir=temp_dir,
+        )
 
-            # Check that output files were created
-            generated_files = list(temp_dir.glob("GeneratedData/*.csv"))
-            loss_files = list(temp_dir.glob("Loss/*.csv"))
+        assert isinstance(result, SyngResult)
+        assert isinstance(result.generated_data, pd.DataFrame)
+        assert len(result.generated_data) == 10
 
-            # At least some output should be created
-            assert len(generated_files) > 0 or len(loss_files) > 0
-
-        except Exception as e:
-            # Training may fail on small data, that's acceptable for this test
-            # We're mainly verifying the function runs without crashing
-            pytest.skip(f"Training failed (expected for very small data): {e}")
-
-    def test_apply_experiment_creates_output_dirs(self, temp_dir, sample_csv_file):
-        """Test that ApplyExperiment creates output directories."""
-        from syng_bts import ApplyExperiment
-
-        data_dir = sample_csv_file.parent
+    def test_generate_creates_output(self, temp_dir, sample_csv_file):
+        """Test that generate() creates output when output_dir is set."""
         output_dir = temp_dir / "test_output"
 
-        try:
-            ApplyExperiment(
-                dataname="test_data",
-                apply_log=False,
-                new_size=5,
-                model="VAE1-10",
-                batch_frac=0.5,
-                learning_rate=0.001,
-                epoch=1,  # Single epoch
-                random_seed=42,
-                data_dir=data_dir,
-                output_dir=output_dir,
-            )
-        except Exception:
-            pass  # We're just testing directory creation
+        result = generate(
+            data=sample_csv_file,
+            apply_log=False,
+            new_size=5,
+            model="VAE1-10",
+            batch_frac=0.5,
+            learning_rate=0.001,
+            epoch=2,
+            random_seed=42,
+            output_dir=output_dir,
+        )
 
-        # Output directory should exist even if training fails
-        # (it's created at the start of training)
+        assert isinstance(result, SyngResult)
         assert output_dir.exists()
         assert output_dir.is_dir()

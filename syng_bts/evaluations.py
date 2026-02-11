@@ -1,12 +1,13 @@
-import umap.umap_ as umap  # noqa: F401
+from pathlib import Path
+from typing import Optional, Union
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
+import umap.umap_ as umap  # noqa: F401
 from matplotlib.figure import Figure
 from umap import UMAP
-from pathlib import Path
-from typing import Optional, Union
 
 from .data_utils import load_dataset
 

@@ -1,18 +1,14 @@
-# -*- coding: utf-8 -*-
 
-import torch
-import time
 import copy
 import math
-import types
+import time
 
 import numpy as np
 import scipy as sp
 import scipy.linalg
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import defaultdict
-
 
 # %%
 
@@ -973,7 +969,7 @@ class MaskedLinear(nn.Module):
     def __init__(
         self, in_features, out_features, mask, cond_in_features=None, bias=True
     ):
-        super(MaskedLinear, self).__init__()
+        super().__init__()
         self.linear = nn.Linear(in_features, out_features)
         if cond_in_features is not None:
             self.cond_linear = nn.Linear(cond_in_features, out_features, bias=False)
@@ -1006,7 +1002,7 @@ class MADESplit(nn.Module):
         t_act="relu",
         pre_exp_tanh=False,
     ):
-        super(MADESplit, self).__init__()
+        super().__init__()
 
         self.pre_exp_tanh = pre_exp_tanh
 
@@ -1083,7 +1079,7 @@ class MADE(nn.Module):
         act="relu",
         pre_exp_tanh=False,
     ):
-        super(MADE, self).__init__()
+        super().__init__()
 
         activations = {"relu": nn.ReLU, "sigmoid": nn.Sigmoid, "tanh": nn.Tanh}
         act_func = activations[act]
@@ -1128,7 +1124,7 @@ class MADE(nn.Module):
 
 class Sigmoid(nn.Module):
     def __init__(self):
-        super(Sigmoid, self).__init__()
+        super().__init__()
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
         if mode == "direct":
@@ -1144,13 +1140,13 @@ class Sigmoid(nn.Module):
 
 class Logit(Sigmoid):
     def __init__(self):
-        super(Logit, self).__init__()
+        super().__init__()
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
         if mode == "direct":
-            return super(Logit, self).forward(inputs, "inverse")
+            return super().forward(inputs, "inverse")
         else:
-            return super(Logit, self).forward(inputs, "direct")
+            return super().forward(inputs, "direct")
 
 
 class BatchNormFlow(nn.Module):
@@ -1160,7 +1156,7 @@ class BatchNormFlow(nn.Module):
     """
 
     def __init__(self, num_inputs, momentum=0.0, eps=1e-5):
-        super(BatchNormFlow, self).__init__()
+        super().__init__()
 
         self.log_gamma = nn.Parameter(torch.zeros(num_inputs))
         self.beta = nn.Parameter(torch.zeros(num_inputs))
@@ -1213,7 +1209,7 @@ class ActNorm(nn.Module):
     """
 
     def __init__(self, num_inputs):
-        super(ActNorm, self).__init__()
+        super().__init__()
         self.weight = nn.Parameter(torch.ones(num_inputs))
         self.bias = nn.Parameter(torch.zeros(num_inputs))
         self.initialized = False
@@ -1241,7 +1237,7 @@ class InvertibleMM(nn.Module):
     """
 
     def __init__(self, num_inputs):
-        super(InvertibleMM, self).__init__()
+        super().__init__()
         self.W = nn.Parameter(torch.Tensor(num_inputs, num_inputs))
         nn.init.orthogonal_(self.W)
 
@@ -1263,7 +1259,7 @@ class LUInvertibleMM(nn.Module):
     """
 
     def __init__(self, num_inputs):
-        super(LUInvertibleMM, self).__init__()
+        super().__init__()
         self.W = torch.Tensor(num_inputs, num_inputs)
         nn.init.orthogonal_(self.W)
         self.L_mask = torch.tril(torch.ones(self.W.size()), -1)
@@ -1311,7 +1307,7 @@ class Shuffle(nn.Module):
     """
 
     def __init__(self, num_inputs):
-        super(Shuffle, self).__init__()
+        super().__init__()
         self.register_buffer("perm", torch.randperm(num_inputs))
         self.register_buffer("inv_perm", torch.argsort(self.perm))
 
@@ -1333,7 +1329,7 @@ class Reverse(nn.Module):
     """
 
     def __init__(self, num_inputs):
-        super(Reverse, self).__init__()
+        super().__init__()
         self.perm = np.array(np.arange(0, num_inputs)[::-1])
         self.inv_perm = np.argsort(self.perm)
 
@@ -1362,7 +1358,7 @@ class CouplingLayer(nn.Module):
         s_act="tanh",
         t_act="relu",
     ):
-        super(CouplingLayer, self).__init__()
+        super().__init__()
 
         self.num_inputs = num_inputs
         self.mask = mask

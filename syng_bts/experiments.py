@@ -1,9 +1,10 @@
 """Experiment functions for SyNG-BTS.
 
-This module contains both the **new public API** (``generate``,
-``pilot_study``, ``transfer``) introduced in v3.0 and the **legacy API**
-(``PilotExperiment``, ``ApplyExperiment``, ``TransferExperiment``) kept
-for backward compatibility until Phase 6.
+Public API
+----------
+- ``generate()`` — train a model and produce synthetic samples.
+- ``pilot_study()`` — sweep over pilot sizes with replicated draws.
+- ``transfer()`` — pre-train on source, fine-tune on target.
 """
 
 from __future__ import annotations
@@ -336,12 +337,24 @@ def generate(
 
     # --- 10. Assemble SyngResult -----------------------------------------
     gen_np = train_out.generated_data.detach().numpy()
-    gen_df = pd.DataFrame(gen_np, columns=colnames[: gen_np.shape[1]])
+
+    # For CVAE, add label column name
+    gen_colnames = list(colnames)
+    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        gen_colnames = gen_colnames + ["label"]
+
+    gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
 
     recon_df = None
     if train_out.reconstructed_data is not None:
         recon_np = train_out.reconstructed_data.detach().numpy()
-        recon_df = pd.DataFrame(recon_np, columns=colnames[: recon_np.shape[1]])
+
+        # For CVAE, add label column name
+        recon_colnames = list(colnames)
+        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+            recon_colnames = recon_colnames + ["label"]
+
+        recon_df = pd.DataFrame(recon_np, columns=recon_colnames[: recon_np.shape[1]])
 
     loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -782,173 +795,3 @@ def transfer(
         shutil.rmtree(_transfer_tmpdir, ignore_errors=True)
 
     return result
-
-
-# =========================================================================
-# Legacy API (kept until Phase 6 removal)
-# These are thin wrappers that delegate to the new API functions above.
-# =========================================================================
-
-
-def PilotExperiment(
-    dataname: str,
-    pilot_size: list[int],
-    model: str,
-    batch_frac: float,
-    learning_rate: float,
-    epoch: int | None = None,
-    early_stop_num: int = 30,
-    off_aug: str | None = None,
-    AE_head_num: int = 2,
-    Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
-    data_dir: str | Path | None = None,
-    output_dir: str | Path | None = None,
-) -> PilotResult:
-    r"""Legacy wrapper — delegates to :func:`pilot_study`.
-
-    .. deprecated::
-        Use :func:`pilot_study` instead.
-    """
-    # Resolve data from dataname + data_dir
-    if data_dir is not None:
-        data_path = Path(data_dir) / f"{dataname}.csv"
-        data_input: pd.DataFrame | str | Path = data_path
-    else:
-        data_input = dataname
-
-    if output_dir is None:
-        output_dir = str(Path.cwd())
-
-    return pilot_study(
-        data=data_input,
-        pilot_size=pilot_size,
-        name=dataname,
-        model=model,
-        batch_frac=batch_frac,
-        learning_rate=learning_rate,
-        epoch=epoch,
-        early_stop_patience=early_stop_num,
-        off_aug=off_aug,
-        AE_head_num=AE_head_num,
-        Gaussian_head_num=Gaussian_head_num,
-        pre_model=pre_model,
-        random_seed=123,
-        output_dir=output_dir,
-    )
-
-
-def ApplyExperiment(
-    path: str | Path | None = None,
-    dataname: str = "",
-    apply_log: bool = True,
-    new_size: int | list[int] = 500,
-    model: str = "VAE1-10",
-    batch_frac: float = 0.1,
-    learning_rate: float = 0.0005,
-    epoch: int | None = None,
-    val_ratio: float = 0.2,
-    early_stop_num: int | None = None,
-    off_aug: str | None = None,
-    AE_head_num: int = 2,
-    Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
-    save_model: str | None = None,
-    use_scheduler: bool = False,
-    step_size: int = 10,
-    gamma: float = 0.5,
-    cap: bool = False,
-    random_seed: int = 123,
-    data_dir: str | Path | None = None,
-    output_dir: str | Path | None = None,
-) -> SyngResult:
-    r"""Legacy wrapper — delegates to :func:`generate`.
-
-    .. deprecated::
-        Use :func:`generate` instead.
-    """
-    # Handle legacy path parameter
-    if data_dir is None and path is not None:
-        data_dir = Path(path)
-    if output_dir is None and path is not None:
-        output_dir = str(Path(path))
-    elif output_dir is None:
-        output_dir = str(Path.cwd())
-
-    # Resolve data from dataname + data_dir
-    if data_dir is not None:
-        data_path = Path(data_dir) / f"{dataname}.csv"
-        data_input: pd.DataFrame | str | Path = data_path
-    else:
-        data_input = dataname
-
-    return generate(
-        data=data_input,
-        name=dataname,
-        new_size=new_size,
-        model=model,
-        apply_log=apply_log,
-        batch_frac=batch_frac,
-        learning_rate=learning_rate,
-        epoch=epoch,
-        val_ratio=val_ratio,
-        early_stop_patience=early_stop_num,
-        off_aug=off_aug,
-        AE_head_num=AE_head_num,
-        Gaussian_head_num=Gaussian_head_num,
-        pre_model=pre_model,
-        save_model=save_model,
-        use_scheduler=use_scheduler,
-        step_size=step_size,
-        gamma=gamma,
-        cap=cap,
-        random_seed=random_seed,
-        output_dir=output_dir,
-    )
-
-
-def TransferExperiment(
-    pilot_size: list[int] | None = None,
-    fromname: str = "",
-    toname: str = "",
-    fromsize: int = 500,
-    model: str = "VAE1-10",
-    new_size: int = 500,
-    apply_log: bool = True,
-    epoch: int | None = None,
-    batch_frac: float = 0.1,
-    learning_rate: float = 0.0005,
-    off_aug: str | None = None,
-    data_dir: str | Path | None = None,
-    output_dir: str | Path | None = None,
-) -> SyngResult | PilotResult:
-    r"""Legacy wrapper — delegates to :func:`transfer`.
-
-    .. deprecated::
-        Use :func:`transfer` instead.
-    """
-    # Resolve source and target data
-    if data_dir is not None:
-        source_input: pd.DataFrame | str | Path = Path(data_dir) / f"{fromname}.csv"
-        target_input: pd.DataFrame | str | Path = Path(data_dir) / f"{toname}.csv"
-    else:
-        source_input = fromname
-        target_input = toname
-
-    return transfer(
-        source_data=source_input,
-        target_data=target_input,
-        source_name=fromname,
-        target_name=toname,
-        pilot_size=pilot_size,
-        source_size=fromsize,
-        new_size=new_size,
-        model=model,
-        apply_log=apply_log,
-        batch_frac=batch_frac,
-        learning_rate=learning_rate,
-        epoch=epoch,
-        early_stop_patience=30,
-        off_aug=off_aug,
-        output_dir=output_dir,
-    )

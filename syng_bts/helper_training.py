@@ -174,6 +174,7 @@ def training_AEs(
         )
 
     final_model = best_model if early_stop else model
+    final_model.eval()
 
     # Determine latent size based on model architecture
     latent_size = 64 if modelname == "AE" else 32
@@ -290,6 +291,7 @@ def training_GANs(
         raise ValueError(f"modelname '{modelname}' not supported by training_GANs.")
 
     final_model = best_model if early_stop else model
+    final_model.eval()
     new_data = generate_samples(
         model=final_model,
         modelname="GANs",
@@ -674,6 +676,7 @@ def training_flows(
         torch.save(best_model.state_dict(), save_model)
 
     # Generate new samples
+    best_model.eval()
     new_data = generate_samples(
         model=best_model,
         modelname=modelname,

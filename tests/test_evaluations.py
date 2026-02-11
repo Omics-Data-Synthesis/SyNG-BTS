@@ -2,10 +2,9 @@
 Tests for evaluation and visualization functions.
 """
 
-import pytest
-import numpy as np
-import pandas as pd
 import matplotlib
+import pandas as pd
+import pytest
 
 matplotlib.use("Agg")  # Use non-interactive backend for testing
 
@@ -42,8 +41,9 @@ class TestHeatmapEval:
 
     def test_heatmap_eval_returns_figure(self, sample_data):
         """Test that save=True returns matplotlib figure."""
-        from syng_bts import heatmap_eval
         import matplotlib.pyplot as plt
+
+        from syng_bts import heatmap_eval
 
         fig = heatmap_eval(sample_data, save=True)
 
@@ -63,8 +63,9 @@ class TestUMAPEval:
 
     def test_umap_eval_single_dataset(self, sample_data):
         """Test UMAP with single dataset (generated=None)."""
-        from syng_bts import UMAP_eval
         import matplotlib.pyplot as plt
+
+        from syng_bts import UMAP_eval
 
         # Run with only real data
         UMAP_eval(dat_generated=None, dat_real=sample_data)
@@ -74,8 +75,9 @@ class TestUMAPEval:
 
     def test_umap_eval_with_groups(self, sample_data):
         """Test UMAP with group labels."""
-        from syng_bts import UMAP_eval
         import matplotlib.pyplot as plt
+
+        from syng_bts import UMAP_eval
 
         # Create groups
         groups = pd.Series(["A"] * 10 + ["B"] * 10)
@@ -86,8 +88,9 @@ class TestUMAPEval:
 
     def test_umap_eval_two_datasets(self, sample_data):
         """Test UMAP comparing two datasets."""
-        from syng_bts import UMAP_eval
         import matplotlib.pyplot as plt
+
+        from syng_bts import UMAP_eval
 
         dat_generated = sample_data * 1.1
 
@@ -97,8 +100,9 @@ class TestUMAPEval:
 
     def test_umap_eval_random_state(self, sample_data):
         """Test UMAP with specific random state for reproducibility."""
-        from syng_bts import UMAP_eval
         import matplotlib.pyplot as plt
+
+        from syng_bts import UMAP_eval
 
         UMAP_eval(dat_generated=None, dat_real=sample_data, random_state=123)
 
@@ -117,8 +121,9 @@ class TestEvaluationFunction:
 
     def test_evaluation_with_bundled_data(self):
         """Test evaluation with bundled BRCA data."""
-        from syng_bts import evaluation
         import matplotlib.pyplot as plt
+
+        from syng_bts import evaluation
 
         # Uses default bundled BRCASubtype case study data
         try:

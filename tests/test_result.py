@@ -198,7 +198,9 @@ class TestSyngResult:
         ax = fig.get_axes()[0]
         ylim = ax.get_ylim()
         # The upper ylim should be much less than the spike (1000)
-        assert ylim[1] < 100, f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        assert ylim[1] < 100, (
+            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        )
         plt.close(fig)
 
     def test_plot_loss_short_series(self, sample_generated):

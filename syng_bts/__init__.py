@@ -50,27 +50,13 @@ __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
 __license__ = "AGPL-3.0"
 
-# Import main experiment functions (new API)
-# Import legacy experiment functions (deprecated, delegates to new API)
-from .experiments import (
-    ApplyExperiment,
-    PilotExperiment,
-    TransferExperiment,
-    generate,
-    pilot_study,
-    transfer,
-)
-
-# Create alias for backward compatibility
-Transfer = TransferExperiment
-
+# Import main experiment functions
 # Import evaluation functions
 # Import data utilities
 from .data_utils import (
     derive_dataname,
     get_output_dir,
     list_bundled_datasets,
-    load_dataset,
     resolve_data,
     set_default_output_dir,
 )
@@ -78,6 +64,11 @@ from .evaluations import (
     UMAP_eval,
     evaluation,
     heatmap_eval,
+)
+from .experiments import (
+    generate,
+    pilot_study,
+    transfer,
 )
 
 # Import models (for advanced users who want to use models directly)
@@ -98,15 +89,10 @@ __all__ = [
     "__author__",
     "__email__",
     "__license__",
-    # New public API
+    # Experiment functions
     "generate",
     "pilot_study",
     "transfer",
-    # Legacy experiment functions (deprecated)
-    "PilotExperiment",
-    "ApplyExperiment",
-    "TransferExperiment",
-    "Transfer",  # Alias for TransferExperiment
     # Evaluation functions
     "heatmap_eval",
     "UMAP_eval",
@@ -117,7 +103,6 @@ __all__ = [
     "CVAE",
     "GAN",
     # Data utilities
-    "load_dataset",
     "list_bundled_datasets",
     "set_default_output_dir",
     "get_output_dir",

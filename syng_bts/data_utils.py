@@ -7,19 +7,20 @@ output directories in a cross-platform compatible way.
 
 from pathlib import Path
 from typing import Optional, Union
+
 import pandas as pd
 
 # Try importlib.resources (Python 3.9+) with fallback to importlib_resources
 try:
-    from importlib.resources import files, as_file
+    from importlib.resources import as_file, files
 except ImportError:
-    from importlib_resources import files, as_file
+    from importlib_resources import as_file, files
 
 # For older Python compatibility
 try:
     import importlib.resources as pkg_resources
 except ImportError:
-    import importlib_resources as pkg_resources
+    pass
 
 
 # Default output directory

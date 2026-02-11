@@ -1,4 +1,3 @@
-
 import copy
 import math
 import time
@@ -826,7 +825,7 @@ def train_WGANGP(
             ###################################################
             # gradient penalty
             if gradient_penalty:
-                alpha = torch.rand(batch_size, 1, 1, 1)
+                alpha = torch.rand(batch_size, 1)
 
                 interpolated = alpha * real_images + (1 - alpha) * fake_images.detach()
                 interpolated.requires_grad = True
@@ -977,15 +976,10 @@ class MaskedLinear(nn.Module):
         self.register_buffer("mask", mask)
 
     def forward(self, inputs, cond_inputs=None):
-        # import pdb
-        # pdb.set_trace()
         output = F.linear(inputs, self.linear.weight * self.mask, self.linear.bias)
         if cond_inputs is not None:
             output += self.cond_linear(cond_inputs)
         return output
-
-
-nn.MaskedLinear = MaskedLinear
 
 
 class MADESplit(nn.Module):
@@ -1013,27 +1007,27 @@ class MADESplit(nn.Module):
         output_mask = get_mask(num_hidden, num_inputs, num_inputs, mask_type="output")
 
         act_func = activations[s_act]
-        self.s_joiner = nn.MaskedLinear(
+        self.s_joiner = MaskedLinear(
             num_inputs, num_hidden, input_mask, num_cond_inputs
         )
 
         self.s_trunk = nn.Sequential(
             act_func(),
-            nn.MaskedLinear(num_hidden, num_hidden, hidden_mask),
+            MaskedLinear(num_hidden, num_hidden, hidden_mask),
             act_func(),
-            nn.MaskedLinear(num_hidden, num_inputs, output_mask),
+            MaskedLinear(num_hidden, num_inputs, output_mask),
         )
 
         act_func = activations[t_act]
-        self.t_joiner = nn.MaskedLinear(
+        self.t_joiner = MaskedLinear(
             num_inputs, num_hidden, input_mask, num_cond_inputs
         )
 
         self.t_trunk = nn.Sequential(
             act_func(),
-            nn.MaskedLinear(num_hidden, num_hidden, hidden_mask),
+            MaskedLinear(num_hidden, num_hidden, hidden_mask),
             act_func(),
-            nn.MaskedLinear(num_hidden, num_inputs, output_mask),
+            MaskedLinear(num_hidden, num_inputs, output_mask),
         )
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
@@ -1090,24 +1084,17 @@ class MADE(nn.Module):
             num_hidden, num_inputs * 2, num_inputs, mask_type="output"
         )
 
-        self.joiner = nn.MaskedLinear(
-            num_inputs, num_hidden, input_mask, num_cond_inputs
-        )
+        self.joiner = MaskedLinear(num_inputs, num_hidden, input_mask, num_cond_inputs)
 
         self.trunk = nn.Sequential(
             act_func(),
-            nn.MaskedLinear(num_hidden, num_hidden, hidden_mask),
+            MaskedLinear(num_hidden, num_hidden, hidden_mask),
             act_func(),
-            nn.MaskedLinear(num_hidden, num_inputs * 2, output_mask),
+            MaskedLinear(num_hidden, num_inputs * 2, output_mask),
         )
-        # self.trunk = nn.Sequential(act_func(),
-        #                            nn.MaskedLinear(num_hidden, num_inputs * 2,
-        #                                            output_mask))
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
         if mode == "direct":
-            # import pdb
-            # pdb.set_trace()
             h = self.joiner(inputs, cond_inputs)
             m, a = self.trunk(h).chunk(2, 1)
             u = (inputs - m) * torch.exp(-a)
@@ -1438,8 +1425,6 @@ class FlowSequential(nn.Sequential):
             inputs: a tuple of inputs and logdets
             mode: to run direct computation or inverse
         """
-        # import pdb
-        # pdb.set_trace()
         self.num_inputs = inputs.size(-1)
 
         if logdets is None:
@@ -1463,21 +1448,6 @@ class FlowSequential(nn.Sequential):
         log_probs = (-0.5 * u.pow(2) - 0.5 * math.log(2 * math.pi)).sum(
             -1, keepdim=True
         )
-
-        # if save:
-        #     # import pdb
-        #     # pdb.set_trace()
-        #     save_path = 'outputs/SKCM'
-        #     #u_npy = pow(2, u.numpy())-1
-        #     u_npy = u.numpy()
-        #     save_file_path = 'outputs/SKCM/epoch_%d.txt' % save_step
-        #     np.savetxt(save_file_path, u_npy)
-        #     # with open(save_file_path, 'w') as f:
-        #     #     for i in range(h):
-        #     #         for j in range(w):
-        #     #             f.write(''str(log_probs_npy[i][j]))
-        #     #         f.write('\n')
-        #     # f.close()
 
         return (log_probs + log_jacob).sum(-1, keepdim=True)
 

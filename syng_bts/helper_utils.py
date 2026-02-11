@@ -21,7 +21,8 @@ def set_all_seeds(seed):
 
 def create_labels(n_samples, groups=None):
     # create binary labels and blurry labels for training two-group data
-    set_all_seeds(10)  # randomness only for blur labels generation.
+    # Use a local generator so we don't mutate global RNG state.
+    _rng = torch.Generator().manual_seed(10)
     if groups is None:
         labels = torch.zeros([n_samples, 1])
         blurlabels = labels
@@ -30,13 +31,18 @@ def create_labels(n_samples, groups=None):
         labels = torch.zeros([n_samples, 1]).to(torch.float32)
         labels[groups != base, 0] = 1
         blurlabels = torch.zeros([n_samples, 1]).to(torch.float32)
-        blurlabels[groups != base, 0] = (10 - 9) * torch.rand(sum(groups != base)) + 9
-        blurlabels[groups == base, 0] = (1 - 0) * torch.rand(sum(groups == base)) + 0
+        blurlabels[groups != base, 0] = (10 - 9) * torch.rand(
+            sum(groups != base), generator=_rng
+        ) + 9
+        blurlabels[groups == base, 0] = (1 - 0) * torch.rand(
+            sum(groups == base), generator=_rng
+        ) + 0
     return labels, blurlabels
 
 
 def create_labels_mul(n_samples, groups=None):
-    set_all_seeds(10)
+    # Use a local generator so we don't mutate global RNG state.
+    _rng = torch.Generator().manual_seed(10)
 
     if groups is None:
         labels = torch.zeros([n_samples, 1], dtype=torch.float32)
@@ -47,7 +53,7 @@ def create_labels_mul(n_samples, groups=None):
     codes = groups_cat.cat.codes
     group_tensor = torch.from_numpy(codes.copy().values)
     labels = group_tensor.float().unsqueeze(1)
-    blurlabels = labels + torch.rand_like(labels)
+    blurlabels = labels + torch.rand(labels.shape, generator=_rng)
     return labels, blurlabels
 
 

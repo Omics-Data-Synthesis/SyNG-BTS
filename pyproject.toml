@@ -92,6 +92,7 @@ packages = ["syng_bts", "syng_bts.data"]
 include-package-data = true
 
 [tool.setuptools.package-data]
+syng_bts = ["py.typed"]
 "syng_bts.data" = [
     "examples/*.csv",
     "transfer/*.csv",

@@ -5,12 +5,36 @@ import numpy as np
 import torch
 
 
-def preprocessinglog2(dataset):
-    # log2 pre-processing of count data
+def preprocessinglog2(dataset: torch.Tensor) -> torch.Tensor:
+    """Apply log2 transformation to count data.
+
+    Parameters
+    ----------
+    dataset : torch.Tensor
+        Input count data tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        Log2-transformed data: log2(dataset + 1).
+    """
     return torch.log2(dataset + 1)
 
 
-def set_all_seeds(seed):
+def set_all_seeds(seed: int) -> None:
+    """Set random seeds for reproducibility across all libraries.
+
+    Sets the global seed for (in order):
+    - PL_GLOBAL_SEED environment variable
+    - Python's random module
+    - NumPy's random module
+    - PyTorch's CPU and all CUDA devices
+
+    Parameters
+    ----------
+    seed : int
+        Seed value for all RNG sources.
+    """
     # set random seed
     os.environ["PL_GLOBAL_SEED"] = str(seed)
     random.seed(seed)
@@ -19,7 +43,30 @@ def set_all_seeds(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def create_labels(n_samples, groups=None):
+def create_labels(
+    n_samples: int, groups: torch.Tensor | np.ndarray | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create binary labels and blur labels for two-group data.
+
+    Generates crisp (0/1) labels for binary classification, and fuzzy
+    labels used during training:
+    - For group 0: blurlabels ∈ [0, 1]
+    - For group 1: blurlabels ∈ [9, 10]
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples.
+    groups : torch.Tensor or np.ndarray, optional
+        Group membership array with values indicating class. If None,
+        all samples are assigned to group 0 (class 0).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(labels, blurlabels)`` where ``labels`` are crisp binary labels
+        and ``blurlabels`` are fuzzy labels. Both have shape ``[n_samples, 1]``.
+    """
     # create binary labels and blurry labels for training two-group data
     # Use a local generator so we don't mutate global RNG state.
     _rng = torch.Generator().manual_seed(10)
@@ -40,7 +87,29 @@ def create_labels(n_samples, groups=None):
     return labels, blurlabels
 
 
-def create_labels_mul(n_samples, groups=None):
+def create_labels_mul(
+    n_samples: int, groups: torch.Tensor | np.ndarray | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create multi-group labels and blur labels for multi-class data.
+
+    Generates crisp group labels and fuzzy (offset) labels used
+    during multi-class training.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples.
+    groups : torch.Tensor or np.ndarray, optional
+        Categorical group membership. If None, all samples are
+        assigned to group 0.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(labels, blurlabels)`` where ``labels`` are crisp group
+        indices (one per sample) and ``blurlabels`` are offset labels.
+        Both have shape ``[n_samples, 1]``.
+    """
     # Use a local generator so we don't mutate global RNG state.
     _rng = torch.Generator().manual_seed(10)
 
@@ -57,7 +126,38 @@ def create_labels_mul(n_samples, groups=None):
     return labels, blurlabels
 
 
-def draw_pilot(dataset, labels, blurlabels, n_pilot, seednum):
+def draw_pilot(
+    dataset: torch.Tensor,
+    labels: torch.Tensor,
+    blurlabels: torch.Tensor,
+    n_pilot: int,
+    seednum: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Draw a pilot dataset with balanced group sampling.
+
+    Maintains group balance when drawing a pilot subset. For single-group
+    data, performs random sampling. For multi-group data, independently
+    samples ``n_pilot`` rows from each group.
+
+    Parameters
+    ----------
+    dataset : torch.Tensor
+        Input samples, shape ``[n_samples, n_features]``.
+    labels : torch.Tensor
+        Crisp labels, shape ``[n_samples, 1]``.
+    blurlabels : torch.Tensor
+        Fuzzy labels, shape ``[n_samples, 1]``.
+    n_pilot : int
+        Target number of samples per group.
+    seednum : int
+        Random seed to use for reproducible draws.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(pilot_data, pilot_labels, pilot_blurlabels)`` — the drawn
+        pilot subset with preserved group balance.
+    """
     # draw pilot datasets
     set_all_seeds(
         seednum
@@ -97,7 +197,36 @@ def draw_pilot(dataset, labels, blurlabels, n_pilot, seednum):
     return rawdata, rawlabels, rawblurlabels
 
 
-def Gaussian_aug(rawdata, rawlabels, multiplier):
+def Gaussian_aug(
+    rawdata: torch.Tensor, rawlabels: torch.Tensor, multiplier: list[int]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Augment pilot data by adding Gaussian noise.
+
+    Performs offline augmentation by repeatedly concatenating the
+    original data with perturbed copies (original + Gaussian noise).
+
+    Parameters
+    ----------
+    rawdata : torch.Tensor
+        Pilot data, shape ``[n_samples, n_features]``.
+    rawlabels : torch.Tensor
+        Pilot labels, shape ``[n_samples, 1]``.
+    multiplier : list[int]
+        Augmentation multiplier per group. If single-group, use ``[m]``
+        to replicate ``m`` times. If multi-group, use ``[m1, m2, ...]``
+        for each group respectively.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(augmented_data, augmented_labels)`` where augmented_data has
+        been expanded by replicating with Gaussian noise.
+
+    Notes
+    -----
+    Each augmentation step adds ``N(0, 1)`` noise, so the augmented
+    dataset has size ``n_samples * (1 + sum(multiplier))``.
+    """
     # Gaussian augmentation
     # This function performs offline augmentation by adding gaussian noise to the
     # log2 counts, rawdata is the data generated from draw_pilot(), so does rawlabels,
@@ -108,7 +237,7 @@ def Gaussian_aug(rawdata, rawlabels, multiplier):
     oriraw = rawdata
     orirawlabels = rawlabels
     for all_mult in multiplier:
-        for mult in list(range(all_mult)):
+        for _mult in list(range(all_mult)):
             rawdata = torch.cat(
                 (
                     rawdata,
@@ -158,7 +287,7 @@ def reconstruct_samples(
     decoded_all = torch.zeros([1, n_features])
     labels = torch.zeros(0, dtype=torch.long)
 
-    for batch_idx, (features, lab) in enumerate(data_loader):
+    for _batch_idx, (features, lab) in enumerate(data_loader):
         # Compatible with two types of labels:
         # - (N, C) one-hot -> use argmax
         # - (N, 1) single column/real number 0/1 -> directly squeeze to (N,)

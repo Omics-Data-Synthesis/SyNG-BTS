@@ -4,6 +4,9 @@
 # Include all CSV data files
 recursive-include syng_bts/data *.csv
 
+# Include the py.typed marker for PEP 561 type checking
+include syng_bts/py.typed
+
 # Include package metadata
 include LICENSE
 include README.md

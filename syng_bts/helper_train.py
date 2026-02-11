@@ -506,6 +506,7 @@ def train_GAN(
     loss_fn = F.binary_cross_entropy_with_logits
 
     start_time = time.time()
+    best_model = model
     for epoch in range(num_epochs):
         model.train()
         for batch_idx, (features, _) in enumerate(train_loader):
@@ -594,7 +595,7 @@ def train_GAN(
     if save_model is not None:
         torch.save(model.state_dict(), save_model)
 
-    return log_dict
+    return log_dict, best_model
 
 
 # %%

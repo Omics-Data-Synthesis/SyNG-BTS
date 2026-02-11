@@ -34,17 +34,13 @@ For more information, see:
 """
 
 # Dynamic version from package metadata (set in pyproject.toml)
-try:
-    from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, version
 
-    try:
-        __version__ = version("syng-bts")
-    except PackageNotFoundError:
-        # Package is not installed (running from source)
-        __version__ = "2.5.0"
-except ImportError:
-    # Python < 3.8 fallback
-    __version__ = "2.5.0"
+try:
+    __version__ = version("syng-bts")
+except PackageNotFoundError:
+    # Package is not installed (running from source)
+    __version__ = "3.0.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"

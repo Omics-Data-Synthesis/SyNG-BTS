@@ -65,7 +65,15 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
     -------
     pd.DataFrame
     """
-    if "AE" in modelname:
+    if modelname == "AE":
+        # AE logs total loss only (no KL/reconstruction split)
+        return pd.DataFrame(
+            {
+                "train_loss": log_dict.get("train_loss_per_batch", []),
+                "val_loss": log_dict.get("val_loss_per_batch", []),
+            }
+        )
+    if modelname in ("VAE", "CVAE"):
         return pd.DataFrame(
             {
                 "kl": log_dict.get(

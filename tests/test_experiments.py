@@ -119,12 +119,22 @@ class TestBuildLossDf:
         assert list(df.columns) == ["kl", "recons"]
         assert len(df) == 2
 
-    def test_ae_family_train_fallback(self):
+    def test_ae_plain(self):
+        """AE models log train/val total loss, not kl/recons split."""
+        log = {
+            "train_loss_per_batch": [100.0, 90.0],
+            "val_loss_per_batch": [110.0, 95.0],
+        }
+        df = _build_loss_df(log, "AE")
+        assert list(df.columns) == ["train_loss", "val_loss"]
+        assert len(df) == 2
+
+    def test_cvae_family_train_fallback(self):
         log = {
             "train_kl_loss_per_batch": [1.0],
             "train_reconstruction_loss_per_batch": [2.0],
         }
-        df = _build_loss_df(log, "AE")
+        df = _build_loss_df(log, "CVAE")
         assert list(df.columns) == ["kl", "recons"]
         assert len(df) == 1
 
@@ -141,6 +151,180 @@ class TestBuildLossDf:
         df = _build_loss_df(log, "maf")
         assert list(df.columns) == ["train_loss"]
         assert len(df) == 3
+
+    def test_wgan_family(self):
+        log = {
+            "train_discriminator_loss_per_batch": [3.0],
+            "train_generator_loss_per_batch": [1.0],
+        }
+        df = _build_loss_df(log, "WGAN")
+        assert list(df.columns) == ["discriminator", "generator"]
+
+    def test_wgangp_family(self):
+        log = {
+            "train_discriminator_loss_per_batch": [3.0],
+            "train_generator_loss_per_batch": [1.0],
+        }
+        df = _build_loss_df(log, "WGANGP")
+        assert list(df.columns) == ["discriminator", "generator"]
+
+    def test_realnvp_flow(self):
+        log = {"train_loss_per_epoch": [5.0, 4.0]}
+        df = _build_loss_df(log, "realnvp")
+        assert list(df.columns) == ["train_loss"]
+
+    def test_glow_flow(self):
+        log = {"train_loss_per_epoch": [5.0]}
+        df = _build_loss_df(log, "glow")
+        assert list(df.columns) == ["train_loss"]
+
+
+# =========================================================================
+# Result schema verification (Phase 13)
+# =========================================================================
+class TestResultSchema:
+    """Verify result structure contracts documented in result_structure.md.
+
+    Each test trains a model for 2 epochs and checks that the returned
+    SyngResult has the correct loss columns, generated shape, and
+    reconstruction presence/absence for that model family.
+    """
+
+    def test_ae_schema(self, sample_data):
+        """AE: loss=[train_loss, val_loss], has reconstruction, columns match."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        # Loss columns
+        assert list(result.loss.columns) == ["train_loss", "val_loss"]
+        assert len(result.loss) > 0
+        # Generated shape and column names
+        assert result.generated_data.shape == (5, NUM_FEATURES)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        # Reconstruction present
+        assert result.reconstructed_data is not None
+        assert result.reconstructed_data.shape[1] == NUM_FEATURES
+        # Metadata
+        assert result.metadata["modelname"] == "AE"
+
+    def test_vae_schema(self, sample_data):
+        """VAE: loss=[kl, recons], has reconstruction, columns match."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert list(result.loss.columns) == ["kl", "recons"]
+        assert len(result.loss) > 0
+        assert result.generated_data.shape == (5, NUM_FEATURES)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        assert result.reconstructed_data is not None
+        assert result.reconstructed_data.shape[1] == NUM_FEATURES
+        assert result.metadata["modelname"] == "VAE"
+        assert result.metadata["kl_weight"] == 10
+
+    def test_gan_schema(self, sample_data):
+        """GAN: loss=[discriminator, generator], no reconstruction."""
+        result = generate(
+            data=sample_data,
+            model="GAN",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert list(result.loss.columns) == ["discriminator", "generator"]
+        assert len(result.loss) > 0
+        assert result.generated_data.shape == (5, NUM_FEATURES)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        assert result.reconstructed_data is None
+        assert result.metadata["modelname"] == "GAN"
+
+    def test_flow_schema(self, sample_data):
+        """Flow (maf): loss=[train_loss], no reconstruction."""
+        result = generate(
+            data=sample_data,
+            model="maf",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert list(result.loss.columns) == ["train_loss"]
+        assert len(result.loss) > 0
+        assert result.generated_data.shape == (5, NUM_FEATURES)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        assert result.reconstructed_data is None
+        assert result.metadata["modelname"] == "maf"
+
+    def test_metadata_keys_present(self, sample_data):
+        """All standard metadata keys populated for a basic generate() call."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        expected_keys = {
+            "model",
+            "modelname",
+            "dataname",
+            "num_epochs",
+            "epochs_trained",
+            "seed",
+            "kl_weight",
+            "input_shape",
+        }
+        assert expected_keys.issubset(result.metadata.keys()), (
+            f"Missing metadata keys: {expected_keys - result.metadata.keys()}"
+        )
+        assert result.metadata["input_shape"] == (20, NUM_FEATURES)
+
+    def test_model_state_present(self, sample_data):
+        """model_state is a non-empty dict after training."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result.model_state, dict)
+        assert len(result.model_state) > 0
+
+    def test_pilot_result_schema(self, sample_data):
+        """PilotResult.runs has correct keys and each value is a SyngResult."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, PilotResult)
+        assert len(result.runs) == 5
+        for (psize, draw), run in result.runs.items():
+            assert psize == 10
+            assert 1 <= draw <= 5
+            assert isinstance(run, SyngResult)
+            assert list(run.loss.columns) == ["kl", "recons"]
+            assert list(run.generated_data.columns) == list(sample_data.columns)
 
 
 # =========================================================================

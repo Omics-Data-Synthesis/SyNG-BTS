@@ -38,9 +38,17 @@ def heatmap_eval(
     Figure
         The matplotlib Figure containing the heatmap(s).
     """
-    if generated_data is None:
+    # Select only numeric columns to avoid seaborn conversion errors
+    real_data_plot = real_data.select_dtypes(include=["number"])
+    generated_data_plot = (
+        generated_data.select_dtypes(include=["number"])
+        if generated_data is not None
+        else None
+    )
+
+    if generated_data_plot is None:
         fig = plt.figure(figsize=(6, 6))
-        ax = sns.heatmap(real_data, cbar=True, cmap=cmap)
+        ax = sns.heatmap(real_data_plot, cbar=True, cmap=cmap)
         ax.set_title("Real Data")
         ax.set_xlabel("Features")
         ax.set_ylabel("Samples")
@@ -49,12 +57,12 @@ def heatmap_eval(
             ncols=2, figsize=(12, 6), gridspec_kw={"width_ratios": [0.5, 0.55]}
         )
 
-        sns.heatmap(generated_data, ax=axs[0], cbar=False, cmap=cmap)
+        sns.heatmap(generated_data_plot, ax=axs[0], cbar=False, cmap=cmap)
         axs[0].set_title("Generated Data")
         axs[0].set_xlabel("Features")
         axs[0].set_ylabel("Samples")
 
-        sns.heatmap(real_data, ax=axs[1], cbar=True, cmap=cmap)
+        sns.heatmap(real_data_plot, ax=axs[1], cbar=True, cmap=cmap)
         axs[1].set_title("Real Data")
         axs[1].set_xlabel("Features")
         axs[1].set_ylabel("Samples")

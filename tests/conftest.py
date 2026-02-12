@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 
 @pytest.fixture
@@ -81,3 +82,63 @@ def small_training_config():
         "Gaussian_head_num": 2,
         "random_seed": 42,
     }
+
+
+@pytest.fixture
+def sample_result(sample_data):
+    """Create a minimal SyngResult for downstream testing.
+
+    Uses sample_data as the generated DataFrame with small noise added,
+    and a synthetic loss DataFrame. Useful for tests that need a
+    pre-built SyngResult without running actual training.
+    """
+    from syng_bts import SyngResult
+
+    rng = np.random.RandomState(42)
+    gen = sample_data.copy()
+    gen = gen + rng.normal(0, 0.1, size=gen.shape)
+
+    loss = pd.DataFrame(
+        {
+            "kl": rng.rand(50) * 10,
+            "recons": rng.rand(50) * 5,
+        }
+    )
+
+    return SyngResult(
+        generated_data=gen,
+        loss=loss,
+        metadata={"model": "VAE1-10", "dataname": "test", "seed": 42},
+    )
+
+
+@pytest.fixture
+def sample_result_with_model(sample_data):
+    """Create a SyngResult with all optional fields populated."""
+    from syng_bts import SyngResult
+
+    rng = np.random.RandomState(123)
+    gen = sample_data.copy()
+    recon = sample_data.copy()
+
+    loss = pd.DataFrame(
+        {
+            "kl": rng.rand(50),
+            "recons": rng.rand(50),
+        }
+    )
+
+    model_state = {"weight": torch.randn(10, 5)}
+
+    return SyngResult(
+        generated_data=gen,
+        loss=loss,
+        reconstructed_data=recon,
+        model_state=model_state,
+        metadata={
+            "model": "VAE1-10",
+            "dataname": "test_full",
+            "seed": 123,
+            "epochs_trained": 100,
+        },
+    )

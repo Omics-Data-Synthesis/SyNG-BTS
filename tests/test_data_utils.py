@@ -298,3 +298,113 @@ class TestOutputPathEdgeCases:
 
         # Reset
         set_default_output_dir(None)
+
+
+# ---------------------------------------------------------------------------
+# resolve_data() — additional edge cases (merged from test_resolve_data.py)
+# ---------------------------------------------------------------------------
+class TestResolveDataEdgeCases:
+    """Additional resolve_data() tests for error messages and type handling."""
+
+    def test_case_insensitive_csv_extension(self):
+        """Test that .CSV extension is also stripped."""
+        from syng_bts import resolve_data
+
+        df = resolve_data("SKCMPositive_4.CSV")
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+    def test_unknown_name_raises_valueerror(self):
+        """Unknown dataset name raises ValueError with descriptive message."""
+        from syng_bts import resolve_data
+
+        with pytest.raises(ValueError, match="Unknown dataset name"):
+            resolve_data("totally_nonexistent_dataset")
+
+    def test_nonexistent_path_object_raises(self, temp_dir):
+        """Non-existent Path raises FileNotFoundError."""
+        from syng_bts import resolve_data
+
+        with pytest.raises(FileNotFoundError):
+            resolve_data(temp_dir / "no_such_file.csv")
+
+    def test_invalid_type_raises_typeerror(self):
+        """Invalid type raises TypeError."""
+        from syng_bts import resolve_data
+
+        with pytest.raises(TypeError, match="pd.DataFrame, str, or Path"):
+            resolve_data(12345)
+
+    def test_path_with_directory_separator(self, sample_csv_file):
+        """Paths with separators are treated as file paths."""
+        from syng_bts import resolve_data
+
+        df = resolve_data(str(sample_csv_file))
+        assert len(df) == 20
+
+
+# ---------------------------------------------------------------------------
+# derive_dataname()
+# ---------------------------------------------------------------------------
+class TestDeriveDataname:
+    """Test the derive_dataname() helper."""
+
+    def test_explicit_name_wins(self, sample_data):
+        """Explicit name parameter takes priority."""
+        from syng_bts import derive_dataname
+
+        result = derive_dataname(sample_data, name="override")
+        assert result == "override"
+
+    def test_from_file_path_string(self):
+        """Derive name from a string file path."""
+        from syng_bts import derive_dataname
+
+        result = derive_dataname("/some/path/MyDataset.csv")
+        assert result == "MyDataset"
+
+    def test_from_file_path_object(self):
+        """Derive name from a Path object."""
+        from syng_bts import derive_dataname
+
+        result = derive_dataname(Path("/some/path/MyDataset.csv"))
+        assert result == "MyDataset"
+
+    def test_from_bundled_name(self):
+        """Derive name from a plain bundled name string."""
+        from syng_bts import derive_dataname
+
+        result = derive_dataname("SKCMPositive_4")
+        assert result == "SKCMPositive_4"
+
+    def test_from_dataframe_with_attrs(self):
+        """Derive name from a DataFrame with .attrs['name']."""
+        from syng_bts import derive_dataname
+
+        df = pd.DataFrame({"a": [1, 2]})
+        df.attrs["name"] = "my_dataset"
+        result = derive_dataname(df)
+        assert result == "my_dataset"
+
+    def test_from_dataframe_without_attrs(self):
+        """DataFrame without attrs falls back to 'data'."""
+        from syng_bts import derive_dataname
+
+        df = pd.DataFrame({"a": [1, 2]})
+        result = derive_dataname(df)
+        assert result == "data"
+
+    def test_explicit_name_overrides_dataframe_attrs(self, sample_data):
+        """Explicit name overrides DataFrame attrs."""
+        from syng_bts import derive_dataname
+
+        sample_data.attrs["name"] = "from_attrs"
+        result = derive_dataname(sample_data, name="explicit")
+        assert result == "explicit"
+
+    def test_name_from_string_without_extension(self):
+        """Plain string without extension used as-is."""
+        from syng_bts import derive_dataname
+
+        result = derive_dataname("BRCASubtypeSel_train")
+        assert result == "BRCASubtypeSel_train"

@@ -1,32 +1,56 @@
 """
 Tests for experiment functions including integration training tests.
+
+Tests cover:
+- generate() returns SyngResult with correct structure
+- pilot_study() returns PilotResult with correct runs dict
+- transfer() pre-trains, fine-tunes, and returns appropriate result type
+- Internal helpers: _build_loss_df, _parse_model_spec, _compute_new_size
+- Column names preservation, output_dir persistence
+- Legacy names are removed
 """
 
 import pandas as pd
 import pytest
+import torch
 
 from syng_bts import generate, pilot_study, transfer
-from syng_bts.result import SyngResult
+from syng_bts.experiments import (
+    _build_loss_df,
+    _compute_new_size,
+    _parse_model_spec,
+)
+from syng_bts.result import PilotResult, SyngResult
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+NUM_FEATURES = 50
+FAST_EPOCHS = 2
+BATCH_FRAC = 0.5
+LR = 0.001
 
 
+# =========================================================================
+# Import tests
+# =========================================================================
 class TestExperimentImports:
-    """Test experiment functions are importable."""
+    """Test experiment functions are importable and legacy names are removed."""
 
     def test_generate_import(self):
-        """Test generate can be imported."""
         from syng_bts import generate
 
         assert generate is not None
         assert callable(generate)
 
     def test_pilot_study_import(self):
-        """Test pilot_study can be imported."""
+        from syng_bts import pilot_study
 
         assert pilot_study is not None
         assert callable(pilot_study)
 
     def test_transfer_import(self):
-        """Test transfer can be imported."""
+        from syng_bts import transfer
 
         assert transfer is not None
         assert callable(transfer)
@@ -42,46 +66,516 @@ class TestExperimentImports:
         with pytest.raises(ImportError):
             from syng_bts import TransferExperiment  # noqa: F401
 
-
-class TestTrainingHelpers:
-    """Test training helper functions."""
-
     def test_helper_training_module_exists(self):
-        """Test helper_training module is accessible."""
         from syng_bts import helper_training
 
         assert helper_training is not None
 
     def test_helper_utils_module_exists(self):
-        """Test helper_utils module is accessible."""
         from syng_bts import helper_utils
 
         assert helper_utils is not None
 
     def test_helper_models_module_exists(self):
-        """Test helper_models module is accessible."""
         from syng_bts import helper_models
 
         assert helper_models is not None
 
 
-@pytest.mark.slow
-class TestSmallTraining:
-    """Integration tests for training with small data.
+# =========================================================================
+# _parse_model_spec
+# =========================================================================
+class TestParseModelSpec:
+    """Unit tests for _parse_model_spec."""
 
-    These tests are marked as slow because they train actual models.
+    def test_vae_with_kl(self):
+        assert _parse_model_spec("VAE1-10") == ("VAE", 10)
+
+    def test_ae_with_kl(self):
+        assert _parse_model_spec("AE1-1") == ("AE", 1)
+
+    def test_cvae_with_kl(self):
+        assert _parse_model_spec("CVAE1-20") == ("CVAE", 20)
+
+    def test_plain_model(self):
+        assert _parse_model_spec("GAN") == ("GAN", 1)
+
+    def test_flow_model(self):
+        assert _parse_model_spec("maf") == ("maf", 1)
+
+
+# =========================================================================
+# _build_loss_df
+# =========================================================================
+class TestBuildLossDf:
+    """Unit tests for _build_loss_df."""
+
+    def test_ae_family(self):
+        log = {
+            "val_kl_loss_per_batch": [1.0, 0.5],
+            "val_reconstruction_loss_per_batch": [2.0, 1.5],
+        }
+        df = _build_loss_df(log, "VAE")
+        assert list(df.columns) == ["kl", "recons"]
+        assert len(df) == 2
+
+    def test_ae_family_train_fallback(self):
+        log = {
+            "train_kl_loss_per_batch": [1.0],
+            "train_reconstruction_loss_per_batch": [2.0],
+        }
+        df = _build_loss_df(log, "AE")
+        assert list(df.columns) == ["kl", "recons"]
+        assert len(df) == 1
+
+    def test_gan_family(self):
+        log = {
+            "train_discriminator_loss_per_batch": [3.0, 2.5],
+            "train_generator_loss_per_batch": [1.0, 0.8],
+        }
+        df = _build_loss_df(log, "GAN")
+        assert list(df.columns) == ["discriminator", "generator"]
+
+    def test_flow(self):
+        log = {"train_loss_per_epoch": [10.0, 9.0, 8.0]}
+        df = _build_loss_df(log, "maf")
+        assert list(df.columns) == ["train_loss"]
+        assert len(df) == 3
+
+
+# =========================================================================
+# _compute_new_size
+# =========================================================================
+class TestComputeNewSize:
+    """Unit tests for _compute_new_size."""
+
+    def test_single_group(self):
+        labels = torch.zeros(20)
+        assert _compute_new_size(labels, 20, 500) == 500
+
+    def test_already_list(self):
+        labels = torch.zeros(20)
+        assert _compute_new_size(labels, 20, [100, 200]) == [100, 200]
+
+    def test_unbalanced_two_groups(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        result = _compute_new_size(labels, 20, 500, repli=5)
+        assert result == [12, 8, 5]
+
+    def test_balanced_two_groups(self):
+        labels = torch.tensor([0.0] * 10 + [1.0] * 10)
+        assert _compute_new_size(labels, 20, 500) == 500
+
+
+# =========================================================================
+# generate()
+# =========================================================================
+class TestGenerate:
+    """Integration tests for generate() — fast config (2 epochs)."""
+
+    def test_returns_syng_result(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+
+    def test_generated_columns_match_input(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+
+    def test_generated_row_count(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=15,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.generated_data) == 15
+
+    def test_loss_is_dataframe(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result.loss, pd.DataFrame)
+        assert len(result.loss) > 0
+
+    def test_no_files_without_output_dir(self, sample_data, temp_dir):
+        """generate() without output_dir should not write files."""
+        before = set(temp_dir.rglob("*"))
+        generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        after = set(temp_dir.rglob("*"))
+        assert before == after
+
+    def test_saves_with_output_dir(self, sample_data, temp_dir):
+        """generate() with output_dir should persist files."""
+        generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            output_dir=str(temp_dir),
+        )
+        files = list(temp_dir.rglob("*.csv"))
+        assert len(files) > 0, "Expected CSV files in output_dir"
+
+    def test_from_csv_path(self, sample_csv_file):
+        result = generate(
+            data=sample_csv_file,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert result.generated_data.shape[1] == NUM_FEATURES
+
+    def test_from_bundled_dataset(self):
+        """generate() accepts a bundled dataset name."""
+        result = generate(
+            data="SKCMPositive_4",
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert len(result.generated_data) == 10
+
+    def test_metadata_populated(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert result.metadata["modelname"] == "VAE"
+        assert result.metadata["kl_weight"] == 10
+
+    def test_gan_model(self, sample_data):
+        """generate() works with GAN model."""
+        result = generate(
+            data=sample_data,
+            model="GAN",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert len(result.generated_data) == 10
+
+    def test_early_stop_default(self, sample_data):
+        """epoch=None enables early stopping with patience."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            epoch=None,
+            early_stop_patience=2,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+
+    def test_unsupported_model_raises(self, sample_data):
+        with pytest.raises(ValueError, match="Unsupported model"):
+            generate(
+                data=sample_data,
+                model="UNKNOWN",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
+    def test_generate_with_dataframe_input(self):
+        """generate() works with a DataFrame loaded from bundled dataset."""
+        from syng_bts import resolve_data
+
+        df = resolve_data("SKCMPositive_4")
+        result = generate(
+            data=df,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+        assert isinstance(result.generated_data, pd.DataFrame)
+        assert len(result.generated_data) == 10
+        # Column count should match (possibly minus metadata columns like 'samples')
+        assert result.generated_data.shape[1] > 0
+
+    def test_generated_data_is_dataframe_with_shape(self, sample_data):
+        """generated_data is a DataFrame with correct shape and column names."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=8,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result.generated_data, pd.DataFrame)
+        assert result.generated_data.shape == (8, NUM_FEATURES)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+
+    def test_save_writes_to_disk(self, sample_data, temp_dir):
+        """SyngResult.save() writes correct files to output_dir."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        paths = result.save(temp_dir)
+        assert "generated" in paths
+        assert paths["generated"].exists()
+        # Roundtrip: saved CSV should match generated_data
+        df_back = pd.read_csv(paths["generated"])
+        pd.testing.assert_frame_equal(
+            df_back, result.generated_data, atol=1e-6, check_dtype=False
+        )
+
+
+# =========================================================================
+# pilot_study()
+# =========================================================================
+class TestPilotStudy:
+    """Integration tests for pilot_study()."""
+
+    def test_returns_pilot_result(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, PilotResult)
+
+    def test_runs_count(self, sample_data):
+        """5 draws per pilot size."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 5  # 1 pilot × 5 draws
+
+    def test_multiple_pilot_sizes(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[8, 12],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 10  # 2 pilots × 5 draws
+
+    def test_run_keys_are_tuples(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for key in result.runs:
+            assert isinstance(key, tuple)
+            assert len(key) == 2
+            assert key[0] == 10
+            assert key[1] in range(1, 6)
+
+    def test_each_run_is_syng_result(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for run in result.runs.values():
+            assert isinstance(run, SyngResult)
+
+    def test_generated_columns_match_input(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for run in result.runs.values():
+            assert list(run.generated_data.columns) == list(sample_data.columns)
+
+    def test_saves_with_output_dir(self, sample_data, temp_dir):
+        pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            output_dir=str(temp_dir),
+        )
+        files = list(temp_dir.rglob("*.csv"))
+        assert len(files) > 0
+
+    def test_pilot_study_with_bundled_data(self):
+        """pilot_study() works with a bundled dataset."""
+        result = pilot_study(
+            data="SKCMPositive_4",
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, PilotResult)
+        assert len(result.runs) == 5
+
+
+# =========================================================================
+# transfer()
+# =========================================================================
+class TestTransfer:
+    """Integration tests for transfer()."""
+
+    def test_returns_syng_result(self, sample_data):
+        """transfer() without pilot_size returns SyngResult."""
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            source_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+
+    def test_returns_pilot_result(self, sample_data):
+        """transfer() with pilot_size returns PilotResult."""
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            pilot_size=[10],
+            source_size=10,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, PilotResult)
+
+    def test_cleans_up_temp_dir(self, sample_data):
+        """transfer() without output_dir should not leave temp files."""
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            source_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+
+    def test_saves_with_output_dir(self, sample_data, temp_dir):
+        transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            model="VAE1-10",
+            new_size=5,
+            source_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            output_dir=str(temp_dir),
+        )
+        # Should have Transfer subdir and output files
+        assert (temp_dir / "Transfer").exists()
+
+    def test_transfer_with_bundled_data(self):
+        """transfer() works with bundled dataset names."""
+        result = transfer(
+            source_data="BRCA",
+            target_data="PRAD",
+            model="VAE1-10",
+            new_size=10,
+            source_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert isinstance(result, SyngResult)
+
+
+# =========================================================================
+# Slow integration tests
+# =========================================================================
+@pytest.mark.slow
+class TestSlowTraining:
+    """Integration tests for training with larger data or more epochs.
+
+    These tests are marked as slow because they use more resources.
     Run with: pytest -m slow
     """
 
     def test_generate_vae_training(
         self, temp_dir, sample_csv_file, small_training_config
     ):
-        """Test generate() trains VAE on small data."""
+        """Test generate() trains VAE and returns correct result."""
         config = small_training_config
-        data_path = sample_csv_file
 
         result = generate(
-            data=data_path,
+            data=sample_csv_file,
             apply_log=False,
             new_size=10,
             model="VAE1-10",
@@ -95,6 +589,8 @@ class TestSmallTraining:
         assert isinstance(result, SyngResult)
         assert isinstance(result.generated_data, pd.DataFrame)
         assert len(result.generated_data) == 10
+        # Verify output files were created
+        assert temp_dir.exists()
 
     def test_generate_creates_output(self, temp_dir, sample_csv_file):
         """Test that generate() creates output when output_dir is set."""

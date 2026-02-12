@@ -29,7 +29,7 @@ Example usage:
 
 For more information, see:
 - Documentation: https://syng-bts.readthedocs.io/
-- GitHub: https://github.com/LXQin/SyNG-BTS
+- GitHub: https://github.com/Omics-Data-Synthesis/SyNG-BTS
 - Paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC11899567/
 """
 

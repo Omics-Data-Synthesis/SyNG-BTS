@@ -10,135 +10,165 @@ This page documents the main experiment functions in SyNG-BTS.
 Overview
 --------
 
-SyNG-BTS provides three main experiment functions:
+SyNG-BTS provides three main experiment functions. All accept data as a
+pandas DataFrame, a CSV file path, or the name of a bundled dataset, and
+return rich result objects (``SyngResult`` or ``PilotResult``).
 
-- :func:`~syng_bts.PilotExperiment` - Train models on pilot data and generate samples
-- :func:`~syng_bts.ApplyExperiment` - Apply trained models to case study datasets
-- :func:`~syng_bts.TransferExperiment` - Transfer learning between datasets
+- :func:`~syng_bts.generate` — Train a model and produce synthetic samples
+- :func:`~syng_bts.pilot_study` — Sweep over pilot sizes with replicated draws
+- :func:`~syng_bts.transfer` — Pre-train on source data, fine-tune on target data
+
+.. _generate:
+
+generate
+--------
+
+Train a generative model on a dataset and generate synthetic samples.
+This is the primary entry point for single model training.
+
+.. autofunction:: syng_bts.generate
+   :no-index:
+
+Examples
+~~~~~~~~
+
+.. code-block:: python
+
+   from syng_bts import generate
+
+   # Generate synthetic data using a bundled dataset
+   result = generate(
+       data="SKCMPositive_4",
+       model="VAE1-10",
+       new_size=500,
+       batch_frac=0.1,
+       learning_rate=0.0005,
+   )
+
+   # Access results
+   print(result.generated_data.shape)  # (500, n_features)
+   print(result.summary())
+
+   # Plot training loss
+   fig = result.plot_loss()
+
+   # Save to disk
+   result.save("./my_output/")
+
+.. code-block:: python
+
+   import pandas as pd
+   from syng_bts import generate
+
+   # Use your own DataFrame
+   my_data = pd.read_csv("my_dataset.csv")
+   result = generate(
+       data=my_data,
+       name="my_dataset",
+       model="WGANGP",
+       new_size=1000,
+       epoch=50,
+   )
 
 .. _pilot:
 
-PilotExperiment
----------------
+pilot_study
+-----------
 
-Run pilot experiments to train generative models and generate synthetic data.
+Run pilot experiments to evaluate models across multiple pilot sizes.
+For each pilot size, five random sub-samples are drawn and a model is
+trained on each.
 
-.. autofunction:: syng_bts.PilotExperiment
+.. autofunction:: syng_bts.pilot_study
    :no-index:
 
-Example
-~~~~~~~
+Examples
+~~~~~~~~
 
 .. code-block:: python
 
-   from syng_bts import PilotExperiment
+   from syng_bts import pilot_study
 
-   # Train VAE on bundled example data
-   PilotExperiment(
-       dataname="SKCMPositive_4",
-       pilot_size=[100],
+   # Evaluate VAE across different pilot sizes
+   pilot = pilot_study(
+       data="SKCMPositive_4",
+       pilot_size=[50, 100, 200],
        model="VAE1-10",
        batch_frac=0.1,
        learning_rate=0.0005,
-       early_stop_num=30,
    )
 
-   # Train with custom data and output location
-   PilotExperiment(
-       dataname="my_data",
-       pilot_size=[50, 100, 200],
-       model="CVAE1-20",
-       data_dir="./input_data/",
-       output_dir="./results/",
-       batch_frac=0.1,
-       learning_rate=0.0005,
-       epoch=100,
-   )
+   # Access individual run results
+   run = pilot.runs[(100, 1)]  # (pilot_size, draw_index)
+   print(run.generated_data.shape)
 
-.. _apply:
+   # Aggregate loss plot
+   fig = pilot.plot_loss(aggregate=True)
 
-ApplyExperiment
----------------
-
-Apply generative models to case study datasets and generate samples.
-
-.. autofunction:: syng_bts.ApplyExperiment
-   :no-index:
-
-Example
-~~~~~~~
+   # Save all results
+   pilot.save("./pilot_output/")
 
 .. code-block:: python
 
-   from syng_bts import ApplyExperiment
+   from syng_bts import pilot_study
 
-   # Apply WGANGP to generate 1000 new samples
-   ApplyExperiment(
-       dataname="BRCASubtypeSel_train",
-       new_size=[1000],
-       model="WGANGP",
-       data_dir="./case_study/",
-       output_dir="./results/",
-       apply_log=True,
-       batch_frac=0.1,
-       learning_rate=0.0005,
-       epoch=10,
-       early_stop_num=30,
-   )
-
-   # Using bundled BRCA subtype dataset
-   ApplyExperiment(
-       dataname="BRCASubtypeSel_train",
-       new_size=[500, 1000, 2000],
+   # Using custom data with CVAE
+   pilot = pilot_study(
+       data="BRCASubtypeSel_train",
+       pilot_size=[50, 100],
        model="CVAE1-20",
-       apply_log=True,
-       batch_frac=0.1,
-       learning_rate=0.0005,
-       epoch=10,
+       epoch=100,
+       output_dir="./results/",
    )
 
 .. _transfer:
 
-TransferExperiment
-------------------
+transfer
+--------
 
-Transfer learning from one dataset to another.
+Transfer learning: pre-train on a source dataset, then fine-tune and
+generate on a target dataset.
 
-.. autofunction:: syng_bts.TransferExperiment
+.. autofunction:: syng_bts.transfer
    :no-index:
 
-Example
-~~~~~~~
+Examples
+~~~~~~~~
 
 .. code-block:: python
 
-   from syng_bts import TransferExperiment
+   from syng_bts import transfer
 
    # Transfer from PRAD to BRCA using MAF
-   TransferExperiment(
-       fromname="PRAD",
-       toname="BRCA",
-       fromsize=551,
+   result = transfer(
+       source_data="PRAD",
+       target_data="BRCA",
+       source_size=551,
        new_size=500,
        model="maf",
        apply_log=True,
-       batch_frac=0.1,
-       learning_rate=0.0005,
        epoch=10,
    )
 
-   # Transfer with custom data directories
-   TransferExperiment(
-       fromname="source_dataset",
-       toname="target_dataset",
-       fromsize=200,
-       new_size=1000,
+   print(result.generated_data.shape)
+   result.save("./transfer_output/")
+
+.. code-block:: python
+
+   from syng_bts import transfer
+
+   # Transfer with pilot study on target
+   pilot = transfer(
+       source_data="PRAD",
+       target_data="BRCA",
+       pilot_size=[50, 100],
+       source_size=551,
        model="maf",
-       data_dir="./transfer_data/",
-       output_dir="./transfer_results/",
-       apply_log=True,
-       epoch=50,
+       epoch=10,
    )
+
+   # Returns PilotResult when pilot_size is set
+   print(pilot.summary())
 
 Choosing a Model
 ----------------

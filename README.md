@@ -1,7 +1,7 @@
 # SyNG-BTS: Synthesis of Next Generation Bulk Transcriptomic Sequencing
 
 <!-- [![PyPI version](https://badge.fury.io/py/syng-bts.svg)](https://badge.fury.io/py/syng-bts) -->
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 <!-- [![Documentation Status](https://readthedocs.org/projects/syng-bts/badge/?version=latest)](https://syng-bts.readthedocs.io/en/latest/?badge=latest) -->
 
@@ -16,11 +16,13 @@ These models are trained on a pilot dataset and can synthesize additional sample
 
 ## Features
 
-- **Multiple Generative Models**: Variational Auto-Encoder (VAE), Generative Adversarial Network (GAN), and flow-based models
-- **Flexible Experimentation**: Run pilot experiments, apply to case studies, or perform transfer learning
-- **Built-in Evaluation**: UMAP visualization and heatmap evaluation tools
-- **Bundled Datasets**: Example datasets included for immediate experimentation
-- **Easy Integration**: Simple API for data augmentation workflows
+- **Multiple Generative Models**: VAE, CVAE, GAN, WGANGP, and flow-based models (MAF)
+- **TODO** : Run pilot experiments, generate synthetic data, and perform transfer learning with a unified API
+- **DataFrame-First API**: Accept pandas DataFrames, CSV file paths, or bundled dataset names
+- **Rich Result Objects**: `SyngResult` / `PilotResult` with built-in plotting and export
+- **In-Memory Pipeline**: No disk I/O by default — results stay in memory until you choose to save
+- **Built-in Evaluation**: Heatmap and UMAP visualization functions
+- **Bundled Datasets**: Example TCGA datasets included for immediate experimentation
 
 ## Installation
 
@@ -36,7 +38,7 @@ pip install syng-bts
 ### From Source
 
 ```bash
-git clone https://github.com/LXQin/SyNG-BTS.git
+git clone https://github.com/Omics-Data-Synthesis/SyNG-BTS
 cd SyNG-BTS
 pip install -e .
 ```
@@ -55,108 +57,104 @@ pip install syng-bts[dev]
 
 ## Quick Start
 
-### Basic Usage
+### Generate Synthetic Data
 
 ```python
-from syng_bts import PilotExperiment, load_dataset
+from syng_bts import generate
 
-# Load example data
-data = load_dataset("SKCMPositive_4")
-print(f"Dataset shape: {data.shape}")
-
-# Run a pilot experiment with VAE
-PilotExperiment(
-  dataname="SKCMPositive_4",   # dataset name (without .csv)
-  pilot_size=[100],            # list of pilot sizes to draw from original data
-  model="VAE1-10",             # model name (autoencoder with kl-weight encoded)
-  batch_frac=0.1,              # batch fraction (proportion per batch)
-  learning_rate=0.0005,        # learning rate
-  epoch=None,                  # None => use early stopping; otherwise specify int
-  early_stop_num=30,           # stop if loss doesn't improve for this many epochs
-  off_aug=None,                # offline augmentation: 'AE_head', 'Gaussian_head', or None
-  AE_head_num=2,               # folds for AE_head augmentation (if used)
-  Gaussian_head_num=9,         # folds for Gaussian_head augmentation (if used)
-  pre_model=None               # path to pre-trained model for transfer learning (optional)
+# Train a VAE on bundled data and generate 500 synthetic samples
+result = generate(
+    data="SKCMPositive_4",   # bundled dataset name, CSV path, or DataFrame
+    model="VAE1-10",         # model specification (type + kl_weight)
+    new_size=500,            # number of synthetic samples
+    batch_frac=0.1,          # batch fraction
+    learning_rate=0.0005,    # learning rate
 )
+
+# Access results in memory
+print(result.generated_data.shape)   # (500, n_features)
+print(result.loss.columns.tolist())  # ['kl', 'recons']
+print(result.summary())
+
+# Plot training loss
+fig = result.plot_loss()
+
+# Optionally save to disk
+result.save("./my_output/")
 ```
 
-### Apply to Case Study
+### Run a Pilot Study
 
 ```python
-from syng_bts import ApplyExperiment
+from syng_bts import pilot_study
 
-# Apply model to generate new samples from a case study dataset
-ApplyExperiment(
-    dataname="BRCASubtypeSel",     # dataset name (without .csv)
-    apply_log=True,                # apply log2 transform before training
-    new_size=[1000],               # number of generated samples (int or list)
-    model="WGANGP",                # model name (e.g., VAE1-10, WGANGP, maf)
-    batch_frac=0.1,                # batch fraction (proportion per batch)
-    learning_rate=0.0005,          # learning rate
-    epoch=10,                      # number of epochs (None => use early stopping)
-    early_stop_num=30,             # stop if loss doesn't improve for this many epochs
-    off_aug=None,                  # offline augmentation: 'AE_head', 'Gaussian_head', or None
-    AE_head_num=2,                 # folds for AE_head augmentation (if used)
-    Gaussian_head_num=9,           # folds for Gaussian_head augmentation (if used)
-    pre_model=None,                # path to pre-trained model for transfer learning
-    save_model=None,               # path to save the trained model (optional)
+# Sweep over multiple pilot sizes (5 random draws each)
+pilot = pilot_study(
+    data="SKCMPositive_4",
+    pilot_size=[50, 100],
+    model="VAE1-10",
+    batch_frac=0.1,
+    learning_rate=0.0005,
 )
+
+# Access individual runs
+run = pilot.runs[(50, 1)]  # (pilot_size, draw_index)
+print(run.generated_data.head())
+
+# Aggregate loss plot
+fig = pilot.plot_loss(aggregate=True)
 ```
 
 ### Transfer Learning
 
 ```python
-from syng_bts import TransferExperiment
+from syng_bts import transfer
 
-# Transfer learning from one dataset to another
-TransferExperiment(
-  pilot_size=None,          # list of pilot sizes; if None, uses ApplyExperiment for fine-tuning
-  fromname="PRAD",          # pre-training dataset name (without .csv)
-  toname="BRCA",            # target dataset name (without .csv)
-  fromsize=551,             # number of samples to generate for pre-training
-  new_size=500,             # sample size for generated samples during fine-tuning/ApplyExperiment
-  apply_log=True,           # apply log2 transform before training
-  model="maf",              # model name (e.g., VAE1-10, WGANGP, maf)
-  epoch=10,                 # number of epochs (None => use early stopping)
-  batch_frac=0.1,           # batch fraction (proportion per batch)
-  learning_rate=0.0005,     # learning rate
-  off_aug=None,             # offline augmentation: 'AE_head', 'Gaussian_head', or None
+# Pre-train on PRAD, fine-tune and generate on BRCA
+result = transfer(
+    source_data="PRAD",
+    target_data="BRCA",
+    source_size=551,
+    new_size=500,
+    model="maf",
+    apply_log=True,
+    epoch=10,
+)
+
+print(result.generated_data.shape)
+result.save("./transfer_output/")
+```
+
+### Use DataFrame Input
+
+```python
+import pandas as pd
+from syng_bts import generate
+
+my_data = pd.read_csv("my_dataset.csv")
+result = generate(
+    data=my_data,
+    name="my_dataset",     # used in output filenames
+    model="WGANGP",
+    new_size=1000,
+    epoch=50,
 )
 ```
 
 ### Evaluate Generated Data
 
 ```python
-import pandas as pd
-import numpy as np
-from syng_bts import load_dataset, UMAP_eval, heatmap_eval
+from syng_bts import generate, resolve_data, heatmap_eval, UMAP_eval
 
-# Load real data
-real_data = load_dataset("SKCMPositive_4")
-real_data_numeric = real_data.select_dtypes(include=[np.number])
+result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
+real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
 
-# Simulate generated data (in practice, this comes from a trained model)
-generated_data = real_data_numeric.copy() + np.random.normal(0, 0.1, real_data_numeric.shape)
+# Built-in heatmap on result object
+fig = result.plot_heatmap()
 
-# Example 1: Heatmap visualization comparing generated vs real data
-heatmap_eval(
-    dat_real=real_data_numeric,        # Original data (pd.DataFrame)
-    dat_generated=generated_data,      # Generated data (pd.DataFrame, optional)
-    save=False                         # If True, returns figure instead of displaying
-)
-
-# Example 2: UMAP projection with optional group labels
-groups_real = pd.Series(['Group A', 'Group B'] * (len(real_data_numeric) // 2))
-groups_generated = pd.Series(['Group A', 'Group B'] * (len(generated_data) // 2))
-
-UMAP_eval(
-    dat_generated=generated_data,      # Generated data (pd.DataFrame or None)
-    dat_real=real_data_numeric,        # Original data (pd.DataFrame)
-    groups_generated=groups_generated, # Group labels for generated (pd.Series or None)
-    groups_real=groups_real,           # Group labels for real (pd.Series or None)
-    random_state=42,                   # Random seed for reproducibility
-    legend_pos="best"                  # Legend position ("best", "upper right", etc.)
-)
+# Standalone evaluation comparing real vs generated
+fig_heatmap = heatmap_eval(real_data=real_data.head(50), generated_data=result.generated_data.head(50))
+fig_umap = UMAP_eval(real_data=real_data, generated_data=result.generated_data, random_seed=42)
 ```
 
 ### List Available Datasets
@@ -164,9 +162,7 @@ UMAP_eval(
 ```python
 from syng_bts import list_bundled_datasets
 
-# Show all bundled datasets
-datasets = list_bundled_datasets()
-print(datasets)
+print(list_bundled_datasets())
 # ['SKCMPositive_4', 'BRCA', 'PRAD', 'BRCASubtypeSel', ...]
 ```
 
@@ -182,16 +178,16 @@ print(datasets)
 
 ## Dependencies
 
-SyNG-BTS requires Python 3.8+ and the following packages:
+SyNG-BTS requires Python 3.10+ and the following packages:
 
-- torch (>=1.3.1)
-- pandas (>=1.0.5)
-- numpy (>=1.19.1)
-- scipy (>=1.4.1)
-- matplotlib (>=2.2.3)
-- seaborn (>=0.9.0)
-- tqdm (>=4.26.0)
-- tensorboardX (>=2.5.0)
+- torch (>=2.0.0)
+- pandas (>=1.5.0)
+- numpy (>=1.23.0)
+- scipy (>=1.9.0)
+- matplotlib (>=3.6.0)
+- seaborn (>=0.12.0)
+- tqdm (>=4.64.0)
+- tensorboardX (>=2.6.0)
 - umap-learn (>=0.5.6)
 
 ## Documentation
@@ -207,7 +203,7 @@ Full documentation is available at [syng-bts.readthedocs.io](https://syng-bts.re
 ### Quick Setup
 
 ```bash
-git clone https://github.com/LXQin/SyNG-BTS.git
+git clone https://github.com/Omics-Data-Synthesis/SyNG-BTS
 cd SyNG-BTS
 make init-dev  # Install package + dev dependencies
 ```

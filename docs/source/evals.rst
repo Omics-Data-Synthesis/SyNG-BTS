@@ -10,18 +10,60 @@ This page documents the evaluation and visualization functions in SyNG-BTS.
 Overview
 --------
 
-SyNG-BTS provides functions to evaluate and visualize generated data:
+SyNG-BTS provides multiple ways to evaluate generated data:
 
-- :func:`~syng_bts.heatmap_eval` - Compare real and generated data with heatmaps
-- :func:`~syng_bts.UMAP_eval` - Visualize data distribution with UMAP
-- :func:`~syng_bts.evaluation` - Comprehensive evaluation metrics
+**On result objects** (recommended):
+
+- ``result.plot_loss()`` — training loss curve with dual x-axes
+- ``result.plot_heatmap()`` — heatmap of generated or reconstructed data
+
+**Standalone functions** for comparing real vs. generated data:
+
+- :func:`~syng_bts.heatmap_eval` — side-by-side heatmap comparison
+- :func:`~syng_bts.UMAP_eval` — 2D UMAP scatter plot comparison
+- :func:`~syng_bts.evaluation` — combined heatmap + UMAP pipeline
+
+Result Object Plotting
+----------------------
+
+The simplest way to visualize results is through the
+:class:`~syng_bts.SyngResult` methods:
+
+.. code-block:: python
+
+   from syng_bts import generate
+
+   result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=500)
+
+   # Training loss with running average and dual x-axes
+   fig_loss = result.plot_loss(averaging_iterations=100)
+
+   # Heatmap of generated data
+   fig_heat = result.plot_heatmap(which="generated")
+
+   # Heatmap of reconstructed data (AE/VAE/CVAE only)
+   fig_recon = result.plot_heatmap(which="reconstructed")
+
+For pilot studies, plot all runs at once:
+
+.. code-block:: python
+
+   from syng_bts import pilot_study
+
+   pilot = pilot_study(data="SKCMPositive_4", pilot_size=[50, 100], model="VAE1-10")
+
+   # One figure per run
+   figs = pilot.plot_loss()
+
+   # All runs overlaid on a single figure
+   fig = pilot.plot_loss(aggregate=True)
 
 .. _heatmap:
 
 Heatmap Evaluation
 ------------------
 
-Generate heatmap comparisons between real and synthetic data.
+Compare real and generated data with heatmaps.
 
 .. autofunction:: syng_bts.heatmap_eval
    :no-index:
@@ -33,40 +75,24 @@ Examples
 
 .. code-block:: python
 
-   import pandas as pd
    import numpy as np
-   from syng_bts import load_dataset, heatmap_eval
+   from syng_bts import resolve_data, heatmap_eval
 
-   # Load real data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
-
-   # Visualize real data only
-   heatmap_eval(
-       dat_real=real_data_numeric.head(50),  # Use subset for better visualization
-       save=False
-   )
+   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
+   fig = heatmap_eval(real_data=real_data.head(50))
 
 **Example 2: Compare real and generated data**
 
 .. code-block:: python
 
-   import pandas as pd
-   import numpy as np
-   from syng_bts import load_dataset, heatmap_eval
+   from syng_bts import generate, resolve_data, heatmap_eval
 
-   # Load real data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
+   result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
+   real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
 
-   # Simulate generated data (in practice, this comes from a trained model)
-   generated_data = real_data_numeric.copy() + np.random.normal(0, 0.1, real_data_numeric.shape)
-
-   # Compare with heatmap
-   heatmap_eval(
-       dat_real=real_data_numeric.head(50),
-       dat_generated=generated_data.head(50),
-       save=False
+   fig = heatmap_eval(
+       real_data=real_data.head(50),
+       generated_data=result.generated_data.head(50),
    )
 
 .. _umap:
@@ -82,75 +108,39 @@ Visualize real and generated data distributions using UMAP.
 Examples
 ~~~~~~~~
 
-**Example 1: Visualize only real data**
+**Example 1: Compare real and generated data**
 
 .. code-block:: python
 
-   import pandas as pd
    import numpy as np
-   from syng_bts import load_dataset, UMAP_eval
+   from syng_bts import generate, resolve_data, UMAP_eval
 
-   # Load real data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
+   result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=500)
+   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
 
-   # UMAP projection of real data only
-   UMAP_eval(
-       dat_generated=None,
-       dat_real=real_data_numeric,
-       random_state=42
+   fig = UMAP_eval(
+       real_data=real_data,
+       generated_data=result.generated_data,
+       random_seed=42,
    )
 
-**Example 2: Compare real and generated data**
+**Example 2: UMAP with group labels**
 
 .. code-block:: python
 
    import pandas as pd
    import numpy as np
-   from syng_bts import load_dataset, UMAP_eval
+   from syng_bts import resolve_data, UMAP_eval
 
-   # Load real data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
+   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
 
-   # Simulate generated data (in practice, this comes from a trained model)
-   generated_data = real_data_numeric.copy() + np.random.normal(0, 0.1, real_data_numeric.shape)
+   groups_real = pd.Series(["Group A", "Group B"] * (len(real_data) // 2))
 
-   # UMAP projection comparing both datasets
-   UMAP_eval(
-       dat_generated=generated_data,
-       dat_real=real_data_numeric,
-       random_state=42,
-       legend_pos="best"
-   )
-
-**Example 3: UMAP with group labels**
-
-.. code-block:: python
-
-   import pandas as pd
-   import numpy as np
-   from syng_bts import load_dataset, UMAP_eval
-
-   # Load real data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
-
-   # Simulate generated data
-   generated_data = real_data_numeric.copy() + np.random.normal(0, 0.1, real_data_numeric.shape)
-
-   # Create group labels for both datasets
-   groups_real = pd.Series(['Group A', 'Group B'] * (len(real_data_numeric) // 2))
-   groups_generated = pd.Series(['Group A', 'Group B'] * (len(generated_data) // 2))
-
-   # UMAP projection with group information
-   UMAP_eval(
-       dat_generated=generated_data,
-       dat_real=real_data_numeric,
-       groups_generated=groups_generated,
+   fig = UMAP_eval(
+       real_data=real_data,
        groups_real=groups_real,
-       random_state=42,
-       legend_pos="best"
+       random_seed=42,
+       legend_pos="best",
    )
 
 .. _evaluation:
@@ -158,7 +148,7 @@ Examples
 Comprehensive Evaluation
 ------------------------
 
-Run comprehensive evaluation metrics on generated data.
+Run combined heatmap + UMAP evaluation in a single call.
 
 .. autofunction:: syng_bts.evaluation
    :no-index:
@@ -166,62 +156,58 @@ Run comprehensive evaluation metrics on generated data.
 Example
 ~~~~~~~
 
-The ``evaluation`` function is designed for advanced use cases where you have 
-pre-generated data files from experiments. It loads data from files and performs 
-comprehensive evaluation.
+The ``evaluation`` function accepts DataFrames, file paths, or bundled dataset
+names (via ``resolve_data``) and returns a dict of figures:
 
 .. code-block:: python
 
-   from syng_bts import evaluation
+   from syng_bts import generate, evaluation
 
-   # Run evaluation with default bundled data
-   # Note: This requires specific data files to be present
-   evaluation(
-       generated_input="my_generated_data.csv",
-       real_input="my_real_data.csv",
-       data_dir="./my_data/"
+   result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
+
+   figs = evaluation(
+       real_data="SKCMPositive_4",
+       generated_data=result.generated_data,
+       n_samples=200,
    )
-
-For most use cases, use ``heatmap_eval`` and ``UMAP_eval`` directly with dataframes 
-as shown in the examples above.
+   figs["heatmap"].savefig("heatmap.png")
+   figs["umap"].savefig("umap.png")
 
 Evaluation Workflow
 -------------------
 
-A typical evaluation workflow after running experiments:
+A typical end-to-end workflow:
 
 .. code-block:: python
 
-   import pandas as pd
-   import numpy as np
-   from syng_bts import (
-       PilotExperiment,
-       load_dataset,
-       heatmap_eval,
-       UMAP_eval,
+   from syng_bts import generate, resolve_data, heatmap_eval, UMAP_eval
+
+   # Step 1: Generate synthetic data
+   result = generate(
+       data="SKCMPositive_4",
+       model="VAE1-10",
+       new_size=500,
+       batch_frac=0.1,
+       learning_rate=0.0005,
    )
 
-   # Step 1: Load the original data
-   real_data = load_dataset("SKCMPositive_4")
-   real_data_numeric = real_data.select_dtypes(include=[np.number])
+   # Step 2: Load original data for comparison
+   real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
 
-   # Step 2: Load or simulate generated data
-   # In practice, load from the experiment output
-   # For demonstration, we simulate it here
-   generated_data = real_data_numeric.copy() + np.random.normal(0, 0.1, real_data_numeric.shape)
+   # Step 3: Visualize training loss
+   fig_loss = result.plot_loss()
 
-   # Step 3: Visualize with UMAP
-   UMAP_eval(
-       dat_generated=generated_data,
-       dat_real=real_data_numeric,
-       random_state=42
+   # Step 4: Compare with UMAP
+   fig_umap = UMAP_eval(
+       real_data=real_data,
+       generated_data=result.generated_data,
+       random_seed=42,
    )
 
-   # Step 4: Compare with heatmap
-   heatmap_eval(
-       dat_real=real_data_numeric.head(50),
-       dat_generated=generated_data.head(50),
-       save=False
+   # Step 5: Compare with heatmap
+   fig_heatmap = heatmap_eval(
+       real_data=real_data.head(50),
+       generated_data=result.generated_data.head(50),
    )
 
 See :doc:`methods` for more information on running experiments.

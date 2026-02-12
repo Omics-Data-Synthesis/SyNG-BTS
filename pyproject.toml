@@ -82,10 +82,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/LXQin/SyNG-BTS"
+Homepage = "https://github.com/Omics-Data-Synthesis/SyNG-BTS"
 Documentation = "https://syng-bts.readthedocs.io/"
-Repository = "https://github.com/LXQin/SyNG-BTS.git"
-Issues = "https://github.com/LXQin/SyNG-BTS/issues"
+Repository = "https://github.com/Omics-Data-Synthesis/SyNG-BTS"
+Issues = "https://github.com/Omics-Data-Synthesis/SyNG-BTS"
 
 [tool.setuptools]
 packages = ["syng_bts", "syng_bts.data"]

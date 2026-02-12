@@ -119,6 +119,47 @@ def _compute_new_size(
     return new_size
 
 
+def _resolve_early_stopping_config(
+    epoch: int | None,
+    early_stop_patience: int | None,
+    default_max_epochs: int = 1000,
+    default_patience: int = 30,
+) -> tuple[int, bool, int]:
+    """Resolve epoch count and early stopping configuration.
+
+    Parameters
+    ----------
+    epoch : int or None
+        User-specified fixed epoch count.
+    early_stop_patience : int or None
+        User-specified early stopping patience.
+    default_max_epochs : int
+        Default maximum epochs when early stopping is enabled.
+    default_patience : int
+        Default patience when early stopping is enabled but patience not specified.
+
+    Returns
+    -------
+    tuple[int, bool, int]
+        ``(num_epochs, early_stop, early_stop_num)`` where:
+        - ``num_epochs`` is the maximum epoch count to run
+        - ``early_stop`` is whether early stopping is enabled
+        - ``early_stop_num`` is the patience value to use
+    """
+    if epoch is not None and early_stop_patience is not None:
+        # Both provided: run up to `epoch` epochs with early stopping
+        return epoch, True, early_stop_patience
+    elif epoch is not None:
+        # Only epoch: run exactly that many epochs, no early stopping
+        return epoch, False, default_patience
+    elif early_stop_patience is not None:
+        # Only patience: early stop with default max epochs
+        return default_max_epochs, True, early_stop_patience
+    else:
+        # Neither: default early stopping with default patience
+        return default_max_epochs, True, default_patience
+
+
 # =========================================================================
 # New public API
 # =========================================================================
@@ -175,11 +216,22 @@ def generate(
         Optimiser learning rate.
     epoch : int or None
         Fixed epoch count, or ``None`` for early stopping.
+
+        The interaction between *epoch* and *early_stop_patience*:
+
+        ========================  ======================  ==================================
+        ``epoch``                 ``early_stop_patience``  Behaviour
+        ========================  ======================  ==================================
+        ``None``                  ``None``                 Early stopping ON, patience=30, max 1000 epochs
+        ``None``                  ``30``                   Early stopping ON, patience=30, max 1000 epochs
+        ``500``                   ``None``                 Early stopping OFF, run exactly 500 epochs
+        ``500``                   ``30``                   Early stopping ON, patience=30, max 500 epochs
+        ========================  ======================  ==================================
     val_ratio : float
         Validation split ratio (AE family only).
     early_stop_patience : int or None
-        Stop if loss does not improve for this many epochs.  ``None``
-        disables early stopping (requires *epoch* to be set).
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.
     off_aug : str or None
         Offline augmentation: ``"AE_head"``, ``"Gaussian_head"``, or
         ``None``.
@@ -234,19 +286,12 @@ def generate(
     modelname, kl_weight = _parse_model_spec(model)
 
     # --- 5. Epoch / early-stopping logic ---------------------------------
-    if epoch is not None:
-        num_epochs = epoch
-        early_stop = False
-    elif early_stop_patience is not None:
-        num_epochs = 1000
-        early_stop = True
-    else:
-        # Default: early stopping with patience 30
-        early_stop_patience = 30
-        num_epochs = 1000
-        early_stop = True
-
-    early_stop_num = early_stop_patience if early_stop_patience is not None else 30
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
 
     # --- 6. Prepare raw data & labels ------------------------------------
     rawdata = oridata
@@ -375,6 +420,8 @@ def generate(
         "seed": random_seed,
         "kl_weight": kl_weight,
         "input_shape": (n_samples, len(colnames)),
+        "early_stop": early_stop,
+        "early_stop_patience": early_stop_num,
     }
 
     result = SyngResult(
@@ -400,7 +447,7 @@ def pilot_study(
     batch_frac: float = 0.1,
     learning_rate: float = 0.0005,
     epoch: int | None = None,
-    early_stop_patience: int = 30,
+    early_stop_patience: int | None = None,
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
@@ -432,8 +479,20 @@ def pilot_study(
         Optimiser learning rate.
     epoch : int or None
         Fixed epoch count, or ``None`` for early stopping.
-    early_stop_patience : int
-        Early-stopping patience (ignored when *epoch* is set).
+
+        The interaction between *epoch* and *early_stop_patience*:
+
+        ========================  ======================  ==================================
+        ``epoch``                 ``early_stop_patience``  Behaviour
+        ========================  ======================  ==================================
+        ``None``                  ``None``                 Early stopping ON, patience=30, max 1000 epochs
+        ``None``                  ``30``                   Early stopping ON, patience=30, max 1000 epochs
+        ``500``                   ``None``                 Early stopping OFF, run exactly 500 epochs
+        ``500``                   ``30``                   Early stopping ON, patience=30, max 500 epochs
+        ========================  ======================  ==================================
+    early_stop_patience : int or None
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.
     off_aug : str or None
         Offline augmentation mode.
     AE_head_num : int
@@ -470,12 +529,12 @@ def pilot_study(
     modelname, kl_weight = _parse_model_spec(model)
 
     # Epoch / early-stopping
-    if epoch is not None:
-        num_epochs = epoch
-        early_stop = False
-    else:
-        num_epochs = 1000
-        early_stop = True
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
 
     # new_size = 5× pilot (per group if unbalanced)
     repli = 5
@@ -549,7 +608,7 @@ def pilot_study(
                     learning_rate=learning_rate,
                     new_size=effective_new_size,
                     early_stop=early_stop,
-                    early_stop_num=early_stop_patience,
+                    early_stop_num=early_stop_num,
                     pre_model=pre_model,
                     save_model=None,
                 )
@@ -564,7 +623,7 @@ def pilot_study(
                     learning_rate=learning_rate,
                     kl_weight=kl_weight,
                     early_stop=early_stop,
-                    early_stop_num=early_stop_patience,
+                    early_stop_num=early_stop_num,
                     pre_model=pre_model,
                     save_model=None,
                     loss_fn="MSE",
@@ -589,7 +648,7 @@ def pilot_study(
                     new_size=effective_new_size,
                     num_hidden=226,
                     early_stop=early_stop,
-                    early_stop_num=early_stop_patience,
+                    early_stop_num=early_stop_num,
                     pre_model=pre_model,
                     save_model=None,
                 )
@@ -617,6 +676,8 @@ def pilot_study(
                 "pilot_size": n_pilot,
                 "draw": rand_pilot,
                 "input_shape": (n_samples, len(colnames)),
+                "early_stop": early_stop,
+                "early_stop_patience": early_stop_num,
             }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
@@ -659,7 +720,7 @@ def transfer(
     batch_frac: float = 0.1,
     learning_rate: float = 0.0005,
     epoch: int | None = None,
-    early_stop_patience: int = 30,
+    early_stop_patience: int | None = None,
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
@@ -700,9 +761,11 @@ def transfer(
     learning_rate : float
         Learning rate.
     epoch : int or None
-        Fixed epoch count or ``None`` for early stopping.
-    early_stop_patience : int
-        Early-stopping patience.
+        Fixed epoch count or ``None`` for early stopping.  See
+        :func:`generate` for the full interaction table.
+    early_stop_patience : int or None
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.
     off_aug : str or None
         Offline augmentation mode.
     AE_head_num : int

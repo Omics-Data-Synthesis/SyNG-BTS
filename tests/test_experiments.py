@@ -19,6 +19,7 @@ from syng_bts.experiments import (
     _build_loss_df,
     _compute_new_size,
     _parse_model_spec,
+    _resolve_early_stopping_config,
 )
 from syng_bts.result import PilotResult, SyngResult
 
@@ -325,6 +326,89 @@ class TestResultSchema:
             assert isinstance(run, SyngResult)
             assert list(run.loss.columns) == ["kl", "recons"]
             assert list(run.generated_data.columns) == list(sample_data.columns)
+
+
+# =========================================================================
+# Early stopping logic (Phase 14)
+# =========================================================================
+class TestResolveEarlyStoppingConfig:
+    """Unit tests for _resolve_early_stopping_config() helper function.
+
+    Directly tests the four-way interaction between epoch and
+    early_stop_patience parameters without training models.
+    """
+
+    def test_both_epoch_and_patience(self):
+        """epoch + early_stop_patience → early_stop=True, num_epochs=epoch."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=500,
+            early_stop_patience=2,
+            default_max_epochs=1000,
+            default_patience=30,
+        )
+        assert num_epochs == 500
+        assert early_stop is True
+        assert early_stop_num == 2
+
+    def test_epoch_only(self):
+        """epoch only → early_stop=False, num_epochs=epoch."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=500,
+            early_stop_patience=None,
+            default_max_epochs=1000,
+            default_patience=30,
+        )
+        assert num_epochs == 500
+        assert early_stop is False
+        assert early_stop_num == 30  # Default patience still returned
+
+    def test_patience_only(self):
+        """early_stop_patience only → early_stop=True, num_epochs=default_max."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=None,
+            early_stop_patience=2,
+            default_max_epochs=1000,
+            default_patience=30,
+        )
+        assert num_epochs == 1000
+        assert early_stop is True
+        assert early_stop_num == 2
+
+    def test_neither_epoch_nor_patience(self):
+        """Neither → early_stop=True, num_epochs=default_max, patience=default."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=None,
+            early_stop_patience=None,
+            default_max_epochs=1000,
+            default_patience=30,
+        )
+        assert num_epochs == 1000
+        assert early_stop is True
+        assert early_stop_num == 30
+
+    def test_custom_defaults(self):
+        """Helper respects custom default values."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=None,
+            early_stop_patience=None,
+            default_max_epochs=500,
+            default_patience=15,
+        )
+        assert num_epochs == 500
+        assert early_stop is True
+        assert early_stop_num == 15
+
+    def test_epoch_zero_with_patience(self):
+        """epoch=0 is valued (edge case: 0 epochs)."""
+        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+            epoch=0,
+            early_stop_patience=5,
+            default_max_epochs=1000,
+            default_patience=30,
+        )
+        assert num_epochs == 0
+        assert early_stop is True
+        assert early_stop_num == 5
 
 
 # =========================================================================

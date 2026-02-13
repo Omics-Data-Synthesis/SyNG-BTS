@@ -115,9 +115,9 @@ Train a generative model and produce synthetic samples:
    print(result.loss.columns.tolist())  # ['kl', 'recons']
    print(result.summary())
 
-   # Plot training loss
-   fig = result.plot_loss()
-   fig.savefig("loss.png")
+   # Plot training loss (one figure per loss column)
+   figs = result.plot_loss()
+   figs["kl"].savefig("kl_loss.png")
 
    # Optionally save to disk
    result.save("./my_output/")

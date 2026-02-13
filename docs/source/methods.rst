@@ -49,8 +49,8 @@ Examples
    print(result.generated_data.shape)  # (500, n_features)
    print(result.summary())
 
-   # Plot training loss
-   fig = result.plot_loss()
+   # Plot training loss (one figure per loss column)
+   figs = result.plot_loss()
 
    # Save to disk
    result.save("./my_output/")
@@ -102,8 +102,8 @@ Examples
    run = pilot.runs[(100, 1)]  # (pilot_size, draw_index)
    print(run.generated_data.shape)
 
-   # Aggregate loss plot
-   fig = pilot.plot_loss(aggregate=True)
+   # Aggregate loss plots (one figure per loss column)
+   figs = pilot.plot_loss(aggregate=True)
 
    # Save all results
    pilot.save("./pilot_output/")

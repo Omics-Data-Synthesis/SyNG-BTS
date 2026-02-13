@@ -76,8 +76,8 @@ print(result.generated_data.shape)   # (500, n_features)
 print(result.loss.columns.tolist())  # ['kl', 'recons']
 print(result.summary())
 
-# Plot training loss
-fig = result.plot_loss()
+# Plot training loss (one figure per loss column)
+figs = result.plot_loss()  # dict[str, Figure]
 
 # Optionally save to disk
 result.save("./my_output/")
@@ -101,8 +101,8 @@ pilot = pilot_study(
 run = pilot.runs[(50, 1)]  # (pilot_size, draw_index)
 print(run.generated_data.head())
 
-# Aggregate loss plot
-fig = pilot.plot_loss(aggregate=True)
+# Aggregate loss plot (one figure per loss column, all runs overlaid)
+figs = pilot.plot_loss(aggregate=True)  # dict[str, Figure]
 ```
 
 ### Transfer Learning

@@ -114,13 +114,13 @@ Plotting
    # v3.0
    result = generate(data="SKCMPositive_4", ...)
 
-   fig = result.plot_loss()         # training loss curve
+  figs = result.plot_loss()        # dict[str, Figure] per loss column
    fig = result.plot_heatmap()      # heatmap of generated data
 
    # For pilot studies
    pilot = pilot_study(data="SKCMPositive_4", pilot_size=[50, 100], ...)
-   figs = pilot.plot_loss()                   # dict of figures
-   fig  = pilot.plot_loss(aggregate=True)     # all runs overlaid
+  figs = pilot.plot_loss()                   # dict[(pilot, draw)] -> dict[str, Figure]
+  figs = pilot.plot_loss(aggregate=True)     # dict[str, Figure], all runs overlaid
 
 Evaluation Functions
 --------------------

@@ -43,7 +43,7 @@ class SyngResult:
     >>> result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
     >>> result.generated_data.head()
     >>> result.save("./my_output/")
-    >>> fig = result.plot_loss()
+    >>> figs = result.plot_loss()  # dict[str, Figure]
     """
 
     generated_data: pd.DataFrame
@@ -118,85 +118,114 @@ class SyngResult:
 
         return paths
 
-    def plot_loss(self, averaging_iterations: int = 100) -> plt.Figure:
-        """Plot the training loss curve(s).
+    def plot_loss(
+        self,
+        running_average_window: int = 50,
+        x_axis: str = "iterations",
+    ) -> dict[str, plt.Figure]:
+        """Plot the training loss curve(s), one figure per loss column.
 
-        When ``metadata["num_epochs"]`` is available, a secondary x-axis
-        showing epoch numbers is drawn below the primary iteration axis.
-        The y-axis is automatically scaled to avoid the initial loss spike
-        dominating the view.
+        Each returned figure shows the raw loss series (``alpha=0.4``)
+        and a running-average overlay.
 
         Parameters
         ----------
-        averaging_iterations : int
-            Window size for the running-average overlay.
+        running_average_window : int
+            Window size for the running-average overlay. Must be > 0.
+        x_axis : str
+            ``"iterations"`` (default) numbers data points 0…N-1.
+            ``"epochs"`` maps the x-axis to epoch space using
+            ``metadata["num_epochs"]`` (must be present and > 0).
 
         Returns
         -------
-        matplotlib.figure.Figure
-            The figure object (not shown; caller decides when to display).
-        """
-        fig, ax1 = plt.subplots()
+        dict[str, matplotlib.figure.Figure]
+            ``{loss_column_name: figure}`` for every column in ``self.loss``.
 
-        all_values: list[np.ndarray] = []
-        for col in self.loss.columns:
-            values = self.loss[col].to_numpy()
-            all_values.append(values)
-            ax1.plot(
-                range(len(values)),
-                values,
-                alpha=0.4,
-                label=f"Minibatch Loss ({col})",
+        Raises
+        ------
+        ValueError
+            If *running_average_window* ≤ 0, if *x_axis* is not
+            ``"iterations"`` or ``"epochs"``, if ``x_axis="epochs"``
+            but ``metadata["num_epochs"]`` is missing or ≤ 0, or if
+            the window is larger than a loss series.
+        """
+        if running_average_window <= 0:
+            raise ValueError(
+                f"running_average_window must be > 0, got {running_average_window}"
             )
-            if len(values) > averaging_iterations:
-                kernel = np.ones(averaging_iterations) / averaging_iterations
-                smoothed = np.convolve(values, kernel, mode="valid")
-                ax1.plot(
-                    range(averaging_iterations - 1, len(values)),
-                    smoothed,
-                    label=f"Running Average ({col})",
+        if x_axis not in ("iterations", "epochs"):
+            raise ValueError(f"x_axis must be 'iterations' or 'epochs', got {x_axis!r}")
+        num_epochs: float | None = None
+        if x_axis == "epochs":
+            raw_num_epochs = self.metadata.get("num_epochs")
+            if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
+                raise ValueError(
+                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    f"got {raw_num_epochs!r}"
+                )
+            try:
+                num_epochs = float(raw_num_epochs)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    f"got {raw_num_epochs!r}"
+                ) from exc
+            if num_epochs <= 0:
+                raise ValueError(
+                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    f"got {raw_num_epochs!r}"
                 )
 
-        ax1.set_xlabel("Iterations")
-        ax1.set_ylabel("Loss")
+        figures: dict[str, plt.Figure] = {}
+        for col in self.loss.columns:
+            values = self.loss[col].to_numpy()
 
-        # --- Y-axis scaling: ignore the initial spike ---
-        if all_values:
-            max_len = max(len(v) for v in all_values)
-            if max_len < 1001:
-                skip = max_len // 2
+            if running_average_window > len(values):
+                raise ValueError(
+                    f"running_average_window ({running_average_window}) is larger "
+                    f"than the '{col}' series length ({len(values)})"
+                )
+
+            fig, ax = plt.subplots()
+
+            # --- Build x-coordinates ---
+            if x_axis == "epochs":
+                assert num_epochs is not None
+                x = np.linspace(0, num_epochs, len(values))
+                ax.set_xlabel("Epochs")
             else:
-                skip = 1000
-            later_max = max(
-                (float(np.max(v[skip:])) for v in all_values if len(v) > skip),
-                default=0.0,
+                x = np.arange(len(values))
+                ax.set_xlabel("Iterations")
+
+            ax.plot(x, values, alpha=0.4, label=f"{col} (raw)")
+
+            # --- Running average ---
+            kernel = np.ones(running_average_window) / running_average_window
+            smoothed = np.convolve(values, kernel, mode="valid")
+            offset = running_average_window - 1
+            ax.plot(
+                x[offset:],
+                smoothed,
+                label=f"{col} (avg, w={running_average_window})",
             )
-            if later_max > 0:
-                ax1.set_ylim([0, later_max * 1.5])
 
-        ax1.legend()
+            ax.set_ylabel("Loss")
+            ax.set_title(f"{col} loss")
 
-        # --- Dual x-axis: epochs on a secondary bottom axis ---
-        num_epochs = self.metadata.get("num_epochs")
-        if num_epochs and all_values:
-            series_len = max(len(v) for v in all_values)
-            iter_per_epoch = series_len // num_epochs if num_epochs > 0 else 0
-            if iter_per_epoch > 0:
-                ax2 = ax1.twiny()
-                epoch_labels = list(range(num_epochs + 1))
-                epoch_positions = [e * iter_per_epoch for e in epoch_labels]
+            # --- Y-axis scaling: ignore the initial spike ---
+            n = len(values)
+            skip = n // 2 if n < 1001 else 1000
+            if n > skip:
+                later_max = float(np.max(values[skip:]))
+                if later_max > 0:
+                    ax.set_ylim([0, later_max * 1.5])
 
-                ax2.set_xticks(epoch_positions[::10])
-                ax2.set_xticklabels(epoch_labels[::10])
+            ax.legend()
+            fig.tight_layout()
+            figures[col] = fig
 
-                ax2.xaxis.set_ticks_position("bottom")
-                ax2.xaxis.set_label_position("bottom")
-                ax2.spines["bottom"].set_position(("outward", 45))
-                ax2.set_xlabel("Epochs")
-                ax2.set_xlim(ax1.get_xlim())
-
-        fig.tight_layout()
-        return fig
+        return figures
 
     def plot_heatmap(self, which: str = "generated") -> plt.Figure:
         """Render a seaborn heatmap of generated or reconstructed data.
@@ -349,50 +378,98 @@ class PilotResult:
     def plot_loss(
         self,
         aggregate: bool = False,
-        averaging_iterations: int = 100,
-    ) -> dict[tuple[int, int], plt.Figure] | plt.Figure:
+        running_average_window: int = 50,
+        x_axis: str = "iterations",
+    ) -> dict[tuple[int, int], dict[str, plt.Figure]] | dict[str, plt.Figure]:
         """Plot loss curves for every run.
 
         Parameters
         ----------
         aggregate : bool
-            When ``True``, overlay all runs on a single figure colour-coded
-            by ``(pilot_size, draw)``. When ``False`` (default), return one
-            figure per run.
-        averaging_iterations : int
-            Window size for the running-average overlay (only used in
-            per-run mode).
+            When ``True``, produce one figure per loss column with all
+            runs overlaid, colour-coded by ``(pilot_size, draw)``.
+            When ``False`` (default), return per-run dicts of per-column
+            figures.
+        running_average_window : int
+            Window size for the running-average overlay (per-run mode
+            only). Must be > 0.
+        x_axis : str
+            ``"iterations"`` or ``"epochs"``. In per-run mode this is
+            forwarded to each ``SyngResult.plot_loss()`` call. In
+            aggregate mode it controls the x-axis for each run overlay.
 
         Returns
         -------
-        dict[tuple[int, int], Figure] or Figure
-            Per-run dict when ``aggregate=False``; single figure when
-            ``aggregate=True``.
+        dict[tuple[int, int], dict[str, Figure]] or dict[str, Figure]
+            Per-run nested dict when ``aggregate=False``;
+            ``{column: Figure}`` when ``aggregate=True``.
         """
         if not aggregate:
             return {
-                key: result.plot_loss(averaging_iterations=averaging_iterations)
+                key: result.plot_loss(
+                    running_average_window=running_average_window,
+                    x_axis=x_axis,
+                )
                 for key, result in sorted(self.runs.items())
             }
 
-        # --- Aggregate mode: all runs on one figure ---
-        fig, ax = plt.subplots()
-        cmap = plt.colormaps["tab10"]
-        for idx, ((ps, draw), result) in enumerate(sorted(self.runs.items())):
-            colour = cmap(idx % 10)
+        # --- Aggregate mode: one figure per loss column ---
+        # Collect all column names present across runs.
+        all_columns: list[str] = []
+        seen: set[str] = set()
+        for result in self.runs.values():
             for col in result.loss.columns:
+                if col not in seen:
+                    all_columns.append(col)
+                    seen.add(col)
+
+        figures: dict[str, plt.Figure] = {}
+        cmap = plt.colormaps["tab10"]
+        for col in all_columns:
+            fig, ax = plt.subplots()
+            colour_idx = 0
+            for (ps, draw), result in sorted(self.runs.items()):
+                if col not in result.loss.columns:
+                    continue
                 values = result.loss[col].to_numpy()
+                if x_axis == "epochs":
+                    raw_num_epochs = result.metadata.get("num_epochs")
+                    if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
+                        raise ValueError(
+                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
+                        )
+                    try:
+                        num_epochs = float(raw_num_epochs)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
+                        ) from exc
+                    if num_epochs <= 0:
+                        raise ValueError(
+                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
+                        )
+                    x = np.linspace(0, num_epochs, len(values))
+                else:
+                    x = np.arange(len(values))
+                colour = cmap(colour_idx % 10)
+                colour_idx += 1
                 ax.plot(
-                    values,
+                    x,
                     alpha=0.5,
                     color=colour,
-                    label=f"pilot={ps} draw={draw} ({col})",
+                    label=f"pilot={ps} draw={draw}",
                 )
-        ax.set_xlabel("Iterations")
-        ax.set_ylabel("Loss")
-        ax.legend(fontsize="x-small")
-        fig.tight_layout()
-        return fig
+            ax.set_xlabel("Epochs" if x_axis == "epochs" else "Iterations")
+            ax.set_ylabel("Loss")
+            ax.set_title(f"{col} loss (aggregate)")
+            ax.legend(fontsize="x-small")
+            fig.tight_layout()
+            figures[col] = fig
+
+        return figures
 
     def summary(self) -> str:
         """Return an aggregate summary of all pilot runs.

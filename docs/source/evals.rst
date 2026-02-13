@@ -14,7 +14,7 @@ SyNG-BTS provides multiple ways to evaluate generated data:
 
 **On result objects** (recommended):
 
-- ``result.plot_loss()`` — training loss curve with dual x-axes
+- ``result.plot_loss()`` — dict of per-column training loss figures
 - ``result.plot_heatmap()`` — heatmap of generated or reconstructed data
 
 **Standalone functions** for comparing real vs. generated data:
@@ -35,8 +35,8 @@ The simplest way to visualize results is through the
 
    result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=500)
 
-   # Training loss with running average and dual x-axes
-   fig_loss = result.plot_loss(averaging_iterations=100)
+   # Training loss (one figure per loss column)
+   figs = result.plot_loss(running_average_window=50)
 
    # Heatmap of generated data
    fig_heat = result.plot_heatmap(which="generated")
@@ -52,11 +52,11 @@ For pilot studies, plot all runs at once:
 
    pilot = pilot_study(data="SKCMPositive_4", pilot_size=[50, 100], model="VAE1-10")
 
-   # One figure per run
+   # Per-run dicts of per-column figures
    figs = pilot.plot_loss()
 
-   # All runs overlaid on a single figure
-   fig = pilot.plot_loss(aggregate=True)
+   # All runs overlaid, one figure per loss column
+   figs = pilot.plot_loss(aggregate=True)
 
 .. _heatmap:
 
@@ -194,8 +194,8 @@ A typical end-to-end workflow:
    # Step 2: Load original data for comparison
    real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
 
-   # Step 3: Visualize training loss
-   fig_loss = result.plot_loss()
+   # Step 3: Visualize training loss (one figure per loss column)
+   figs_loss = result.plot_loss()
 
    # Step 4: Compare with UMAP
    fig_umap = UMAP_eval(

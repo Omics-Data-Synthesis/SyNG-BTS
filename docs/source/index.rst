@@ -46,7 +46,7 @@ Generate synthetic data:
 
    result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
    print(result.generated_data.shape)
-   result.plot_loss()
+   figs = result.plot_loss()
 
 Run a pilot study:
 

@@ -121,19 +121,36 @@ class TestSyngResult:
         assert "Reconstructed" in s
         assert "seed" in s.lower() or "Seed" in s
 
-    def test_plot_loss(self, sample_result):
-        """Test plot_loss returns a matplotlib Figure."""
+    def test_plot_loss_separate_figures(self, sample_result):
+        """Test plot_loss returns a dict of figures, one per loss column."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = sample_result.plot_loss()
+        assert isinstance(figs, dict)
+        # sample_result has loss columns "kl" and "recons"
+        assert set(figs.keys()) == set(sample_result.loss.columns)
+        for name, fig in figs.items():
+            assert isinstance(fig, plt.Figure), f"Expected Figure for {name}"
+            plt.close(fig)
+
+    def test_plot_loss_x_axis_iterations(self, sample_result):
+        """Test plot_loss with x_axis='iterations' uses Iterations label."""
         import matplotlib
 
         matplotlib.use("Agg")  # non-interactive backend
         import matplotlib.pyplot as plt
 
-        fig = sample_result.plot_loss()
-        assert isinstance(fig, plt.Figure)
-        plt.close(fig)
+        figs = sample_result.plot_loss(x_axis="iterations")
+        for fig in figs.values():
+            ax = fig.get_axes()[0]
+            assert ax.get_xlabel() == "Iterations"
+            plt.close(fig)
 
-    def test_plot_loss_dual_axis(self, sample_generated):
-        """Test plot_loss renders a dual x-axis when num_epochs is in metadata."""
+    def test_plot_loss_x_axis_epochs(self, sample_generated):
+        """Test plot_loss with x_axis='epochs' maps x to epoch space."""
         import matplotlib
 
         matplotlib.use("Agg")
@@ -147,35 +164,54 @@ class TestSyngResult:
             loss=loss,
             metadata={"model": "VAE1-10", "num_epochs": 10},
         )
-        fig = result.plot_loss()
-        assert isinstance(fig, plt.Figure)
-        # Should have two axes: the primary and the twinned epoch axis
-        axes = fig.get_axes()
-        assert len(axes) == 2
-        # The second axis should have "Epochs" as xlabel
-        assert axes[1].get_xlabel() == "Epochs"
-        plt.close(fig)
+        figs = result.plot_loss(x_axis="epochs")
+        assert set(figs.keys()) == {"kl", "recons"}
+        for fig in figs.values():
+            ax = fig.get_axes()[0]
+            assert ax.get_xlabel() == "Epochs"
+            plt.close(fig)
 
-    def test_plot_loss_single_axis_fallback(self, sample_generated):
-        """Test plot_loss falls back to single axis when num_epochs is absent."""
-        import matplotlib
+    def test_plot_loss_invalid_x_axis(self, sample_result):
+        """Test plot_loss raises ValueError for unsupported x_axis."""
+        with pytest.raises(ValueError, match="x_axis must be"):
+            sample_result.plot_loss(x_axis="batches")
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+    def test_plot_loss_missing_num_epochs_for_epochs_axis(self, sample_result):
+        """Test plot_loss raises ValueError when x_axis='epochs' but num_epochs missing."""
+        with pytest.raises(ValueError, match="num_epochs"):
+            sample_result.plot_loss(x_axis="epochs")
 
+    def test_plot_loss_non_numeric_num_epochs_for_epochs_axis(self, sample_generated):
+        """Test plot_loss raises ValueError when num_epochs is non-numeric."""
         from syng_bts import SyngResult
 
-        loss = pd.DataFrame({"loss": np.random.rand(200)})
+        loss = pd.DataFrame({"loss": np.random.rand(20)})
         result = SyngResult(
             generated_data=sample_generated,
             loss=loss,
-            metadata={"model": "AE"},
+            metadata={"num_epochs": "ten"},
         )
-        fig = result.plot_loss()
-        axes = fig.get_axes()
-        # Only the primary axis
-        assert len(axes) == 1
-        plt.close(fig)
+        with pytest.raises(ValueError, match="num_epochs"):
+            result.plot_loss(x_axis="epochs")
+
+    def test_plot_loss_invalid_running_average_window(self, sample_result):
+        """Test plot_loss raises ValueError when running_average_window <= 0."""
+        with pytest.raises(ValueError, match="running_average_window must be > 0"):
+            sample_result.plot_loss(running_average_window=0)
+        with pytest.raises(ValueError, match="running_average_window must be > 0"):
+            sample_result.plot_loss(running_average_window=-5)
+
+    def test_plot_loss_window_larger_than_series(self, sample_generated):
+        """Test plot_loss raises ValueError when window exceeds series length."""
+        from syng_bts import SyngResult
+
+        short_loss = pd.DataFrame({"loss": [1.0, 0.9, 0.8]})
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=short_loss,
+        )
+        with pytest.raises(ValueError, match="larger than"):
+            result.plot_loss(running_average_window=100)
 
     def test_plot_loss_ylim_scaling(self, sample_generated):
         """Test plot_loss applies y-axis scaling to ignore the initial spike."""
@@ -194,31 +230,14 @@ class TestSyngResult:
             loss=loss,
             metadata={"model": "AE"},
         )
-        fig = result.plot_loss()
+        figs = result.plot_loss(running_average_window=10)
+        fig = figs["loss"]
         ax = fig.get_axes()[0]
         ylim = ax.get_ylim()
         # The upper ylim should be much less than the spike (1000)
         assert ylim[1] < 100, (
             f"y-axis upper limit {ylim[1]} too high; spike not ignored"
         )
-        plt.close(fig)
-
-    def test_plot_loss_short_series(self, sample_generated):
-        """Test plot_loss with fewer data points than averaging window."""
-        from syng_bts import SyngResult
-
-        short_loss = pd.DataFrame({"loss": [1.0, 0.9, 0.8]})
-        result = SyngResult(
-            generated_data=sample_generated,
-            loss=short_loss,
-        )
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig = result.plot_loss(averaging_iterations=100)
-        assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
     def test_plot_heatmap_generated(self, sample_result):
@@ -356,6 +375,7 @@ class TestPilotResult:
                         "dataname": "test",
                         "pilot_size": ps,
                         "draw": draw,
+                        "num_epochs": 10,
                     },
                 )
         return PilotResult(
@@ -400,8 +420,8 @@ class TestPilotResult:
         assert "pilot10" in gen_path.name
         assert "draw1" in gen_path.name
 
-    def test_plot_loss(self, pilot_result):
-        """Test plot_loss returns a dict of figures."""
+    def test_plot_loss_separate(self, pilot_result):
+        """Test plot_loss returns nested dict of per-column figures per run."""
         import matplotlib
 
         matplotlib.use("Agg")
@@ -409,20 +429,40 @@ class TestPilotResult:
 
         figs = pilot_result.plot_loss()
         assert isinstance(figs, dict)
-        assert len(figs) == 4
-        for fig in figs.values():
-            assert isinstance(fig, plt.Figure)
-            plt.close(fig)
+        assert len(figs) == 4  # 2 pilot sizes × 2 draws
+        for key, col_figs in figs.items():
+            assert isinstance(col_figs, dict), f"Expected dict for run {key}"
+            # Each run should have per-column figures
+            for col, fig in col_figs.items():
+                assert isinstance(fig, plt.Figure), f"Expected Figure for {key}/{col}"
+                plt.close(fig)
 
-    def test_plot_loss_aggregate(self, pilot_result):
-        """Test plot_loss(aggregate=True) returns a single Figure."""
+    def test_plot_loss_aggregate_per_column(self, pilot_result):
+        """Test plot_loss(aggregate=True) returns one figure per loss column."""
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        fig = pilot_result.plot_loss(aggregate=True)
-        assert isinstance(fig, plt.Figure)
-        # Should have at least one axis
-        assert len(fig.get_axes()) >= 1
-        plt.close(fig)
+        figs = pilot_result.plot_loss(aggregate=True)
+        assert isinstance(figs, dict)
+        # loss columns are "kl" and "recons"
+        assert set(figs.keys()) == {"kl", "recons"}
+        for _col, fig in figs.items():
+            assert isinstance(fig, plt.Figure)
+            # Should have at least one axis
+            assert len(fig.get_axes()) >= 1
+            plt.close(fig)
+
+    def test_plot_loss_aggregate_x_axis_epochs(self, pilot_result):
+        """Test aggregate plot_loss supports x_axis='epochs'."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = pilot_result.plot_loss(aggregate=True, x_axis="epochs")
+        for fig in figs.values():
+            ax = fig.get_axes()[0]
+            assert ax.get_xlabel() == "Epochs"
+            plt.close(fig)

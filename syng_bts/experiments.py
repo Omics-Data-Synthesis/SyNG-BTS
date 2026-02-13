@@ -17,6 +17,7 @@ import pandas as pd
 import torch
 
 from .data_utils import derive_dataname, resolve_data
+from .helper_train import _resolve_verbose
 from .helper_training import (
     training_AEs,
     training_flows,
@@ -188,6 +189,7 @@ def generate(
     cap: bool = False,
     random_seed: int = 123,
     output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
 ) -> SyngResult:
     """Train a deep generative model and generate synthetic data.
 
@@ -255,6 +257,14 @@ def generate(
         Random seed for reproducibility.
     output_dir : str, Path, or None
         If set, automatically save results to this directory.
+    verbose : int or str
+        Verbosity level for training output.
+
+        - ``0`` or ``"silent"`` — no output during training.
+        - ``1`` or ``"minimal"`` (default) — print only a final
+          summary line and early-stopping messages.
+        - ``2`` or ``"detailed"`` — print per-epoch progress
+          (epoch number, loss values, elapsed time, learning rate).
 
     Returns
     -------
@@ -262,6 +272,9 @@ def generate(
         Rich result object containing generated data, loss log,
         reconstructed data (AE/VAE/CVAE), model state, and metadata.
     """
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
+
     # --- 1. Resolve data -------------------------------------------------
     df = resolve_data(data)
     dataname = derive_dataname(data, name)
@@ -324,6 +337,7 @@ def generate(
             kl_weight=1,
             loss_fn="MSE",
             replace=True,
+            verbose=verbose_level,
         )
         rawdata = feed_data
         rawlabels = feed_labels
@@ -345,6 +359,7 @@ def generate(
             early_stop_num=early_stop_num,
             pre_model=pre_model,
             save_model=save_model,
+            verbose=verbose_level,
         )
     elif "AE" in modelname:
         train_out = training_AEs(
@@ -367,6 +382,7 @@ def generate(
             use_scheduler=use_scheduler,
             step_size=step_size,
             gamma=gamma,
+            verbose=verbose_level,
         )
     elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
         train_out = training_flows(
@@ -384,6 +400,7 @@ def generate(
             early_stop_num=early_stop_num,
             pre_model=pre_model,
             save_model=save_model,
+            verbose=verbose_level,
         )
     else:
         raise ValueError(f"Unsupported model: {model!r}")
@@ -454,6 +471,7 @@ def pilot_study(
     pre_model: str | None = None,
     random_seed: int = 123,
     output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
 ) -> PilotResult:
     """Sweep over pilot sizes with replicated random draws.
 
@@ -505,12 +523,17 @@ def pilot_study(
         Base random seed for reproducibility.
     output_dir : str, Path, or None
         If set, automatically save results to this directory.
+    verbose : int or str
+        Verbosity level — see :func:`generate` for details.
 
     Returns
     -------
     PilotResult
         Wrapper containing one ``SyngResult`` per (pilot_size, draw).
     """
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
+
     # --- 1. Resolve data -------------------------------------------------
     df = resolve_data(data)
     dataname = derive_dataname(data, name)
@@ -590,6 +613,7 @@ def pilot_study(
                     kl_weight=1,
                     loss_fn="MSE",
                     replace=True,
+                    verbose=verbose_level,
                 )
                 rawdata = feed_data
                 rawlabels = feed_labels
@@ -611,6 +635,7 @@ def pilot_study(
                     early_stop_num=early_stop_num,
                     pre_model=pre_model,
                     save_model=None,
+                    verbose=verbose_level,
                 )
             elif "AE" in modelname:
                 train_out = training_AEs(
@@ -628,6 +653,7 @@ def pilot_study(
                     save_model=None,
                     loss_fn="MSE",
                     new_size=effective_new_size,
+                    verbose=verbose_level,
                 )
             elif modelname in (
                 "maf",
@@ -651,6 +677,7 @@ def pilot_study(
                     early_stop_num=early_stop_num,
                     pre_model=pre_model,
                     save_model=None,
+                    verbose=verbose_level,
                 )
             else:
                 raise ValueError(f"Unsupported model: {model!r}")
@@ -726,6 +753,7 @@ def transfer(
     Gaussian_head_num: int = 9,
     random_seed: int = 123,
     output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
 ) -> SyngResult | PilotResult:
     """Train on source data, then fine-tune and generate on target data.
 
@@ -776,6 +804,8 @@ def transfer(
         Random seed.
     output_dir : str, Path, or None
         If set, save results here.
+    verbose : int or str
+        Verbosity level — see :func:`generate` for details.
 
     Returns
     -------
@@ -820,6 +850,7 @@ def transfer(
         save_model=save_model_path,
         random_seed=random_seed,
         output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
+        verbose=verbose,
     )
 
     # --- Phase 2: fine-tune on target ------------------------------------
@@ -839,6 +870,7 @@ def transfer(
             pre_model=save_model_path,
             random_seed=random_seed,
             output_dir=output_dir,
+            verbose=verbose,
         )
     else:
         result = generate(
@@ -857,6 +889,7 @@ def transfer(
             pre_model=save_model_path,
             random_seed=random_seed,
             output_dir=output_dir,
+            verbose=verbose,
         )
 
     # Cleanup temp dir if we created one

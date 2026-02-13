@@ -186,7 +186,6 @@ SyNG-BTS requires Python 3.10+ and the following packages:
 - scipy (>=1.9.0)
 - matplotlib (>=3.6.0)
 - seaborn (>=0.12.0)
-- tqdm (>=4.64.0)
 - tensorboardX (>=2.6.0)
 - umap-learn (>=0.5.6)
 

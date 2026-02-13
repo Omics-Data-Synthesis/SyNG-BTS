@@ -38,7 +38,9 @@ def heatmap_eval(
     Figure
         The matplotlib Figure containing the heatmap(s).
     """
-    # Select only numeric columns to avoid seaborn conversion errors
+    # Select only numeric columns.
+    # Non-numeric columns (e.g. groups) can be present but are ignored for the heatmap.
+    # TODO Remove this once we update the data loading to only return numeric data for evaluation.
     real_data_plot = real_data.select_dtypes(include=["number"])
     generated_data_plot = (
         generated_data.select_dtypes(include=["number"])

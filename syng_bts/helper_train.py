@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import copy
 import math
 import time
+from enum import IntEnum
 
 import numpy as np
 import scipy as sp
@@ -8,6 +11,98 @@ import scipy.linalg
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# ---------------------------------------------------------------------------
+# Verbosity helpers
+# ---------------------------------------------------------------------------
+
+
+class VerbosityLevel(IntEnum):
+    """Verbosity levels for training output.
+
+    Attributes
+    ----------
+    SILENT : int
+        No output during training (value: 0).
+    MINIMAL : int
+        Print only completion summary (value: 1).
+    DETAILED : int
+        Print per-epoch progress (value: 2).
+    """
+
+    SILENT = 0
+    MINIMAL = 1
+    DETAILED = 2
+
+
+_VERBOSE_MAP: dict[str, VerbosityLevel] = {
+    "silent": VerbosityLevel.SILENT,
+    "minimal": VerbosityLevel.MINIMAL,
+    "detailed": VerbosityLevel.DETAILED,
+}
+
+
+def _resolve_verbose(verbose: int | str) -> VerbosityLevel:
+    """Normalise a verbose argument to VerbosityLevel enum.
+
+    Accepts ``0``, ``1``, ``2`` or the strings ``"silent"``,
+    ``"minimal"``, ``"detailed"``.
+
+    Returns
+    -------
+    VerbosityLevel
+        The normalised verbosity level.
+    """
+    if isinstance(verbose, str):
+        key = verbose.lower()
+        if key not in _VERBOSE_MAP:
+            raise ValueError(
+                f"verbose must be 0, 1, 2 or one of {list(_VERBOSE_MAP)}, "
+                f"got {verbose!r}"
+            )
+        return _VERBOSE_MAP[key]
+    if verbose not in (0, 1, 2):
+        raise ValueError(f"verbose must be 0, 1, or 2, got {verbose!r}")
+    return VerbosityLevel(verbose)
+
+
+def _print_training_state(
+    epoch: int,
+    num_epochs: int,
+    loss_dict: dict[str, float],
+    elapsed_time: float | None = None,
+    learning_rate: float | None = None,
+    early_stop_info: str | None = None,
+) -> None:
+    """Print epoch-level training state for ``verbose=2`` output.
+
+    Parameters
+    ----------
+    epoch : int
+        Current epoch number (0-indexed).
+    num_epochs : int
+        Total number of epochs.
+    loss_dict : dict[str, float]
+        Loss values (e.g. ``{"train_loss": 0.45, "val_loss": 0.50}``).
+    elapsed_time : float or None
+        Elapsed time in seconds, optional.
+    learning_rate : float or None
+        Current learning rate, optional.
+    early_stop_info : str or None
+        String with early stopping information, optional.
+    """
+    loss_str = ", ".join(f"{k}: {v:.4f}" for k, v in loss_dict.items())
+    msg = f"Epoch {epoch + 1:03d}/{num_epochs:03d}: {loss_str}"
+
+    if learning_rate is not None:
+        msg += f" | LR: {learning_rate:.6f}"
+    if elapsed_time is not None:
+        msg += f" | Time: {elapsed_time / 60:.2f}min"
+    if early_stop_info is not None:
+        msg += f" | {early_stop_info}"
+
+    print(msg)
+
 
 # %%
 
@@ -45,6 +140,7 @@ def train_AE(
     logging_interval=100,
     skip_epoch_stats=False,
     save_model=None,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -106,21 +202,12 @@ def train_AE(
             # LOGGING
             log_dict["val_loss_per_batch"].append(val_pixelwise.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %04d/%04d | Loss: %.4f"
-                % (epoch + 1, num_epochs, batch_idx, len(train_loader), val_loss)
-            )
-
         if not skip_epoch_stats:
             model.eval()
 
             with torch.set_grad_enabled(False):  # save memory during inference
                 train_loss = compute_epoch_loss_autoencoder(
                     model, train_loader, loss_fn
-                )
-                print(
-                    "***Epoch: %03d/%03d | Loss: %.3f"
-                    % (epoch + 1, num_epochs, train_loss)
                 )
                 log_dict["train_combined_loss_per_epoch"].append(train_loss.item())
 
@@ -132,19 +219,26 @@ def train_AE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={"train_loss": train_loss, "val_loss": val_loss},
+                elapsed_time=time.time() - start_time,
+            )
+
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
-            print(
-                "Training for early stopping stops at epoch "
-                + str(best_epoch)
-                + " with best loss "
-                + str(best_loss)
-            )
-            print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+            if verbose >= VerbosityLevel.MINIMAL:
+                print(
+                    f"Early stopping at epoch {best_epoch + 1} "
+                    f"(best val_loss: {best_loss:.4f})"
+                )
             break
 
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
     if save_model is not None:
         torch.save(best_model.state_dict(), save_model)
 
@@ -169,6 +263,7 @@ def train_VAE(
     kl_weight=1,
     save_model=None,
     scheduler=None,
+    verbose=1,
 ):
 
     log_dict = {
@@ -198,7 +293,6 @@ def train_VAE(
         current_lr = optimizer.param_groups[0][
             "lr"
         ]  # Check Learning Rate (with scheduler)
-        print(f"\n Epoch {epoch + 1}/{num_epochs} - Learning Rate: {current_lr:.6f}")
 
         epoch_train_loss = []
         epoch_val_loss = []
@@ -262,11 +356,6 @@ def train_VAE(
             log_dict["val_reconstruction_loss_per_batch"].append(val_pixelwise.item())
             log_dict["val_kl_loss_per_batch"].append(kl_div_val.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %04d/%04d | Loss: %.4f"
-                % (epoch + 1, num_epochs, batch_idx, len(train_loader), val_loss)
-            )
-
         if scheduler is not None:
             scheduler.step()
 
@@ -276,10 +365,6 @@ def train_VAE(
             with torch.set_grad_enabled(False):  # save memory during inference
                 train_loss = compute_epoch_loss_autoencoder(
                     model, train_loader, loss_fn
-                )
-                print(
-                    "***Epoch: %03d/%03d | Loss: %.3f"
-                    % (epoch + 1, num_epochs, train_loss)
                 )
                 log_dict["train_combined_loss_per_epoch"].append(train_loss.item())
 
@@ -291,19 +376,27 @@ def train_VAE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={"kl": kl_div.item(), "recons": pixelwise.item()},
+                elapsed_time=time.time() - start_time,
+                learning_rate=current_lr,
+            )
+
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
-            print(
-                "Training for early stopping stops at epoch "
-                + str(best_epoch)
-                + " with best loss "
-                + str(best_loss)
-            )
-            print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+            if verbose >= VerbosityLevel.MINIMAL:
+                print(
+                    f"Early stopping at epoch {best_epoch + 1} "
+                    f"(best val_loss: {best_loss:.4f})"
+                )
             break
 
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
     if save_model is not None:
         torch.save(best_model.state_dict(), save_model)
 
@@ -328,6 +421,7 @@ def train_CVAE(
     kl_weight=1,
     save_model=None,
     scheduler=None,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -360,7 +454,6 @@ def train_CVAE(
         current_lr = optimizer.param_groups[0][
             "lr"
         ]  # Check Learning Rate (with scheduler)
-        print(f"\n Epoch {epoch + 1}/{num_epochs} - Learning Rate: {current_lr:.6f}")
 
         epoch_train_loss = []
         epoch_val_loss = []
@@ -428,11 +521,6 @@ def train_CVAE(
             log_dict["val_reconstruction_loss_per_batch"].append(val_pixelwise.item())
             log_dict["val_kl_loss_per_batch"].append(kl_div_val.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %04d/%04d | Loss: %.4f"
-                % (epoch + 1, num_epochs, batch_idx, len(train_loader), val_loss)
-            )
-
         if scheduler is not None:
             scheduler.step()
 
@@ -442,10 +530,6 @@ def train_CVAE(
             with torch.set_grad_enabled(False):  # save memory during inference
                 train_loss = compute_epoch_loss_autoencoder(
                     model, train_loader, loss_fn
-                )
-                print(
-                    "***Epoch: %03d/%03d | Loss: %.3f"
-                    % (epoch + 1, num_epochs, train_loss)
                 )
                 log_dict["train_combined_loss_per_epoch"].append(train_loss.item())
 
@@ -457,19 +541,27 @@ def train_CVAE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={"kl": kl_div.item(), "recons": pixelwise.item()},
+                elapsed_time=time.time() - start_time,
+                learning_rate=current_lr,
+            )
+
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
-            print(
-                "Training for early stopping stops at epoch "
-                + str(best_epoch)
-                + " with best loss "
-                + str(best_loss)
-            )
-            print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+            if verbose >= VerbosityLevel.MINIMAL:
+                print(
+                    f"Early stopping at epoch {best_epoch + 1} "
+                    f"(best val_loss: {best_loss:.4f})"
+                )
             break
 
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
 
     if save_model is not None:
         torch.save(best_model.state_dict(), save_model)
@@ -489,6 +581,7 @@ def train_GAN(
     early_stop_num=None,  # loss for GAN are not meaningful, so early stopping rule is not applied.
     logging_interval=100,
     save_model=None,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -571,21 +664,20 @@ def train_GAN(
             log_dict["train_discriminator_real_acc_per_batch"].append(acc_real.item())
             log_dict["train_discriminator_fake_acc_per_batch"].append(acc_fake.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %03d/%03d | Gen/Dis Loss: %.4f/%.4f"
-                % (
-                    epoch + 1,
-                    num_epochs,
-                    batch_idx,
-                    len(train_loader),
-                    gener_loss.item(),
-                    discr_loss.item(),
-                )
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={
+                    "generator": gener_loss.item(),
+                    "discriminator": discr_loss.item(),
+                },
+                elapsed_time=time.time() - start_time,
             )
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
-
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
 
     if save_model is not None:
         torch.save(model.state_dict(), save_model)
@@ -605,6 +697,7 @@ def train_WGAN(
     early_stop_num,
     logging_interval=100,
     save_model=None,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -710,37 +803,35 @@ def train_WGAN(
             log_dict["train_discriminator_real_acc_per_batch"].append(acc_real.item())
             log_dict["train_discriminator_fake_acc_per_batch"].append(acc_fake.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %03d/%03d | Gen/Dis Loss: %.4f/%.4f"
-                % (
-                    epoch + 1,
-                    num_epochs,
-                    batch_idx,
-                    len(train_loader),
-                    gener_loss.item(),
-                    discr_loss.item(),
-                )
-            )
-
         train_loss = sum(epoch_loss) / len(epoch_loss)
         if (abs(train_loss) < abs(best_loss)) & (epoch >= 10):
             best_loss = train_loss
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={
+                    "generator": gener_loss.item(),
+                    "discriminator": discr_loss.item(),
+                },
+                elapsed_time=time.time() - start_time,
+            )
+
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
-            print(
-                "Training for early stopping stops at epoch "
-                + str(best_epoch)
-                + " with best loss "
-                + str(best_loss)
-            )
-            print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+            if verbose >= VerbosityLevel.MINIMAL:
+                print(
+                    f"Early stopping at epoch {best_epoch + 1} "
+                    f"(best loss: {best_loss:.4f})"
+                )
             break
 
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
 
     if save_model is not None:
         torch.save(model.state_dict(), save_model)
@@ -762,6 +853,7 @@ def train_WGANGP(
     gradient_penalty=True,
     gradient_penalty_weight=10,
     save_model=None,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -904,37 +996,35 @@ def train_WGANGP(
             log_dict["train_discriminator_real_acc_per_batch"].append(acc_real.item())
             log_dict["train_discriminator_fake_acc_per_batch"].append(acc_fake.item())
 
-            print(
-                "Epoch: %03d/%03d | Batch %03d/%03d | Gen/Dis Loss: %.4f/%.4f"
-                % (
-                    epoch + 1,
-                    num_epochs,
-                    batch_idx,
-                    len(train_loader),
-                    gener_loss.item(),
-                    discr_loss.item(),
-                )
-            )
-
         train_loss = sum(epoch_loss) / len(epoch_loss)
         if (abs(train_loss) < abs(best_loss)) & (epoch >= 10):
             best_loss = train_loss
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+        if verbose == VerbosityLevel.DETAILED:
+            _print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={
+                    "generator": gener_loss.item(),
+                    "discriminator": discr_loss.item(),
+                },
+                elapsed_time=time.time() - start_time,
+            )
+
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
-            print(
-                "Training for early stopping stops at epoch "
-                + str(best_epoch)
-                + " with best loss "
-                + str(best_loss)
-            )
-            print("Time elapsed: %.2f min" % ((time.time() - start_time) / 60))
+            if verbose >= VerbosityLevel.MINIMAL:
+                print(
+                    f"Early stopping at epoch {best_epoch + 1} "
+                    f"(best loss: {best_loss:.4f})"
+                )
             break
 
-    print("Total Training Time: %.2f min" % ((time.time() - start_time) / 60))
+    total_time = (time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
 
     if save_model is not None:
         torch.save(model.state_dict(), save_model)

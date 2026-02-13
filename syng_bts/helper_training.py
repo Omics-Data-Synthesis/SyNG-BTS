@@ -12,10 +12,10 @@ import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import torch.utils.data
 from torch.utils.data import DataLoader, TensorDataset, random_split
-from tqdm import tqdm
 
 from . import helper_train as ht
 from .helper_models import AE, CVAE, GAN, VAE
+from .helper_train import VerbosityLevel
 from .helper_utils import (
     generate_samples,
     reconstruct_samples,
@@ -69,6 +69,7 @@ def training_AEs(
     use_scheduler=False,  # scheduler parameters
     step_size=10,
     gamma=0.5,
+    verbose=VerbosityLevel.MINIMAL,
 ) -> TrainOutput:
     """Train an AE, VAE, or CVAE and return generated/reconstructed data.
 
@@ -140,6 +141,7 @@ def training_AEs(
             logging_interval=50,
             save_model=save_model,
             scheduler=scheduler,
+            verbose=verbose,
         )
     elif modelname == "VAE":
         log_dict, best_model = ht.train_VAE(
@@ -157,6 +159,7 @@ def training_AEs(
             logging_interval=50,
             save_model=save_model,
             scheduler=scheduler,
+            verbose=verbose,
         )
     else:
         log_dict, best_model = ht.train_AE(
@@ -171,6 +174,7 @@ def training_AEs(
             skip_epoch_stats=True,
             logging_interval=50,
             save_model=save_model,
+            verbose=verbose,
         )
 
     final_model = best_model if early_stop else model
@@ -218,6 +222,7 @@ def training_GANs(
     save_model=None,  # save model for transfer learning
     early_stop=True,  # whether or not using early stopping rule
     early_stop_num=30,  # stop training if loss does not improve for early_stop_num epochs
+    verbose=VerbosityLevel.MINIMAL,
 ) -> TrainOutput:
     """Train a GAN/WGAN/WGANGP and return generated data.
 
@@ -257,6 +262,7 @@ def training_GANs(
             early_stop_num=early_stop_num,
             logging_interval=100,
             save_model=save_model,
+            verbose=verbose,
         )
     elif modelname == "WGAN":
         log_dict, best_model = ht.train_WGAN(
@@ -270,6 +276,7 @@ def training_GANs(
             early_stop_num=early_stop_num,
             logging_interval=100,
             save_model=save_model,
+            verbose=verbose,
         )
     elif modelname == "WGANGP":
         log_dict, best_model = ht.train_WGANGP(
@@ -286,6 +293,7 @@ def training_GANs(
             gradient_penalty=True,
             gradient_penalty_weight=10,
             save_model=save_model,
+            verbose=verbose,
         )
     else:
         raise ValueError(f"modelname '{modelname}' not supported by training_GANs.")
@@ -321,6 +329,7 @@ def training_iter(
     kl_weight=1,  # only take effect for training VAE
     loss_fn="MSE",  # choose WMSE only if you know the weight, MSE by default
     replace=False,  # whether to replace the failure features in each reconstruction
+    verbose=VerbosityLevel.MINIMAL,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Iteratively reconstruct data to augment a small pilot sample.
 
@@ -356,6 +365,7 @@ def training_iter(
                 skip_epoch_stats=True,
                 logging_interval=50,
                 save_model=None,
+                verbose=verbose,
             )
             final_model = best_model if early_stop else model
             feed_data_gen, feed_labels = reconstruct_samples(
@@ -370,7 +380,8 @@ def training_iter(
             feed_labels = torch.cat(
                 (feed_labels, feed_labels), dim=0
             )  # repeat the labels for the generated data
-            print(feed_data_gen.shape)
+            if verbose == VerbosityLevel.DETAILED:
+                print(f"Iter data shape: {feed_data_gen.shape}")
             if replace:
                 new_sample_range = range(
                     int(feed_data_gen.shape[0] / 2), feed_data_gen.shape[0]
@@ -386,7 +397,8 @@ def training_iter(
                             :half_n, i_feature
                         ]
                         num_failures += 1
-                print("replace " + str(num_failures) + " zero features")
+                if verbose == VerbosityLevel.DETAILED:
+                    print(f"Replaced {num_failures} zero features")
             feed_data = feed_data_gen
             feed_set = TensorDataset(feed_data, feed_labels)
 
@@ -414,6 +426,7 @@ def training_iter(
                 kl_weight=kl_weight,
                 logging_interval=50,
                 save_model=None,
+                verbose=verbose,
             )
             final_model = best_model if early_stop else model
             feed_data_gen, feed_labels = reconstruct_samples(
@@ -428,7 +441,8 @@ def training_iter(
             feed_labels = torch.cat(
                 (feed_labels, feed_labels), dim=0
             )  # repeat the labels for the generated data
-            print(feed_data_gen.shape)
+            if verbose == VerbosityLevel.DETAILED:
+                print(f"Iter data shape: {feed_data_gen.shape}")
             if replace:
                 new_sample_range = range(
                     int(feed_data_gen.shape[0] / 2), feed_data_gen.shape[0]
@@ -444,7 +458,8 @@ def training_iter(
                             :half_n, i_feature
                         ]
                         num_failures += 1
-                print("replace " + str(num_failures) + " zero features")
+                if verbose == VerbosityLevel.DETAILED:
+                    print(f"Replaced {num_failures} zero features")
             feed_data = feed_data_gen
             feed_set = TensorDataset(feed_data, feed_labels)
     else:
@@ -470,6 +485,7 @@ def training_flows(
     pre_model,  # load pre-trained model from transfer learning
     save_model=None,
     tensorboard_dir: str | None = None,
+    verbose=VerbosityLevel.MINIMAL,
 ) -> TrainOutput:
     """Train a normalizing flow model and return generated data.
 
@@ -597,7 +613,6 @@ def training_flows(
         model.train()
         train_loss = 0
 
-        pbar = tqdm(total=len(train_loader.dataset))
         for batch_idx, data in enumerate(train_loader):
             if isinstance(data, list):
                 if len(data) > 1:
@@ -614,16 +629,9 @@ def training_flows(
             loss.backward()
             optimizer.step()
 
-            pbar.update(data.size(0))
-            pbar.set_description(
-                f"Train, Log likelihood in nats: {-train_loss / (batch_idx + 1):.6f}"
-            )
-
             if writer is not None:
                 writer.add_scalar("training/loss", loss.item(), global_step)
             global_step += 1
-
-        pbar.close()
 
         for module in model.modules():
             if isinstance(module, ht.BatchNormFlow):
@@ -642,9 +650,11 @@ def training_flows(
     best_train_epoch = 0
     best_model = model
 
-    for epoch in range(num_epochs):
-        print(f"\nEpoch: {epoch}")
+    import time as _time
 
+    start_time = _time.time()
+
+    for epoch in range(num_epochs):
         global_step, train_loss = train_one_epoch(epoch, global_step)
         train_loss_per_epoch.append(train_loss)
 
@@ -654,6 +664,11 @@ def training_flows(
                 or (math.isnan(train_loss))
                 or (math.isinf(train_loss))
             ):
+                if verbose >= VerbosityLevel.MINIMAL:
+                    print(
+                        f"Early stopping at epoch {best_train_epoch + 1} "
+                        f"(best log-likelihood: {-best_train_loss:.4f})"
+                    )
                 break
 
         if (
@@ -665,9 +680,17 @@ def training_flows(
             best_train_loss = train_loss
             best_model = copy.deepcopy(model)
 
-        print(
-            f"Best validation at epoch {best_train_epoch}: Average Log Likelihood in nats: {-best_train_loss:.4f}"
-        )
+        if verbose == VerbosityLevel.DETAILED:
+            ht._print_training_state(
+                epoch=epoch,
+                num_epochs=num_epochs,
+                loss_dict={"train_loss": train_loss},
+                elapsed_time=_time.time() - start_time,
+            )
+
+    total_time = (_time.time() - start_time) / 60
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Training complete: {total_time:.2f}min")
 
     if writer is not None:
         writer.close()

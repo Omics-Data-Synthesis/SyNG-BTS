@@ -297,6 +297,7 @@ def resolve_data(data: "pd.DataFrame | str | Path") -> pd.DataFrame:
     ----------
     data : pd.DataFrame, str, or Path
         One of:
+
         - A ``pd.DataFrame`` — returned directly.
         - A ``str`` or ``Path`` pointing to an existing CSV file (must
           include an extension such as ``.csv``).

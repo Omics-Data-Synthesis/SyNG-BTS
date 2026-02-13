@@ -41,14 +41,14 @@ SyngResult
 
 .. autoclass:: syng_bts.SyngResult
    :members:
-   :undoc-members:
+   :exclude-members: __init__, generated_data, loss, reconstructed_data, model_state, metadata
 
 PilotResult
 ~~~~~~~~~~~
 
 .. autoclass:: syng_bts.PilotResult
    :members:
-   :undoc-members:
+   :exclude-members: __init__, runs, metadata
 
 Evaluation Functions
 --------------------

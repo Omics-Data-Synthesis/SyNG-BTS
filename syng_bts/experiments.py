@@ -215,20 +215,20 @@ def generate(
     batch_frac : float
         Batch size as a fraction of sample count.
     learning_rate : float
-        Optimiser learning rate.
+        Optimizer learning rate.
     epoch : int or None
         Fixed epoch count, or ``None`` for early stopping.
 
         The interaction between *epoch* and *early_stop_patience*:
 
-        ========================  ======================  ==================================
-        ``epoch``                 ``early_stop_patience``  Behaviour
-        ========================  ======================  ==================================
-        ``None``                  ``None``                 Early stopping ON, patience=30, max 1000 epochs
-        ``None``                  ``30``                   Early stopping ON, patience=30, max 1000 epochs
-        ``500``                   ``None``                 Early stopping OFF, run exactly 500 epochs
-        ``500``                   ``30``                   Early stopping ON, patience=30, max 500 epochs
-        ========================  ======================  ==================================
+        ===========  =======================  ==================================================
+        ``epoch``    ``early_stop_patience``  Behaviour
+        ===========  =======================  ==================================================
+        ``None``     ``None``                 Early stopping ON, patience=30, max 1 000 epochs
+        ``None``     ``30``                   Early stopping ON, patience=30, max 1 000 epochs
+        ``500``      ``None``                 Early stopping OFF, run exactly 500 epochs
+        ``500``      ``30``                   Early stopping ON, patience=30, max 500 epochs
+        ===========  =======================  ==================================================
     val_ratio : float
         Validation split ratio (AE family only).
     early_stop_patience : int or None
@@ -260,10 +260,10 @@ def generate(
     verbose : int or str
         Verbosity level for training output.
 
-        - ``0`` or ``"silent"`` — no output during training.
-        - ``1`` or ``"minimal"`` (default) — print only a final
-          summary line and early-stopping messages.
-        - ``2`` or ``"detailed"`` — print per-epoch progress
+        - ``"silent"`` or ``0``  — no output during training.
+        - ``"minimal"`` or ``1`` (default) — print only training
+          summaries and early-stopping messages.
+        - ``"detailed"`` or ``2`` — print per-epoch progress
           (epoch number, loss values, elapsed time, learning rate).
 
     Returns
@@ -494,23 +494,14 @@ def pilot_study(
     batch_frac : float
         Batch size as a fraction of sample count.
     learning_rate : float
-        Optimiser learning rate.
+        Optimizer learning rate.
     epoch : int or None
-        Fixed epoch count, or ``None`` for early stopping.
-
-        The interaction between *epoch* and *early_stop_patience*:
-
-        ========================  ======================  ==================================
-        ``epoch``                 ``early_stop_patience``  Behaviour
-        ========================  ======================  ==================================
-        ``None``                  ``None``                 Early stopping ON, patience=30, max 1000 epochs
-        ``None``                  ``30``                   Early stopping ON, patience=30, max 1000 epochs
-        ``500``                   ``None``                 Early stopping OFF, run exactly 500 epochs
-        ``500``                   ``30``                   Early stopping ON, patience=30, max 500 epochs
-        ========================  ======================  ==================================
+        Fixed epoch count or ``None`` for early stopping.  See
+        :func:`generate` for the full interaction table.
     early_stop_patience : int or None
         Stop if loss does not improve for this many epochs.  When ``None``
-        and ``epoch`` is also ``None``, defaults to ``30``.
+        and ``epoch`` is also ``None``, defaults to ``30``.  See
+        :func:`generate` for the full interaction table.
     off_aug : str or None
         Offline augmentation mode.
     AE_head_num : int
@@ -789,11 +780,12 @@ def transfer(
     learning_rate : float
         Learning rate.
     epoch : int or None
-        Fixed epoch count or ``None`` for early stopping.  See
+        Fixed epoch count, or ``None`` for early stopping.  See
         :func:`generate` for the full interaction table.
     early_stop_patience : int or None
         Stop if loss does not improve for this many epochs.  When ``None``
-        and ``epoch`` is also ``None``, defaults to ``30``.
+        and ``epoch`` is also ``None``, defaults to ``30``.  See
+        :func:`generate` for the full interaction table.
     off_aug : str or None
         Offline augmentation mode.
     AE_head_num : int

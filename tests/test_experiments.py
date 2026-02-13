@@ -21,6 +21,7 @@ from syng_bts.experiments import (
     _parse_model_spec,
     _resolve_early_stopping_config,
 )
+from syng_bts.helper_training import TrainOutput
 from syng_bts.result import PilotResult, SyngResult
 
 # ---------------------------------------------------------------------------
@@ -398,17 +399,44 @@ class TestResolveEarlyStoppingConfig:
         assert early_stop is True
         assert early_stop_num == 15
 
-    def test_epoch_zero_with_patience(self):
-        """epoch=0 is valued (edge case: 0 epochs)."""
-        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=0,
-            early_stop_patience=5,
-            default_max_epochs=1000,
-            default_patience=30,
-        )
-        assert num_epochs == 0
-        assert early_stop is True
-        assert early_stop_num == 5
+    def test_epoch_zero_raises(self):
+        """epoch must be a positive integer when provided."""
+        with pytest.raises(ValueError, match="epoch must be a positive integer"):
+            _resolve_early_stopping_config(
+                epoch=0,
+                early_stop_patience=5,
+                default_max_epochs=1000,
+                default_patience=30,
+            )
+
+    def test_negative_epoch_raises(self):
+        with pytest.raises(ValueError, match="epoch must be a positive integer"):
+            _resolve_early_stopping_config(
+                epoch=-1,
+                early_stop_patience=None,
+                default_max_epochs=1000,
+                default_patience=30,
+            )
+
+    def test_non_positive_patience_raises(self):
+        with pytest.raises(
+            ValueError, match="early_stop_patience must be a positive integer"
+        ):
+            _resolve_early_stopping_config(
+                epoch=None,
+                early_stop_patience=0,
+                default_max_epochs=1000,
+                default_patience=30,
+            )
+
+    def test_non_integer_epoch_raises(self):
+        with pytest.raises(ValueError, match="epoch must be a positive integer"):
+            _resolve_early_stopping_config(
+                epoch=1.5,
+                early_stop_patience=None,
+                default_max_epochs=1000,
+                default_patience=30,
+            )
 
 
 # =========================================================================
@@ -550,6 +578,50 @@ class TestGenerate:
         )
         assert result.metadata["modelname"] == "VAE"
         assert result.metadata["kl_weight"] == 10
+
+    def test_epochs_trained_metadata_within_bounds(self, sample_data):
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=6,
+            early_stop_patience=1,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert result.metadata["epochs_trained"] > 0
+        assert result.metadata["epochs_trained"] <= result.metadata["num_epochs"]
+
+    def test_epochs_trained_uses_training_output_value(self, sample_data, monkeypatch):
+        import syng_bts.experiments as exp
+
+        def fake_training_aes(*args, **kwargs):
+            generated = torch.zeros((5, NUM_FEATURES), dtype=torch.float32)
+            reconstructed = torch.zeros((10, NUM_FEATURES), dtype=torch.float32)
+            return TrainOutput(
+                log_dict={
+                    "train_loss_per_batch": [1.0],
+                    "val_loss_per_batch": [1.0],
+                },
+                generated_data=generated,
+                reconstructed_data=reconstructed,
+                model_state={"w": torch.tensor([1.0])},
+                epochs_trained=2,
+            )
+
+        monkeypatch.setattr(exp, "training_AEs", fake_training_aes)
+
+        result = generate(
+            data=sample_data,
+            model="AE",
+            new_size=5,
+            epoch=8,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+
+        assert result.metadata["num_epochs"] == 8
+        assert result.metadata["epochs_trained"] == 2
 
     def test_gan_model(self, sample_data):
         """generate() works with GAN model."""
@@ -719,6 +791,32 @@ class TestPilotStudy:
         )
         for run in result.runs.values():
             assert list(run.generated_data.columns) == list(sample_data.columns)
+
+    def test_cvae_generated_data_includes_label_column(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="CVAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for run in result.runs.values():
+            assert run.generated_data.columns[-1] == "label"
+
+    def test_pilot_run_metadata_includes_epochs_trained(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for run in result.runs.values():
+            assert "epochs_trained" in run.metadata
+            assert run.metadata["epochs_trained"] > 0
+            assert run.metadata["epochs_trained"] <= run.metadata["num_epochs"]
 
     def test_saves_with_output_dir(self, sample_data, temp_dir):
         pilot_study(

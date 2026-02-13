@@ -40,12 +40,16 @@ class TrainOutput(NamedTuple):
         Reconstructions (AE/VAE/CVAE only); ``None`` for GANs and flows.
     model_state : dict
         ``state_dict()`` of the best (or final) trained model.
+    epochs_trained : int
+        Actual number of epochs executed (may be < configured maximum
+        when early stopping triggers).
     """
 
     log_dict: dict
     generated_data: torch.Tensor
     reconstructed_data: torch.Tensor | None
     model_state: dict
+    epochs_trained: int
 
 
 # %%
@@ -180,6 +184,16 @@ def training_AEs(
     final_model = best_model if early_stop else model
     final_model.eval()
 
+    if modelname == "AE":
+        epoch_log_key = "train_loss_per_batch"
+    else:
+        epoch_log_key = "train_combined_loss_per_batch"
+    batches_per_epoch = len(train_loader)
+    if batches_per_epoch > 0:
+        epochs_trained = len(log_dict.get(epoch_log_key, [])) // batches_per_epoch
+    else:
+        epochs_trained = 0
+
     # Determine latent size based on model architecture
     latent_size = 64 if modelname == "AE" else 32
 
@@ -206,6 +220,7 @@ def training_AEs(
         generated_data=new_data,
         reconstructed_data=recons_data,
         model_state=final_model.state_dict(),
+        epochs_trained=epochs_trained,
     )
 
 
@@ -300,6 +315,13 @@ def training_GANs(
 
     final_model = best_model if early_stop else model
     final_model.eval()
+    batches_per_epoch = len(train_loader)
+    if batches_per_epoch > 0:
+        epochs_trained = (
+            len(log_dict.get("train_generator_loss_per_batch", [])) // batches_per_epoch
+        )
+    else:
+        epochs_trained = 0
     new_data = generate_samples(
         model=final_model,
         modelname="GANs",
@@ -312,6 +334,7 @@ def training_GANs(
         generated_data=new_data,
         reconstructed_data=None,
         model_state=final_model.state_dict(),
+        epochs_trained=epochs_trained,
     )
 
 
@@ -597,6 +620,7 @@ def training_flows(
     if pre_model is not None:
         model.load_state_dict(torch.load(pre_model))
     model.to(device)
+
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-6)
 
     # Optional TensorBoard logging
@@ -708,10 +732,12 @@ def training_flows(
     )
 
     log_dict = {"train_loss_per_epoch": train_loss_per_epoch}
+    epochs_trained = len(train_loss_per_epoch)
 
     return TrainOutput(
         log_dict=log_dict,
         generated_data=new_data,
         reconstructed_data=None,
         model_state=best_model.state_dict(),
+        epochs_trained=epochs_trained,
     )

@@ -147,6 +147,21 @@ def _resolve_early_stopping_config(
         - ``early_stop`` is whether early stopping is enabled
         - ``early_stop_num`` is the patience value to use
     """
+    if epoch is not None:
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0:
+            raise ValueError(f"epoch must be a positive integer or None, got {epoch!r}")
+
+    if early_stop_patience is not None:
+        if (
+            isinstance(early_stop_patience, bool)
+            or not isinstance(early_stop_patience, int)
+            or early_stop_patience <= 0
+        ):
+            raise ValueError(
+                "early_stop_patience must be a positive integer or None, "
+                f"got {early_stop_patience!r}"
+            )
+
     if epoch is not None and early_stop_patience is not None:
         # Both provided: run up to `epoch` epochs with early stopping
         return epoch, True, early_stop_patience
@@ -433,7 +448,7 @@ def generate(
         "modelname": modelname,
         "dataname": dataname,
         "num_epochs": num_epochs,
-        "epochs_trained": num_epochs,
+        "epochs_trained": train_out.epochs_trained,
         "seed": random_seed,
         "kl_weight": kl_weight,
         "input_shape": (n_samples, len(colnames)),
@@ -675,12 +690,26 @@ def pilot_study(
 
             # Assemble SyngResult for this run
             gen_np = train_out.generated_data.detach().numpy()
-            gen_df = pd.DataFrame(gen_np, columns=colnames[: gen_np.shape[1]])
+
+            # For CVAE, add label column name
+            gen_colnames = list(colnames)
+            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+                gen_colnames = gen_colnames + ["label"]
+
+            gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
 
             recon_df = None
             if train_out.reconstructed_data is not None:
                 recon_np = train_out.reconstructed_data.detach().numpy()
-                recon_df = pd.DataFrame(recon_np, columns=colnames[: recon_np.shape[1]])
+
+                # For CVAE, add label column name
+                recon_colnames = list(colnames)
+                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+                    recon_colnames = recon_colnames + ["label"]
+
+                recon_df = pd.DataFrame(
+                    recon_np, columns=recon_colnames[: recon_np.shape[1]]
+                )
 
             loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -689,6 +718,7 @@ def pilot_study(
                 "modelname": modelname,
                 "dataname": dataname,
                 "num_epochs": num_epochs,
+                "epochs_trained": train_out.epochs_trained,
                 "seed": random_seed,
                 "kl_weight": kl_weight,
                 "pilot_size": n_pilot,

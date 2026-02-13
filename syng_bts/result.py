@@ -8,6 +8,7 @@ reconstructed data, and trained model state, which are all accessible as attribu
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,23 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+
+
+def _json_serializable(obj: Any) -> Any:
+    """Convert non-JSON-serializable objects to JSON-safe equivalents."""
+    if isinstance(obj, tuple):
+        return list(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, set):
+        return sorted(obj)
+    return str(obj)
 
 
 @dataclass
@@ -64,7 +82,8 @@ class SyngResult:
         """Save all non-None results to *output_dir*.
 
         Files are written into a single flat directory. CSVs include column
-        headers. Model state is saved as a ``.pt`` file.
+        headers. Model state is saved as a ``.pt`` file. Metadata is written
+        as a human-readable JSON file.
 
         Parameters
         ----------
@@ -78,7 +97,8 @@ class SyngResult:
         -------
         dict[str, Path]
             Mapping of output type (``"generated"``, ``"loss"``,
-            ``"reconstructed"``, ``"model"``) to the written file path.
+            ``"reconstructed"``, ``"model"``, ``"metadata"``) to the
+            written file path.
         """
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -115,6 +135,15 @@ class SyngResult:
             model_path = out / f"{stem}_model.pt"
             torch.save(self.model_state, model_path)
             paths["model"] = model_path
+
+        # Metadata as human-readable JSON
+        if self.metadata:
+            meta_path = out / f"{stem}_metadata.json"
+            meta_path.write_text(
+                json.dumps(self.metadata, indent=2, default=_json_serializable),
+                encoding="utf-8",
+            )
+            paths["metadata"] = meta_path
 
         return paths
 
@@ -311,6 +340,104 @@ class SyngResult:
             f"loss_cols={list(self.loss.columns)}, "
             f"has_reconstructed={has_recon}, "
             f"has_model_state={has_model})"
+        )
+
+    # ------------------------------------------------------------------
+    # Loader
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def load(
+        cls,
+        directory: str | Path,
+        prefix: str | None = None,
+    ) -> SyngResult:
+        """Load a previously saved ``SyngResult`` from disk.
+
+        Parameters
+        ----------
+        directory : str or Path
+            Directory that contains the saved files.
+        prefix : str or None
+            The filename stem (everything before ``_generated.csv``).
+            When ``None``, auto-detected from ``*_generated.csv`` files
+            in the directory; exactly one match is required.
+
+        Returns
+        -------
+        SyngResult
+            Reconstructed result with all available artifacts.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the required ``*_generated.csv`` or ``*_loss.csv`` file
+            is missing.
+        ValueError
+            If *prefix* is ``None`` and zero or more than one
+            ``*_generated.csv`` file is found (ambiguous).
+        """
+        d = Path(directory)
+
+        if prefix is None:
+            candidates = sorted(d.glob("*_generated.csv"))
+            if len(candidates) == 0:
+                raise FileNotFoundError(f"No *_generated.csv files found in {d}")
+            if len(candidates) > 1:
+                stems = [c.name.removesuffix("_generated.csv") for c in candidates]
+                looks_like_pilot_dir = any(
+                    "_pilot" in c.name and "_draw" in c.name for c in candidates
+                )
+                if looks_like_pilot_dir:
+                    raise ValueError(
+                        "Multiple generated files found and directory appears to "
+                        f"contain PilotResult outputs: {stems}. "
+                        "SyngResult.load() loads one run at a time; pass prefix "
+                        "for a specific run stem, e.g. '<dataname>_pilot50_draw1_<model>'."
+                    )
+                raise ValueError(
+                    f"Multiple generated files found in {d}: {stems}. "
+                    "Specify 'prefix' to disambiguate."
+                )
+            stem = candidates[0].name.removesuffix("_generated.csv")
+        else:
+            stem = prefix
+
+        # --- Required files ---
+        gen_path = d / f"{stem}_generated.csv"
+        if not gen_path.exists():
+            raise FileNotFoundError(f"Required file not found: {gen_path}")
+        generated_data = pd.read_csv(gen_path)
+
+        loss_path = d / f"{stem}_loss.csv"
+        if not loss_path.exists():
+            raise FileNotFoundError(f"Required file not found: {loss_path}")
+        loss = pd.read_csv(loss_path)
+
+        # --- Optional files ---
+        recon_path = d / f"{stem}_reconstructed.csv"
+        reconstructed_data = pd.read_csv(recon_path) if recon_path.exists() else None
+
+        model_path = d / f"{stem}_model.pt"
+        model_state = (
+            torch.load(model_path, weights_only=False) if model_path.exists() else None
+        )
+
+        meta_path = d / f"{stem}_metadata.json"
+        if meta_path.exists():
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            # Restore tuples that were serialised as lists
+            if "input_shape" in metadata and isinstance(metadata["input_shape"], list):
+                metadata["input_shape"] = tuple(metadata["input_shape"])
+        else:
+            metadata = {}
+
+        return cls(
+            generated_data=generated_data,
+            loss=loss,
+            reconstructed_data=reconstructed_data,
+            model_state=model_state,
+            metadata=metadata,
         )
 
 

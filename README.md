@@ -81,6 +81,10 @@ figs = result.plot_loss()  # dict[str, Figure]
 
 # Optionally save to disk
 result.save("./my_output/")
+
+# Load a previously saved result
+from syng_bts import SyngResult
+loaded = SyngResult.load("./my_output/")
 ```
 
 ### Run a Pilot Study

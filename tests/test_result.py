@@ -466,3 +466,195 @@ class TestPilotResult:
             ax = fig.get_axes()[0]
             assert ax.get_xlabel() == "Epochs"
             plt.close(fig)
+
+
+class TestSaveLoadRoundtrip:
+    """Tests for SyngResult and PilotResult save/load round-trip."""
+
+    def test_save_writes_metadata_json(self, sample_result_full, temp_dir):
+        """Test save produces a metadata JSON file."""
+        paths = sample_result_full.save(temp_dir)
+        assert "metadata" in paths
+        assert paths["metadata"].exists()
+        assert paths["metadata"].suffix == ".json"
+
+    def test_metadata_json_format(self, sample_result_full, temp_dir):
+        """Test metadata JSON is valid JSON with expected keys."""
+        import json
+
+        paths = sample_result_full.save(temp_dir)
+        content = paths["metadata"].read_text(encoding="utf-8")
+        meta = json.loads(content)
+        assert isinstance(meta, dict)
+        assert meta["model"] == "VAE1-10"
+        assert meta["dataname"] == "test_full"
+        assert meta["seed"] == 123
+
+    def test_metadata_json_tuple_serialization(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """Test tuples in metadata are serialised as lists in JSON."""
+        import json
+
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"model": "AE", "input_shape": (20, 50)},
+        )
+        paths = result.save(temp_dir)
+        content = json.loads(paths["metadata"].read_text(encoding="utf-8"))
+        assert content["input_shape"] == [20, 50]
+
+    def test_save_no_metadata_when_empty(self, sample_generated, sample_loss, temp_dir):
+        """Test save skips metadata JSON when metadata is empty dict."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={},
+        )
+        paths = result.save(temp_dir)
+        assert "metadata" not in paths
+
+    def test_load_roundtrip(self, sample_result_full, temp_dir):
+        """Test save → load round-trip preserves all fields."""
+        from syng_bts import SyngResult
+
+        sample_result_full.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        pd.testing.assert_frame_equal(
+            loaded.generated_data,
+            sample_result_full.generated_data,
+            atol=1e-6,
+        )
+        pd.testing.assert_frame_equal(
+            loaded.loss,
+            sample_result_full.loss,
+            atol=1e-6,
+        )
+        assert loaded.reconstructed_data is not None
+        pd.testing.assert_frame_equal(
+            loaded.reconstructed_data,
+            sample_result_full.reconstructed_data,
+            atol=1e-6,
+        )
+        assert loaded.model_state is not None
+        assert loaded.metadata["model"] == sample_result_full.metadata["model"]
+        assert loaded.metadata["dataname"] == sample_result_full.metadata["dataname"]
+
+        assert loaded.metadata["seed"] == sample_result_full.metadata["seed"]
+        assert (
+            loaded.metadata["epochs_trained"]
+            == sample_result_full.metadata["epochs_trained"]
+        )
+
+    def test_load_auto_prefix(self, sample_result, temp_dir):
+        """Test load auto-detects prefix from a single generated CSV."""
+        from syng_bts import SyngResult
+
+        sample_result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        assert loaded.generated_data.shape == sample_result.generated_data.shape
+
+    def test_load_with_explicit_prefix(self, sample_result_full, temp_dir):
+        """Test load with an explicit prefix."""
+        from syng_bts import SyngResult
+
+        paths = sample_result_full.save(temp_dir)
+        # Derive the stem from the generated file name
+        stem = paths["generated"].name.removesuffix("_generated.csv")
+        loaded = SyngResult.load(temp_dir, prefix=stem)
+        assert loaded.metadata["model"] == "VAE1-10"
+
+    def test_load_missing_optional_files(self, sample_generated, sample_loss, temp_dir):
+        """Test load works when optional files are absent."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "minimal"},
+        )
+        result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        assert loaded.reconstructed_data is None
+        assert loaded.model_state is None
+
+    def test_load_auto_prefix_ambiguous(self, sample_generated, sample_loss, temp_dir):
+        """Test load raises ValueError when multiple generated files exist."""
+        from syng_bts import SyngResult
+
+        r1 = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "data_a", "model": "AE"},
+        )
+        r2 = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "data_b", "model": "AE"},
+        )
+        r1.save(temp_dir)
+        r2.save(temp_dir)
+        with pytest.raises(ValueError, match="Multiple generated files"):
+            SyngResult.load(temp_dir)
+
+    def test_load_pilot_output_directory_requires_prefix(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """Test loading a pilot-output directory requires explicit run prefix."""
+        from syng_bts import PilotResult, SyngResult
+
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=sample_loss.copy(),
+                metadata={"model": "VAE1-10", "dataname": "pilot_ds"},
+            ),
+            (10, 2): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=sample_loss.copy(),
+                metadata={"model": "VAE1-10", "dataname": "pilot_ds"},
+            ),
+        }
+        PilotResult(runs=runs, metadata={"dataname": "pilot_ds"}).save(temp_dir)
+
+        with pytest.raises(ValueError, match="PilotResult outputs"):
+            SyngResult.load(temp_dir)
+
+    def test_load_missing_generated_raises(self, temp_dir):
+        """Test load raises FileNotFoundError when no generated CSV exists."""
+        from syng_bts import SyngResult
+
+        with pytest.raises(FileNotFoundError, match="generated"):
+            SyngResult.load(temp_dir)
+
+    def test_load_missing_loss_raises(self, sample_generated, temp_dir):
+        """Test load raises FileNotFoundError when loss CSV is missing."""
+        from syng_bts import SyngResult
+
+        # Write only a generated CSV (no loss)
+        gen_path = temp_dir / "test_AE_generated.csv"
+        sample_generated.to_csv(gen_path, index=False)
+        with pytest.raises(FileNotFoundError, match="loss"):
+            SyngResult.load(temp_dir)
+
+    def test_load_input_shape_restored_as_tuple(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """Test that input_shape is restored as a tuple after round-trip."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "test", "input_shape": (20, 50)},
+        )
+        result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        assert isinstance(loaded.metadata["input_shape"], tuple)
+        assert loaded.metadata["input_shape"] == (20, 50)

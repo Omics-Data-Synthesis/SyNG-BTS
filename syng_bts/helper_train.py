@@ -150,10 +150,17 @@ def train_AE(
         "val_combined_loss_per_epoch": [],
     }
 
+    loss_fn_name = loss_fn
     if loss_fn == "MSE":
         loss_fn = F.mse_loss
     elif loss_fn == "WMSE":
         loss_fn = WMSE
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = f"Starting training: {num_epochs} epochs, loss={loss_fn_name}"
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
     best_loss = float("inf")
@@ -263,7 +270,7 @@ def train_VAE(
     kl_weight=1,
     save_model=None,
     scheduler=None,
-    verbose=1,
+    verbose=VerbosityLevel.MINIMAL,
 ):
 
     log_dict = {
@@ -277,10 +284,17 @@ def train_VAE(
         "latent_statistics_per_batch": [],
     }
 
+    loss_fn_name = loss_fn
     if loss_fn == "MSE":
         loss_fn = F.mse_loss
     elif loss_fn == "WMSE":
         loss_fn = WMSE
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = f"Starting training: {num_epochs} epochs, loss={loss_fn_name}, kl_weight={kl_weight}"
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
     best_loss = float("inf")
@@ -435,10 +449,17 @@ def train_CVAE(
         "latent_statistics_per_batch": [],
     }
 
+    loss_fn_name = loss_fn
     if loss_fn == "MSE":
         loss_fn = F.mse_loss
     elif loss_fn == "WMSE":
         loss_fn = WMSE
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = f"Starting training: {num_epochs} epochs, loss={loss_fn_name}, kl_weight={kl_weight}"
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
     best_loss = float("inf")
@@ -593,6 +614,9 @@ def train_GAN(
 
     loss_fn = F.binary_cross_entropy_with_logits
 
+    if verbose >= VerbosityLevel.MINIMAL:
+        print(f"Starting training: {num_epochs} epochs, latent_dim={latent_dim}")
+
     start_time = time.time()
     best_model = model
     for epoch in range(num_epochs):
@@ -716,6 +740,12 @@ def train_WGAN(
     #     raise ValueError('This loss is not supported.')
     def loss_fn(y_pred, y_true):
         return -torch.mean(y_pred * y_true)
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = f"Starting training: {num_epochs} epochs, latent_dim={latent_dim}"
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
     best_loss = float("inf")
@@ -868,6 +898,15 @@ def train_WGANGP(
 
     def loss_fn(y_pred, y_true):
         return -torch.mean(y_pred * y_true)
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = f"Starting training: {num_epochs} epochs, latent_dim={latent_dim}"
+        if gradient_penalty:
+            msg += f", gradient_penalty_weight={gradient_penalty_weight}"
+        msg += f", discr_iter_per_gen={discr_iter_per_generator_iter}"
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
 

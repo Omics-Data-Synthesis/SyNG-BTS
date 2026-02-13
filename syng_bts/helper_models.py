@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 # %%
 import torch
@@ -10,23 +9,23 @@ import torch.nn as nn
 class AE(nn.Module):
     def __init__(self, num_features):
 
-        super(AE, self).__init__()
+        super().__init__()
 
         self.encoder = nn.Sequential(
-            nn.Linear(int(num_features), int(256)),
+            nn.Linear(int(num_features), 256),
             nn.ReLU(True),
-            nn.Linear(int(256), int(128)),
+            nn.Linear(256, 128),
             nn.ReLU(True),
-            nn.Linear(int(128), int(64)),
+            nn.Linear(128, 64),
             nn.ReLU(True),
         )
 
         self.decoder = nn.Sequential(
-            nn.Linear(int(64), int(128)),
+            nn.Linear(64, 128),
             nn.ReLU(True),
-            nn.Linear(int(128), int(256)),
+            nn.Linear(128, 256),
             nn.ReLU(True),
-            nn.Linear(int(256), int(num_features)),
+            nn.Linear(256, int(num_features)),
             nn.ReLU(True),
         )
 
@@ -44,11 +43,11 @@ class VAE(nn.Module):
         super().__init__()
 
         self.encoder = nn.Sequential(
-            nn.Linear(int(num_features), int(256)),
+            nn.Linear(int(num_features), 256),
             nn.ReLU(True),
-            nn.Linear(int(256), int(128)),
+            nn.Linear(256, 128),
             nn.ReLU(True),
-            nn.Linear(int(128), int(64)),
+            nn.Linear(128, 64),
             nn.ReLU(True),
         )
 
@@ -56,13 +55,13 @@ class VAE(nn.Module):
         self.z_log_var = torch.nn.Linear(64, 32)
 
         self.decoder = nn.Sequential(
-            nn.Linear(int(32), int(64)),
+            nn.Linear(32, 64),
             nn.ReLU(True),
-            nn.Linear(int(64), int(128)),
+            nn.Linear(64, 128),
             nn.ReLU(True),
-            nn.Linear(int(128), int(256)),
+            nn.Linear(128, 256),
             nn.ReLU(True),
-            nn.Linear(int(256), int(num_features)),
+            nn.Linear(256, int(num_features)),
             nn.ReLU(True),
         )
 

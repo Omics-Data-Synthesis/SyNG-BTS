@@ -22,8 +22,8 @@ try:
     version = __version__
     release = __version__
 except ImportError:
-    version = "2.5.0"
-    release = "2.5.0"
+    version = "3.0.1"
+    release = "3.0.1"
 
 # -- General configuration ---------------------------------------------------
 
@@ -69,7 +69,7 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/docs/", None),
-    "torch": ("https://pytorch.org/docs/stable/", None),
+    "torch": ("https://docs.pytorch.org/docs/stable/", None),
 }
 intersphinx_disabled_domains = ["std"]
 

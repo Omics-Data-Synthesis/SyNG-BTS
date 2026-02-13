@@ -1,161 +1,161 @@
-import umap.umap_ as umap  # noqa: F401
+from __future__ import annotations
+
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
+import umap.umap_ as umap  # noqa: F401
 from matplotlib.figure import Figure
 from umap import UMAP
-from pathlib import Path
-from typing import Optional, Union
 
-from .data_utils import load_dataset
+from .data_utils import resolve_data
 
 
 def heatmap_eval(
-    dat_real: pd.DataFrame,
-    dat_generated: Optional[pd.DataFrame] = None,
-    save: bool = False,
-) -> Optional[Figure]:
-    r"""
-    Create a heatmap visualization comparing generated data and real data.
+    real_data: pd.DataFrame,
+    generated_data: pd.DataFrame | None = None,
+    *,
+    cmap: str = "YlGnBu",
+) -> Figure:
+    r"""Create a heatmap visualization comparing real and generated data.
 
     If only one dataset is provided, displays a single heatmap. If both
     real and generated data are provided, displays them side by side.
 
     Parameters
     ----------
-    dat_real : pd.DataFrame
+    real_data : pd.DataFrame
         The original/real data.
-    dat_generated : pd.DataFrame, optional
-        The generated data. If None, only dat_real is plotted.
-    save : bool, default=False
-        If True, return the figure instead of displaying it.
+    generated_data : pd.DataFrame or None, optional
+        The generated/synthetic data. If ``None``, only *real_data* is plotted.
+    cmap : str, default ``"YlGnBu"``
+        Colormap passed to :func:`seaborn.heatmap`.
 
     Returns
     -------
-    Figure or None
-        If save=True, returns the matplotlib Figure. Otherwise, displays
-        the figure and returns None.
+    Figure
+        The matplotlib Figure containing the heatmap(s).
     """
-    if dat_generated is None:
-        # Only plot dat_real if dat_generated is None
+    # Select only numeric columns.
+    # Non-numeric columns (e.g. groups) can be present but are ignored for the heatmap.
+    # TODO Remove this once we update the data loading to only return numeric data for evaluation.
+    real_data_plot = real_data.select_dtypes(include=["number"])
+    generated_data_plot = (
+        generated_data.select_dtypes(include=["number"])
+        if generated_data is not None
+        else None
+    )
+
+    if generated_data_plot is None:
         fig = plt.figure(figsize=(6, 6))
-        ax = sns.heatmap(dat_real, cbar=True)
+        ax = sns.heatmap(real_data_plot, cbar=True, cmap=cmap)
         ax.set_title("Real Data")
         ax.set_xlabel("Features")
         ax.set_ylabel("Samples")
     else:
-        # Plot both dat_generated and dat_real side by side
         fig, axs = plt.subplots(
-            ncols=2, figsize=(12, 6), gridspec_kw=dict(width_ratios=[0.5, 0.55])
+            ncols=2, figsize=(12, 6), gridspec_kw={"width_ratios": [0.5, 0.55]}
         )
 
-        sns.heatmap(dat_generated, ax=axs[0], cbar=False)
+        sns.heatmap(generated_data_plot, ax=axs[0], cbar=False, cmap=cmap)
         axs[0].set_title("Generated Data")
         axs[0].set_xlabel("Features")
         axs[0].set_ylabel("Samples")
 
-        sns.heatmap(dat_real, ax=axs[1], cbar=True)
+        sns.heatmap(real_data_plot, ax=axs[1], cbar=True, cmap=cmap)
         axs[1].set_title("Real Data")
         axs[1].set_xlabel("Features")
         axs[1].set_ylabel("Samples")
 
-    plt.tight_layout()
-
-    if save:
-        return fig
-    else:
-        plt.show()
+    fig.tight_layout()
+    return fig
 
 
 def UMAP_eval(
-    dat_generated: Optional[pd.DataFrame],
-    dat_real: pd.DataFrame,
-    groups_generated: Optional[pd.Series] = None,
-    groups_real: Optional[pd.Series] = None,
-    random_state: int = 42,
+    real_data: pd.DataFrame,
+    generated_data: pd.DataFrame | None = None,
+    *,
+    groups_real: pd.Series | None = None,
+    groups_generated: pd.Series | None = None,
+    random_seed: int = 42,
     legend_pos: str = "best",
-) -> None:
-    r"""
-    Create a UMAP visualization comparing generated data and real data.
+) -> Figure:
+    r"""Create a UMAP visualization comparing real and generated data.
 
     Uses UMAP dimensionality reduction to visualize high-dimensional
-    data in 2D, with optional group coloring.
+    data in 2D, with optional group colouring.
 
     Parameters
     ----------
-    dat_generated : pd.DataFrame or None
-        The generated data. If None, only dat_real is visualized.
-    dat_real : pd.DataFrame
+    real_data : pd.DataFrame
         The original/real data.
-    groups_generated : pd.Series or None, optional
-        Group labels for generated samples. Used for coloring/styling.
+    generated_data : pd.DataFrame or None, optional
+        The generated/synthetic data. If ``None``, only *real_data* is
+        visualised.
     groups_real : pd.Series or None, optional
-        Group labels for real samples. Used for coloring/styling.
-    random_state : int, default=42
+        Group labels for real samples. Used for styling.
+    groups_generated : pd.Series or None, optional
+        Group labels for generated samples. Used for styling.
+    random_seed : int, default 42
         Random seed for UMAP reproducibility.
-    legend_pos : str, default="best"
-        Legend position ("best", "upper right", "lower left", etc.).
+    legend_pos : str, default ``"best"``
+        Legend position (``"best"``, ``"upper right"``, ``"lower left"``, …).
 
     Returns
     -------
-    None
-        Displays the UMAP plot.
+    Figure
+        The matplotlib Figure containing the UMAP scatter plot.
     """
-
-    if dat_generated is None:
-        # Only plot the real data
-        reducer = UMAP(random_state=random_state)
-        embedding = reducer.fit_transform(dat_real.values)
+    if generated_data is None:
+        reducer = UMAP(random_state=random_seed)
+        embedding = reducer.fit_transform(real_data.values)
 
         umap_df = pd.DataFrame(embedding, columns=["UMAP1", "UMAP2"])
 
-        plt.figure(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(10, 8))
         if groups_real is not None:
-            umap_df["Group"] = groups_real.astype(
-                str
-            )  # Ensure groups are hashable for seaborn
+            umap_df["Group"] = groups_real.astype(str).values
             sns.scatterplot(
-                data=umap_df, x="UMAP1", y="UMAP2", style="Group", palette="bright"
+                data=umap_df,
+                x="UMAP1",
+                y="UMAP2",
+                style="Group",
+                palette="bright",
+                ax=ax,
             )
-            plt.legend(title="Group", loc=legend_pos)
-            plt.title("UMAP Projection of Real Data with Groups")
+            ax.legend(title="Group", loc=legend_pos)
+            ax.set_title("UMAP Projection of Real Data with Groups")
         else:
-            plt.scatter(umap_df["UMAP1"], umap_df["UMAP2"], alpha=0.7)
-            plt.title("UMAP Projection of Real Data")
+            ax.scatter(umap_df["UMAP1"], umap_df["UMAP2"], alpha=0.7)
+            ax.set_title("UMAP Projection of Real Data")
 
-        plt.show()
-        return
+        return fig
 
-    # If dat_generated is provided, we process both real and generated data
     # Filter out features with zero variance in generated data
-    non_zero_var_cols = dat_generated.var(axis=0) != 0
-
-    # Use loc to filter columns by the non_zero_var_cols boolean mask
-    dat_real = dat_real.loc[:, non_zero_var_cols]
-    dat_generated = dat_generated.loc[:, non_zero_var_cols]
+    non_zero_var_cols = generated_data.var(axis=0) != 0
+    real_filtered = real_data.loc[:, non_zero_var_cols]
+    gen_filtered = generated_data.loc[:, non_zero_var_cols]
 
     # Combine datasets
-    combined_data = np.vstack((dat_real.values, dat_generated.values))
+    combined_data = np.vstack((real_filtered.values, gen_filtered.values))
     combined_labels = np.array(
-        ["Real"] * dat_real.shape[0] + ["Generated"] * dat_generated.shape[0]
+        ["Real"] * real_filtered.shape[0] + ["Generated"] * gen_filtered.shape[0]
     )
 
-    # UMAP dimensionality reduction
-    reducer = UMAP(random_state=random_state)
+    reducer = UMAP(random_state=random_seed)
     embedding = reducer.fit_transform(combined_data)
 
     umap_df = pd.DataFrame(embedding, columns=["UMAP1", "UMAP2"])
     umap_df["Data Type"] = combined_labels
 
-    plt.figure(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 8))
 
     if groups_real is not None and groups_generated is not None:
-        # If group information is available, use it for coloring
-        combined_groups = np.concatenate((groups_real, groups_generated))
         combined_groups = [
-            str(group) for group in combined_groups
-        ]  # Convert groups to string if not already
+            str(g) for g in np.concatenate((groups_real, groups_generated))
+        ]
         umap_df["Group"] = combined_groups
         sns.scatterplot(
             data=umap_df,
@@ -164,124 +164,142 @@ def UMAP_eval(
             hue="Data Type",
             style="Group",
             palette="bright",
+            ax=ax,
         )
-        plt.legend(title="Data Type/Group", loc="best")
-        plt.title("UMAP Projection of Real and Generated Data with Groups")
-
+        ax.legend(title="Data Type / Group", loc=legend_pos)
+        ax.set_title("UMAP Projection of Real and Generated Data with Groups")
     else:
-        # If no group information, just plot real vs. generated data
         sns.scatterplot(
-            data=umap_df, x="UMAP1", y="UMAP2", hue="Data Type", palette="bright"
+            data=umap_df,
+            x="UMAP1",
+            y="UMAP2",
+            hue="Data Type",
+            palette="bright",
+            ax=ax,
         )
-        plt.legend(title="Data Type", loc="best")
-        plt.title("UMAP Projection of Real and Generated Data")
+        ax.legend(title="Data Type", loc=legend_pos)
+        ax.set_title("UMAP Projection of Real and Generated Data")
 
-    plt.show()
+    return fig
 
 
 def evaluation(
-    generated_input: str = "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.csv",
-    real_input: str = "BRCASubtypeSel_test.csv",
-    data_dir: Optional[Union[str, Path]] = None,
-) -> None:
-    r"""
-    Preprocessing and visualization of generated vs real data.
+    real_data: pd.DataFrame | str | Path,
+    generated_data: pd.DataFrame | str | Path,
+    *,
+    group_names: list[str] | None = None,
+    n_samples: int | None = 200,
+    apply_log: bool = True,
+    random_seed: int = 42,
+) -> dict[str, Figure]:
+    r"""Preprocessing and visualization of generated vs real data.
 
-    This method preprocesses the input data and creates visualizations
-    comparing generated and real datasets using heatmaps and UMAP plots.
+    Loads and preprocesses the input data, then creates heatmap and UMAP
+    visualizations comparing generated and real datasets.
 
     Parameters
     ----------
-    generated_input : str
-        Filename of the generated dataset. A default example is provided.
-    real_input : str
-        Filename of the real original dataset. A default example is provided.
-    data_dir : str, Path, or None
-        Directory containing the data files. If None, tries bundled package data.
+    real_data : pd.DataFrame, str, or Path
+        The original/real dataset. Accepts a DataFrame, a file path, or
+        a bundled dataset name (resolved via :func:`resolve_data`).
+    generated_data : pd.DataFrame, str, or Path
+        The generated/synthetic dataset. Same input types as *real_data*.
+    group_names : list of str or None, optional
+        Human-readable names for binary groups.  Must have exactly two
+        elements ``[name_for_0, name_for_1]``.  If ``None``, groups are
+        labelled ``"Group 0"`` and ``"Group 1"`` when a ``"groups"`` column
+        is present, or group information is skipped entirely.
+    n_samples : int or None, default 200
+        Number of samples from each end of the dataset to use for
+        visualization (to keep UMAP fast).  If ``None``, all samples are
+        used.
+    apply_log : bool, default True
+        Whether to apply ``log2(x + 1)`` transformation to the real data.
+    random_seed : int, default 42
+        Random seed for UMAP reproducibility.
 
     Returns
     -------
-    None
-        Displays visualization plots.
+    dict[str, Figure]
+        ``{"heatmap": <Figure>, "umap": <Figure>}`` — the two evaluation
+        figures.  Neither figure has been displayed; the caller decides
+        when to call ``plt.show()`` or ``fig.savefig()``.
     """
-    # Load generated data
-    generated_name = generated_input.replace(".csv", "")
-    if data_dir is not None:
-        generated_path = Path(data_dir) / generated_input
-        if generated_path.exists():
-            generated = pd.read_csv(generated_path, header=0)
-        else:
-            generated = load_dataset(generated_name, data_path=generated_path)
-    else:
-        try:
-            generated = load_dataset(generated_name)
-        except FileNotFoundError:
-            # Legacy path fallback
-            legacy_path = Path("../Case/BRCASubtype") / generated_input
-            if legacy_path.exists():
-                generated = pd.read_csv(legacy_path, header=0)
-            else:
-                raise FileNotFoundError(
-                    f"Could not find generated data '{generated_input}'. "
-                    f"Specify data_dir parameter."
+    real_df = resolve_data(real_data)
+    gen_df = resolve_data(generated_data)
+
+    # --- Derive group labels ------------------------------------------------
+    groups_real: pd.Series | None = None
+    groups_generated: pd.Series | None = None
+
+    has_groups_col = "groups" in real_df.columns
+
+    if has_groups_col:
+        raw_groups = real_df["groups"]
+        unique_groups = sorted(raw_groups.unique())
+
+        if group_names is not None:
+            if len(group_names) != 2:
+                raise ValueError(
+                    f"group_names must have exactly 2 elements, got {len(group_names)}"
                 )
-
-    # Load real data
-    real_name = real_input.replace(".csv", "")
-    if data_dir is not None:
-        real_path = Path(data_dir) / real_input
-        if real_path.exists():
-            real = pd.read_csv(real_path, header=0)
+            mapping = {unique_groups[0]: group_names[0]}
+            for g in unique_groups[1:]:
+                mapping[g] = group_names[1]
         else:
-            real = load_dataset(real_name, data_path=real_path)
+            mapping = {unique_groups[0]: "Group 0"}
+            for g in unique_groups[1:]:
+                mapping[g] = "Group 1"
+
+        groups_real = raw_groups.map(mapping)
+
+        # Generated data: last column is often the numeric group label
+        gen_label_col = gen_df.iloc[:, -1]
+        if set(gen_label_col.unique()) <= {0, 1}:
+            label_names = {0: mapping[unique_groups[0]], 1: list(mapping.values())[-1]}
+            groups_generated = gen_label_col.map(
+                lambda v, ln=label_names: ln.get(int(v), str(v))  # noqa: B023
+            )
+
+    # --- Prepare numeric matrices -------------------------------------------
+    real_numeric = real_df.select_dtypes(include=[np.number])
+    if apply_log:
+        real_numeric = np.log2(real_numeric + 1)
+
+    gen_numeric = gen_df.iloc[:, : real_numeric.shape[1]].copy()
+    gen_numeric.columns = real_numeric.columns
+
+    # --- Sub-sample for speed -----------------------------------------------
+    if n_samples is not None and n_samples < len(real_numeric):
+        n = min(n_samples, len(real_numeric) // 2)
+        real_idx = list(range(n)) + list(
+            range(len(real_numeric) - n, len(real_numeric))
+        )
     else:
-        try:
-            real = load_dataset(real_name)
-        except FileNotFoundError:
-            # Legacy path fallback
-            legacy_path = Path("../Case/BRCASubtype") / real_input
-            if legacy_path.exists():
-                real = pd.read_csv(legacy_path, header=0)
-            else:
-                raise FileNotFoundError(
-                    f"Could not find real data '{real_input}'. "
-                    f"Specify data_dir parameter."
-                )
+        real_idx = list(range(len(real_numeric)))
 
-    # Define the default group level
-    level0 = real["groups"].iloc[0]
-    level1 = list(set(real["groups"]) - set([level0]))
+    if n_samples is not None and n_samples < len(gen_numeric):
+        n = min(n_samples, len(gen_numeric) // 2)
+        gen_idx = list(range(n)) + list(range(len(gen_numeric) - n, len(gen_numeric)))
+    else:
+        gen_idx = list(range(len(gen_numeric)))
 
-    # Get sample groups
-    groups_real = pd.Series(
-        np.where(real["groups"] == "Infiltrating Ductal Carcinoma", "Ductal", "Lobular")
+    real_sub = real_numeric.iloc[real_idx]
+    gen_sub = gen_numeric.iloc[gen_idx]
+
+    groups_real_sub = groups_real.iloc[real_idx] if groups_real is not None else None
+    groups_gen_sub = (
+        groups_generated.iloc[gen_idx] if groups_generated is not None else None
     )
 
-    groups_generated = pd.Series(
-        np.where(generated.iloc[:, -1] == 1, "Ductal", "Lobular")
+    # --- Produce figures ----------------------------------------------------
+    fig_heatmap = heatmap_eval(real_data=real_sub, generated_data=gen_sub)
+    fig_umap = UMAP_eval(
+        real_data=real_sub,
+        generated_data=gen_sub,
+        groups_real=groups_real_sub,
+        groups_generated=groups_gen_sub,
+        random_seed=random_seed,
     )
 
-    # Get pure data matrices
-    real = real.select_dtypes(include=[np.number])
-    real = np.log2(real + 1)
-    generated = generated.iloc[:, : real.shape[1]]
-    generated.columns = real.columns
-
-    # Select samples for analysis to save running time
-    real_ind = list(range(200)) + list(range(len(real) - 200, len(real)))
-    generated_ind = list(range(200)) + list(range(len(generated) - 200, len(generated)))
-
-    # Call evaluation functions
-    h_subtypes = heatmap_eval(
-        dat_real=real.iloc[real_ind,], dat_generated=generated.iloc[generated_ind,]
-    )
-    p_umap_subtypes = UMAP_eval(
-        dat_real=real.iloc[real_ind,],
-        dat_generated=generated.iloc[generated_ind,],
-        groups_real=groups_real.iloc[real_ind],
-        groups_generated=groups_generated.iloc[generated_ind],
-        legend_pos="bottom",
-    )
-
-
-# evaluation()
+    return {"heatmap": fig_heatmap, "umap": fig_umap}

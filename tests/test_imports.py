@@ -33,22 +33,16 @@ class TestPackageImports:
         assert __license__ is not None
 
     def test_import_experiment_functions(self):
-        """Test main experiment functions are importable."""
-        from syng_bts import PilotExperiment, ApplyExperiment, TransferExperiment
+        """Test new experiment functions are importable."""
+        from syng_bts import generate, pilot_study, transfer
 
-        assert callable(PilotExperiment)
-        assert callable(ApplyExperiment)
-        assert callable(TransferExperiment)
-
-    def test_import_transfer_alias(self):
-        """Test Transfer alias for backward compatibility."""
-        from syng_bts import Transfer, TransferExperiment
-
-        assert Transfer is TransferExperiment
+        assert callable(generate)
+        assert callable(pilot_study)
+        assert callable(transfer)
 
     def test_import_evaluation_functions(self):
         """Test evaluation functions are importable."""
-        from syng_bts import heatmap_eval, UMAP_eval, evaluation
+        from syng_bts import UMAP_eval, evaluation, heatmap_eval
 
         assert callable(heatmap_eval)
         assert callable(UMAP_eval)
@@ -57,25 +51,34 @@ class TestPackageImports:
     def test_import_data_utils(self):
         """Test data utility functions are importable."""
         from syng_bts import (
-            load_dataset,
-            list_bundled_datasets,
-            set_default_output_dir,
+            derive_dataname,
             get_output_dir,
+            list_bundled_datasets,
+            resolve_data,
+            set_default_output_dir,
         )
 
-        assert callable(load_dataset)
         assert callable(list_bundled_datasets)
         assert callable(set_default_output_dir)
         assert callable(get_output_dir)
+        assert callable(resolve_data)
+        assert callable(derive_dataname)
 
     def test_import_model_classes(self):
         """Test model classes are importable."""
-        from syng_bts import AE, VAE, CVAE, GAN
+        from syng_bts import AE, CVAE, GAN, VAE
 
         assert AE is not None
         assert VAE is not None
         assert CVAE is not None
         assert GAN is not None
+
+    def test_import_result_objects(self):
+        """Test result objects are importable."""
+        from syng_bts import PilotResult, SyngResult
+
+        assert SyngResult is not None
+        assert PilotResult is not None
 
     def test_all_exports(self):
         """Test __all__ contains expected exports."""
@@ -83,10 +86,9 @@ class TestPackageImports:
 
         expected = [
             "__version__",
-            "PilotExperiment",
-            "ApplyExperiment",
-            "TransferExperiment",
-            "Transfer",
+            "generate",
+            "pilot_study",
+            "transfer",
             "heatmap_eval",
             "UMAP_eval",
             "evaluation",
@@ -94,14 +96,47 @@ class TestPackageImports:
             "VAE",
             "CVAE",
             "GAN",
-            "load_dataset",
             "list_bundled_datasets",
             "set_default_output_dir",
             "get_output_dir",
+            "resolve_data",
+            "derive_dataname",
+            "SyngResult",
+            "PilotResult",
         ]
 
         for name in expected:
             assert name in syng_bts.__all__, f"{name} not in __all__"
+
+    def test_legacy_names_removed(self):
+        """Verify that legacy names are no longer exported."""
+        import syng_bts
+
+        for name in [
+            "PilotExperiment",
+            "ApplyExperiment",
+            "TransferExperiment",
+            "Transfer",
+            "load_dataset",
+        ]:
+            assert name not in syng_bts.__all__, f"{name} should not be in __all__"
+
+    def test_legacy_import_raises(self):
+        """Importing removed legacy names should fail."""
+        with pytest.raises(ImportError):
+            from syng_bts import PilotExperiment  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import ApplyExperiment  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import TransferExperiment  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import Transfer  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import load_dataset  # noqa: F401
 
 
 class TestDynamicVersion:

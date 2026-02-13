@@ -1,7 +1,7 @@
 API Reference
 =============
 
-This page documents the complete public API of SyNG-BTS.
+This page documents the complete public API of SyNG-BTS v3.0.
 
 .. contents:: Table of Contents
    :local:
@@ -10,22 +10,45 @@ This page documents the complete public API of SyNG-BTS.
 Experiment Functions
 --------------------
 
-These are the main functions for running data augmentation experiments.
+These are the main entry points for training generative models and
+producing synthetic data. All three functions accept data as a pandas
+DataFrame, a CSV file path, or a bundled dataset name, and return rich
+result objects.
 
-PilotExperiment
-~~~~~~~~~~~~~~~
+generate
+~~~~~~~~
 
-.. autofunction:: syng_bts.PilotExperiment
+.. autofunction:: syng_bts.generate
 
-ApplyExperiment
-~~~~~~~~~~~~~~~
+pilot_study
+~~~~~~~~~~~
 
-.. autofunction:: syng_bts.ApplyExperiment
+.. autofunction:: syng_bts.pilot_study
 
-TransferExperiment
-~~~~~~~~~~~~~~~~~~
+transfer
+~~~~~~~~
 
-.. autofunction:: syng_bts.TransferExperiment
+.. autofunction:: syng_bts.transfer
+
+Result Objects
+--------------
+
+Experiment functions return result objects that carry generated data,
+loss logs, reconstructed data, and model state as attributes.
+
+SyngResult
+~~~~~~~~~~
+
+.. autoclass:: syng_bts.SyngResult
+   :members:
+   :exclude-members: __init__, generated_data, loss, reconstructed_data, model_state, metadata
+
+PilotResult
+~~~~~~~~~~~
+
+.. autoclass:: syng_bts.PilotResult
+   :members:
+   :exclude-members: __init__, runs, metadata
 
 Evaluation Functions
 --------------------
@@ -52,10 +75,15 @@ Data Utilities
 
 Functions for loading and managing datasets.
 
-load_dataset
+resolve_data
 ~~~~~~~~~~~~
 
-.. autofunction:: syng_bts.load_dataset
+.. autofunction:: syng_bts.resolve_data
+
+derive_dataname
+~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.derive_dataname
 
 list_bundled_datasets
 ~~~~~~~~~~~~~~~~~~~~~
@@ -79,7 +107,7 @@ Advanced users can access the model classes directly.
 
 .. note::
    These classes are for advanced usage. Most users should use the
-   experiment functions (``PilotExperiment``, ``ApplyExperiment``, etc.)
+   experiment functions (``generate``, ``pilot_study``, ``transfer``)
    which handle model creation and training automatically.
 
 AE (Autoencoder)

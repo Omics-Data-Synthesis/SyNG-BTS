@@ -1,196 +1,578 @@
-# -*- coding: utf-8 -*-
+"""Experiment functions for SyNG-BTS.
 
-# %% Import libraries
-import torch
-import pandas as pd
-import seaborn as sns
-import numpy as np
-from pathlib import Path
-from typing import Optional, Union, List
-from .helper_utils import *
-from .helper_training import *
-from .data_utils import load_dataset, get_output_path, ensure_dir
+Public API
+----------
+- ``generate()`` — train a model and produce synthetic samples.
+- ``pilot_study()`` — sweep over pilot sizes with replicated draws.
+- ``transfer()`` — pre-train on source, fine-tune on target.
+"""
+
+from __future__ import annotations
+
 import re
+from pathlib import Path
 
-sns.set()
+import numpy as np
+import pandas as pd
+import torch
+
+from .data_utils import derive_dataname, resolve_data
+from .helper_train import _resolve_verbose
+from .helper_training import (
+    training_AEs,
+    training_flows,
+    training_GANs,
+    training_iter,
+)
+from .helper_utils import (
+    Gaussian_aug,
+    create_labels,
+    draw_pilot,
+    preprocessinglog2,
+)
+from .result import PilotResult, SyngResult
+
+# =========================================================================
+# Private helpers
+# =========================================================================
 
 
-# %% Define pilot experiments functions
-def PilotExperiment(
-    dataname: str,
-    pilot_size: List[int],
-    model: str,
-    batch_frac: float,
-    learning_rate: float,
-    epoch: Optional[int] = None,
-    early_stop_num: int = 30,
-    off_aug: Optional[str] = None,
-    AE_head_num: int = 2,
-    Gaussian_head_num: int = 9,
-    pre_model: Optional[str] = None,
-    data_dir: Optional[Union[str, Path]] = None,
-    output_dir: Optional[Union[str, Path]] = None,
-) -> None:
-    r"""
-    This function trains VAE or CVAE, or GAN, WGAN, WGANGP, MAF, GLOW, RealNVP with several pilot sizes given data, model, batch_size, learning_rate, epoch, off_aug and pre_model.
-    For each pilot size, there will be 5 random draws from the original dataset.
-    For each draw, the pilot data is served as the input to the model training, and the generated data has sample size equal to 5 times the original sample size.
+def _parse_model_spec(model: str) -> tuple[str, int]:
+    """Parse a model string like ``'VAE1-10'`` into (modelname, kl_weight).
+
+    Returns
+    -------
+    tuple[str, int]
+        ``(modelname, kl_weight)`` — e.g. ``("VAE", 10)``.
+    """
+    parts = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)
+    if len(parts) > 1:
+        return parts[1], int(parts[4])
+    return model, 1
+
+
+def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
+    """Convert a raw log_dict from a training helper into a tidy DataFrame.
 
     Parameters
     ----------
-    dataname : string
-        pure data name without .csv. Eg: SKCMPositive_4
-    pilot_size : list
-        a list including potential pilot sizes
-    model : string
-        name of the model to be trained
-    batch_frac : float
-        batch fraction
-    learning_rate : float
-        learning rate
-    epoch : int
-                            choose from None (early_stop), or any integer, if choose None, early_stop_num will take effect
-    early_stop_num : int
-        if loss does not improve for early_stop_num epochs, the training will stop. Default value is 30. Only take effect when epoch == “None”
-    off_aug : string (AE_head or Gaussian_head or None)
-        choose from AE_head, Gaussian_head, None. if choose AE_head, AE_head_num will take effect. If choose Gaussian_head, Gaussian_head_num will take effect. If choose None, no offline augmentation
-    AE_head_num : int
-        how many folds of AEhead augmentation needed. Default value is 2, Only take effect when off_aug == "AE_head"
-    Gaussian_head_num : int
-        how many folds of Gaussianhead augmentation needed. Default value is 9, Only take effect when off_aug == "Gaussian_head"
-    pre_model : string
-        transfer learning input model. If pre_model == None, no transfer learning
-    data_dir : str, Path, or None
-        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
-    output_dir : str, Path, or None
-        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+    log_dict : dict
+        Raw loss series as returned by ``TrainOutput.log_dict``.
+    modelname : str
+        The short model name (``"AE"``, ``"VAE"``, ``"CVAE"``, ``"GAN"``,
+        ``"WGAN"``, ``"WGANGP"``, ``"maf"``, ``"glow"``, ``"realnvp"``, etc.).
 
+    Returns
+    -------
+    pd.DataFrame
     """
-    # Set up output directory
-    if output_dir is not None:
-        output_dir = Path(output_dir)
-    else:
-        output_dir = Path.cwd()
+    if modelname == "AE":
+        # AE logs total loss only (no KL/reconstruction split)
+        return pd.DataFrame(
+            {
+                "train_loss": log_dict.get("train_loss_per_batch", []),
+                "val_loss": log_dict.get("val_loss_per_batch", []),
+            }
+        )
+    if modelname in ("VAE", "CVAE"):
+        return pd.DataFrame(
+            {
+                "kl": log_dict.get(
+                    "val_kl_loss_per_batch",
+                    log_dict.get("train_kl_loss_per_batch", []),
+                ),
+                "recons": log_dict.get(
+                    "val_reconstruction_loss_per_batch",
+                    log_dict.get("train_reconstruction_loss_per_batch", []),
+                ),
+            }
+        )
+    if "GAN" in modelname:
+        return pd.DataFrame(
+            {
+                "discriminator": log_dict["train_discriminator_loss_per_batch"],
+                "generator": log_dict["train_generator_loss_per_batch"],
+            }
+        )
+    # Flows — per-epoch loss
+    return pd.DataFrame({"train_loss": log_dict["train_loss_per_epoch"]})
 
-    # Read in data
-    data_path = None
-    if data_dir is not None:
-        data_path = Path(data_dir) / f"{dataname}.csv"
 
-    try:
-        # Try loading from specified path or bundled data
-        df = load_dataset(dataname, data_path=data_path)
-        print(f"1. Read data: {dataname}")
-    except FileNotFoundError:
-        # Fallback to legacy path for backward compatibility
-        legacy_path = Path("../RealData") / f"{dataname}.csv"
-        if legacy_path.exists():
-            df = pd.read_csv(legacy_path, header=0)
-            print(f"1. Read data, path is {legacy_path}")
-        else:
-            raise FileNotFoundError(
-                f"Could not find dataset '{dataname}'. "
-                f"Specify data_dir or ensure the file exists."
+def _compute_new_size(
+    orilabels: torch.Tensor,
+    n_samples: int,
+    new_size: int | list[int],
+    repli: int = 5,
+) -> int | list[int]:
+    """Compute the generation size, honouring group balance.
+
+    For a simple (single-group) dataset the returned value is just
+    *new_size* as-is.  For a two-group dataset where the groups are
+    unbalanced and *new_size* is not already a list, returns
+    ``[n_class_0, n_class_1, repli]``.
+    """
+    if isinstance(new_size, list):
+        return new_size
+    if (len(torch.unique(orilabels)) > 1) and (
+        int(sum(orilabels == 0)) != int(sum(orilabels == 1))
+    ):
+        return [int(sum(orilabels == 0)), int(sum(orilabels == 1)), repli]
+    return new_size
+
+
+def _resolve_early_stopping_config(
+    epoch: int | None,
+    early_stop_patience: int | None,
+    default_max_epochs: int = 1000,
+    default_patience: int = 30,
+) -> tuple[int, bool, int]:
+    """Resolve epoch count and early stopping configuration.
+
+    Parameters
+    ----------
+    epoch : int or None
+        User-specified fixed epoch count.
+    early_stop_patience : int or None
+        User-specified early stopping patience.
+    default_max_epochs : int
+        Default maximum epochs when early stopping is enabled.
+    default_patience : int
+        Default patience when early stopping is enabled but patience not specified.
+
+    Returns
+    -------
+    tuple[int, bool, int]
+        ``(num_epochs, early_stop, early_stop_num)`` where:
+        - ``num_epochs`` is the maximum epoch count to run
+        - ``early_stop`` is whether early stopping is enabled
+        - ``early_stop_num`` is the patience value to use
+    """
+    if epoch is not None:
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0:
+            raise ValueError(f"epoch must be a positive integer or None, got {epoch!r}")
+
+    if early_stop_patience is not None:
+        if (
+            isinstance(early_stop_patience, bool)
+            or not isinstance(early_stop_patience, int)
+            or early_stop_patience <= 0
+        ):
+            raise ValueError(
+                "early_stop_patience must be a positive integer or None, "
+                f"got {early_stop_patience!r}"
             )
 
-    dat_pd = df
-    data_pd = dat_pd.select_dtypes(include=np.number)
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
-    colnames = data_pd.columns
+    if epoch is not None and early_stop_patience is not None:
+        # Both provided: run up to `epoch` epochs with early stopping
+        return epoch, True, early_stop_patience
+    elif epoch is not None:
+        # Only epoch: run exactly that many epochs, no early stopping
+        return epoch, False, default_patience
+    elif early_stop_patience is not None:
+        # Only patience: early stop with default max epochs
+        return default_max_epochs, True, early_stop_patience
+    else:
+        # Neither: default early stopping with default patience
+        return default_max_epochs, True, default_patience
 
-    # log2 transformation
+
+# =========================================================================
+# New public API
+# =========================================================================
+
+
+def generate(
+    data: pd.DataFrame | str | Path,
+    *,
+    name: str | None = None,
+    new_size: int | list[int] = 500,
+    model: str = "VAE1-10",
+    apply_log: bool = True,
+    batch_frac: float = 0.1,
+    learning_rate: float = 0.0005,
+    epoch: int | None = None,
+    val_ratio: float = 0.2,
+    early_stop_patience: int | None = None,
+    off_aug: str | None = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    pre_model: str | None = None,
+    save_model: str | None = None,
+    use_scheduler: bool = False,
+    step_size: int = 10,
+    gamma: float = 0.5,
+    cap: bool = False,
+    random_seed: int = 123,
+    output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
+) -> SyngResult:
+    """Train a deep generative model and generate synthetic data.
+
+    This is the primary entry point for training a single model and
+    generating synthetic samples.  It replaces the legacy
+    ``ApplyExperiment`` function.
+
+    Parameters
+    ----------
+    data : DataFrame, str, or Path
+        Input data — a pandas DataFrame, a path to a CSV file, or the
+        name of a bundled dataset (e.g. ``"SKCMPositive_4"``).
+    name : str or None
+        Short name for output filenames.  Derived automatically when
+        ``None``.
+    new_size : int or list[int]
+        Number of synthetic samples to generate.
+    model : str
+        Model specification, e.g. ``"VAE1-10"`` (parsed into model type
+        and kl_weight).
+    apply_log : bool
+        Apply ``log2(x + 1)`` preprocessing.
+    batch_frac : float
+        Batch size as a fraction of sample count.
+    learning_rate : float
+        Optimizer learning rate.
+    epoch : int or None
+        Fixed epoch count, or ``None`` for early stopping.
+
+        The interaction between *epoch* and *early_stop_patience*:
+
+        ===========  =======================  ==================================================
+        ``epoch``    ``early_stop_patience``  Behaviour
+        ===========  =======================  ==================================================
+        ``None``     ``None``                 Early stopping ON, patience=30, max 1 000 epochs
+        ``None``     ``30``                   Early stopping ON, patience=30, max 1 000 epochs
+        ``500``      ``None``                 Early stopping OFF, run exactly 500 epochs
+        ``500``      ``30``                   Early stopping ON, patience=30, max 500 epochs
+        ===========  =======================  ==================================================
+    val_ratio : float
+        Validation split ratio (AE family only).
+    early_stop_patience : int or None
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.
+    off_aug : str or None
+        Offline augmentation: ``"AE_head"``, ``"Gaussian_head"``, or
+        ``None``.
+    AE_head_num : int
+        Fold multiplier for AE-head augmentation.
+    Gaussian_head_num : int
+        Fold multiplier for Gaussian-head augmentation.
+    pre_model : str or None
+        Path to a pre-trained model for transfer learning.
+    save_model : str or None
+        Path to save the trained model state.
+    use_scheduler : bool
+        Enable learning-rate scheduler (AE family).
+    step_size : int
+        Scheduler step size.
+    gamma : float
+        Scheduler gamma.
+    cap : bool
+        Cap generated values to observed range.
+    random_seed : int
+        Random seed for reproducibility.
+    output_dir : str, Path, or None
+        If set, automatically save results to this directory.
+    verbose : int or str
+        Verbosity level for training output.
+
+        - ``"silent"`` or ``0``  — no output during training.
+        - ``"minimal"`` or ``1`` (default) — print only training
+          summaries and early-stopping messages.
+        - ``"detailed"`` or ``2`` — print per-epoch progress
+          (epoch number, loss values, elapsed time, learning rate).
+
+    Returns
+    -------
+    SyngResult
+        Rich result object containing generated data, loss log,
+        reconstructed data (AE/VAE/CVAE), model state, and metadata.
+    """
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
+
+    # --- 1. Resolve data -------------------------------------------------
+    df = resolve_data(data)
+    dataname = derive_dataname(data, name)
+
+    # --- 2. Extract numeric data, capture column names -------------------
+    data_pd = df.select_dtypes(include=np.number)
+    if "groups" in data_pd.columns:
+        data_pd = data_pd.drop(columns=["groups"])
+    colnames = list(data_pd.columns)
+    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
+
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
+
+    n_samples = oridata.shape[0]
+
+    # --- 3. Labels -------------------------------------------------------
+    groups = df["groups"] if "groups" in df.columns else None
+    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+
+    # --- 4. Parse model spec ---------------------------------------------
+    modelname, kl_weight = _parse_model_spec(model)
+
+    # --- 5. Epoch / early-stopping logic ---------------------------------
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
+
+    # --- 6. Prepare raw data & labels ------------------------------------
+    rawdata = oridata
+    rawlabels = orilabels
+
+    # For training two groups without CVAE, append blurred labels
+    if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
+        rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
+
+    # --- 7. Compute new_size (group-balanced if needed) ------------------
+    effective_new_size = _compute_new_size(orilabels, n_samples, new_size)
+
+    # --- 8. Offline augmentation -----------------------------------------
+    if off_aug == "Gaussian_head":
+        rawdata, rawlabels = Gaussian_aug(
+            rawdata, rawlabels, multiplier=[Gaussian_head_num]
+        )
+    elif off_aug == "AE_head":
+        feed_data, feed_labels = training_iter(
+            iter_times=AE_head_num,
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            random_seed=random_seed,
+            modelname="AE",
+            num_epochs=1000,
+            batch_size=round(rawdata.shape[0] * 0.1),
+            learning_rate=0.0005,
+            early_stop=False,
+            early_stop_num=30,
+            kl_weight=1,
+            loss_fn="MSE",
+            replace=True,
+            verbose=verbose_level,
+        )
+        rawdata = feed_data
+        rawlabels = feed_labels
+
+    # --- 9. Train --------------------------------------------------------
+    batch_size = max(1, round(rawdata.shape[0] * batch_frac))
+
+    if "GAN" in modelname:
+        train_out = training_GANs(
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            new_size=effective_new_size,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            verbose=verbose_level,
+        )
+    elif "AE" in modelname:
+        train_out = training_AEs(
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            val_ratio=val_ratio,
+            kl_weight=kl_weight,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            cap=cap,
+            loss_fn="MSE",
+            new_size=effective_new_size,
+            use_scheduler=use_scheduler,
+            step_size=step_size,
+            gamma=gamma,
+            verbose=verbose_level,
+        )
+    elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
+        train_out = training_flows(
+            rawdata=rawdata,
+            batch_frac=batch_frac,
+            valid_batch_frac=0.3,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_blocks=5,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            new_size=effective_new_size,
+            num_hidden=226,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            verbose=verbose_level,
+        )
+    else:
+        raise ValueError(f"Unsupported model: {model!r}")
+
+    # --- 10. Assemble SyngResult -----------------------------------------
+    gen_np = train_out.generated_data.detach().numpy()
+
+    # For CVAE, add label column name
+    gen_colnames = list(colnames)
+    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        gen_colnames = gen_colnames + ["label"]
+
+    gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
+
+    recon_df = None
+    if train_out.reconstructed_data is not None:
+        recon_np = train_out.reconstructed_data.detach().numpy()
+
+        # For CVAE, add label column name
+        recon_colnames = list(colnames)
+        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+            recon_colnames = recon_colnames + ["label"]
+
+        recon_df = pd.DataFrame(recon_np, columns=recon_colnames[: recon_np.shape[1]])
+
+    loss_df = _build_loss_df(train_out.log_dict, modelname)
+
+    metadata = {
+        "model": model,
+        "modelname": modelname,
+        "dataname": dataname,
+        "num_epochs": num_epochs,
+        "epochs_trained": train_out.epochs_trained,
+        "seed": random_seed,
+        "kl_weight": kl_weight,
+        "input_shape": (n_samples, len(colnames)),
+        "early_stop": early_stop,
+        "early_stop_patience": early_stop_num,
+    }
+
+    result = SyngResult(
+        generated_data=gen_df,
+        loss=loss_df,
+        reconstructed_data=recon_df,
+        model_state=train_out.model_state,
+        metadata=metadata,
+    )
+
+    if output_dir is not None:
+        result.save(output_dir)
+
+    return result
+
+
+def pilot_study(
+    data: pd.DataFrame | str | Path,
+    pilot_size: list[int],
+    *,
+    name: str | None = None,
+    model: str = "VAE1-10",
+    batch_frac: float = 0.1,
+    learning_rate: float = 0.0005,
+    epoch: int | None = None,
+    early_stop_patience: int | None = None,
+    off_aug: str | None = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    pre_model: str | None = None,
+    random_seed: int = 123,
+    output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
+) -> PilotResult:
+    """Sweep over pilot sizes with replicated random draws.
+
+    For each pilot size, five random sub-samples are drawn from the
+    original data.  A model is trained on each sub-sample and synthetic
+    data equal to five times the sub-sample size is generated.
+
+    This replaces the legacy ``PilotExperiment`` function.
+
+    Parameters
+    ----------
+    data : DataFrame, str, or Path
+        Input data.
+    pilot_size : list[int]
+        List of pilot sizes to evaluate.
+    name : str or None
+        Short name for output filenames.
+    model : str
+        Model specification (e.g. ``"VAE1-10"``).
+    batch_frac : float
+        Batch size as a fraction of sample count.
+    learning_rate : float
+        Optimizer learning rate.
+    epoch : int or None
+        Fixed epoch count or ``None`` for early stopping.  See
+        :func:`generate` for the full interaction table.
+    early_stop_patience : int or None
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.  See
+        :func:`generate` for the full interaction table.
+    off_aug : str or None
+        Offline augmentation mode.
+    AE_head_num : int
+        Fold multiplier for AE-head augmentation.
+    Gaussian_head_num : int
+        Fold multiplier for Gaussian-head augmentation.
+    pre_model : str or None
+        Path to a pre-trained model for transfer learning.
+    random_seed : int
+        Base random seed for reproducibility.
+    output_dir : str, Path, or None
+        If set, automatically save results to this directory.
+    verbose : int or str
+        Verbosity level — see :func:`generate` for details.
+
+    Returns
+    -------
+    PilotResult
+        Wrapper containing one ``SyngResult`` per (pilot_size, draw).
+    """
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
+
+    # --- 1. Resolve data -------------------------------------------------
+    df = resolve_data(data)
+    dataname = derive_dataname(data, name)
+
+    data_pd = df.select_dtypes(include=np.number)
+    if "groups" in data_pd.columns:
+        data_pd = data_pd.drop(columns=["groups"])
+    colnames = list(data_pd.columns)
+    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
     oridata = preprocessinglog2(oridata)
     n_samples = oridata.shape[0]
 
-    # get group information if there is or is not
-    if "groups" in dat_pd.columns:
-        groups = dat_pd["groups"]
-    else:
-        groups = None
-
-    # create 0-1 labels, this function use the first element in groups as 0.
-    # also create blurlabels.
+    groups = df["groups"] if "groups" in df.columns else None
     orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
 
-    # get model name and kl_weight if modelname is some autoencoder
-    if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
-        kl_weight = int(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[4])
-        modelname = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[1]
-    else:
-        modelname = model
-        kl_weight = 1
+    modelname, kl_weight = _parse_model_spec(model)
 
-    print("2. Determine the model is " + model + " with kl-weight = " + str(kl_weight))
-
-    # decide batch fraction in file name
-    model = "batch" + str(batch_frac).replace(".", "") + "_" + model
-
-    # decide epochs
-    if epoch is not None:
-        num_epochs = epoch
-        early_stop = False
-        epoch_info = str(epoch)
-        model = "epoch" + epoch_info + "_" + model
-    else:
-        num_epochs = 1000
-        early_stop = True
-        epoch_info = "early_stop"
-        model = "epochES_" + model
-
-    # decide offline augmentation
-    if off_aug == "AE_head":
-        AE_head = True
-        Gaussian_head = False
-        off_aug_info = off_aug
-    elif off_aug == "Gaussian_head":
-        Gaussian_head = True
-        AE_head = False
-        off_aug_info = off_aug
-    else:
-        AE_head = False
-        Gaussian_head = False
-        off_aug_info = "No"
-
-    print(
-        "3. Determine the training parameters are epoch = "
-        + epoch_info
-        + " off_aug = "
-        + off_aug_info
-        + " learing rate = "
-        + str(learning_rate)
-        + " batch_frac = "
-        + str(batch_frac)
+    # Epoch / early-stopping
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
     )
 
-    random_seed = 123
+    # new_size = 5× pilot (per group if unbalanced)
     repli = 5
 
-    if (len(torch.unique(orilabels)) > 1) & (
-        int(sum(orilabels == 0)) != int(sum(orilabels == 1))
-    ):
-        new_size = [int(sum(orilabels == 0)), int(sum(orilabels == 1)), repli]
-    else:
-        new_size = [repli * n_samples]
+    runs: dict[tuple[int, int], SyngResult] = {}
 
-    if pre_model is not None:
-        model = model + "_transfrom" + re.search(r"from([A-Z]+)_", pre_model).group(1)
-
-    print("4. Pilot experiments start ... ")
     for n_pilot in pilot_size:
-        for rand_pilot in [1, 2, 3, 4, 5]:
-            print(
-                "Training for data="
-                + dataname
-                + ", model="
-                + model
-                + ", pilot size="
-                + str(n_pilot)
-                + ", for "
-                + str(rand_pilot)
-                + "-th draw"
-            )
-
-            # get pilot_size real samples as seeds for DGM. For two cancers, the first n_pilot are from group 0, the second n_pilot are from group 1
+        for rand_pilot in range(1, 6):
+            # Draw pilot sub-sample
             rawdata, rawlabels, rawblurlabels = draw_pilot(
                 dataset=oridata,
                 labels=orilabels,
@@ -199,691 +581,343 @@ def PilotExperiment(
                 seednum=rand_pilot,
             )
 
-            # for training of two cancers without CVAE, we use blurlabels as an additional feature to train
+            # For two groups without CVAE, append blurred labels
             if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
                 rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
 
-            # Build output file names
-            base_name = f"{dataname}_{model}_{n_pilot}_Draw{rand_pilot}.csv"
-            savepath = str(get_output_path(output_dir, "ReconsData", base_name))
-            savepathnew = str(get_output_path(output_dir, "GeneratedData", base_name))
-            losspath = str(get_output_path(output_dir, "Loss", base_name))
+            # new_size for this pilot (group-balanced if needed)
+            if (len(torch.unique(orilabels)) > 1) and (
+                int(sum(orilabels == 0)) != int(sum(orilabels == 1))
+            ):
+                effective_new_size: int | list[int] = [
+                    int(sum(orilabels == 0)),
+                    int(sum(orilabels == 1)),
+                    repli,
+                ]
+            else:
+                effective_new_size = repli * n_pilot
 
-            # whether or not add Gaussian_head augmentation
-            if Gaussian_head:
+            # Gaussian augmentation
+            if off_aug == "Gaussian_head":
                 rawdata, rawlabels = Gaussian_aug(
                     rawdata, rawlabels, multiplier=[Gaussian_head_num]
                 )
-                # Update paths for Gaussian head augmentation
-                gauss_base_name = (
-                    f"{dataname}_Gaussianhead_{model}_{n_pilot}_Draw{rand_pilot}.csv"
-                )
-                savepath = str(
-                    get_output_path(output_dir, "ReconsData", gauss_base_name)
-                )
-                savepathnew = str(
-                    get_output_path(output_dir, "GeneratedData", gauss_base_name)
-                )
-                losspath = str(get_output_path(output_dir, "Loss", gauss_base_name))
-                print("Gaussian head is added.")
 
-            # if AE_head = True, for each pilot size, 2 iterative AE reconstruction will be conducted first
-            # resulting in n_pilot * 4 samples, and the extended samples will be input to the model specified by modelname
-            if AE_head:
-                # Update paths for AE head augmentation
-                ae_base_name = (
-                    f"{dataname}_AEhead_{model}_{n_pilot}_Draw{rand_pilot}.csv"
-                )
-                savepath = str(get_output_path(output_dir, "ReconsData", ae_base_name))
-                savepathnew = str(
-                    get_output_path(output_dir, "GeneratedData", ae_base_name)
-                )
-                savepathextend = str(
-                    get_output_path(output_dir, "ExtendData", ae_base_name)
-                )
-                losspath = str(get_output_path(output_dir, "Loss", ae_base_name))
-                print("AE reconstruction head is added, reconstruction starting ...")
+            # AE head augmentation
+            if off_aug == "AE_head":
                 feed_data, feed_labels = training_iter(
-                    iter_times=AE_head_num,  # how many times to iterative, will get pilot_size * 2^iter_times reconstructed samples
-                    savepathextend=savepathextend,  # save path of the extended dataset
-                    rawdata=rawdata,  # pilot data
-                    rawlabels=rawlabels,  # pilot labels
+                    iter_times=AE_head_num,
+                    rawdata=rawdata,
+                    rawlabels=rawlabels,
                     random_seed=random_seed,
-                    modelname="AE",  # choose from AE, VAE
-                    num_epochs=1000,  # maximum number of epochs if early stop is not triggered, default value for AEhead is 1000
-                    batch_size=round(
-                        rawdata.shape[0] * 0.1
-                    ),  # batch size, note rawdata.shape[0] = n_pilot if no AE_head
-                    learning_rate=0.0005,  # learning rate, default value for AEhead is 0.0005
-                    early_stop=False,  # AEhead by default does not utilize early stopping rule
-                    early_stop_num=30,  # won't take effect since early_stop == False
-                    kl_weight=1,  # only take effect if model name is VAE, default value is 1
-                    loss_fn="MSE",  # only choose WMSE if you know the weights, ow. choose MSE by default
-                    replace=True,  # whether to replace the failure features in each reconstruction
-                    saveextend=False,  # whether to save the extended dataset, if true, savepathextend must be provided
-                    plot=False,
-                )  # whether or not plot the heatmap of extended data
-
+                    modelname="AE",
+                    num_epochs=1000,
+                    batch_size=round(rawdata.shape[0] * 0.1),
+                    learning_rate=0.0005,
+                    early_stop=False,
+                    early_stop_num=30,
+                    kl_weight=1,
+                    loss_fn="MSE",
+                    replace=True,
+                    verbose=verbose_level,
+                )
                 rawdata = feed_data
                 rawlabels = feed_labels
-                print("Reconstruction finish, AE head is added.")
-            # Training
+
+            batch_size = max(1, round(rawdata.shape[0] * batch_frac))
+
+            # Train
             if "GAN" in modelname:
-                log_dict = training_GANs(
-                    savepathnew=savepathnew,  # path to save newly generated samples
-                    rawdata=rawdata,  # raw data matrix with samples in row, features in column
-                    rawlabels=rawlabels,  # labels for each sample, n_samples * 1, will not be used in AE or VAE
-                    batch_size=round(
-                        rawdata.shape[0] * batch_frac
-                    ),  # batch size, note rawdata.shape[0] = n_pilot if no AE_head
+                train_out = training_GANs(
+                    rawdata=rawdata,
+                    rawlabels=rawlabels,
+                    batch_size=batch_size,
                     random_seed=random_seed,
-                    modelname=modelname,  # choose from "GAN","WGAN","WGANGP"
-                    num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
+                    modelname=modelname,
+                    num_epochs=num_epochs,
                     learning_rate=learning_rate,
-                    new_size=new_size,  # how many new samples you want to generate
-                    early_stop=early_stop,  # whether use early stopping rule
-                    early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
-                    pre_model=pre_model,  # load pre-trained model from transfer learning
-                    save_model=None,  # save model for transfer learning, specify the path if want to save model
-                    save_new=True,  # whether to save the newly generated samples
-                    plot=False,
-                )  # whether to plot the heatmaps of reconstructed and newly generated samples with the original ones
-
-                print("GAN model training for one pilot size one draw finished.")
-
-                log_pd = pd.DataFrame(
-                    {
-                        "discriminator": log_dict["train_discriminator_loss_per_batch"],
-                        "generator": log_dict["train_generator_loss_per_batch"],
-                    }
+                    new_size=effective_new_size,
+                    early_stop=early_stop,
+                    early_stop_num=early_stop_num,
+                    pre_model=pre_model,
+                    save_model=None,
+                    verbose=verbose_level,
                 )
-                # Directory is already created by get_output_path
-                log_pd.to_csv(Path(losspath), index=False)
-
             elif "AE" in modelname:
-                log_dict = training_AEs(
-                    savepath=savepath,  # path to save reconstructed samples
-                    savepathnew=savepathnew,  # path to save newly generated samples
-                    rawdata=rawdata,  # raw data tensor with samples in row, features in column
-                    rawlabels=rawlabels,  # abels for each sample, n_samples * 1, will not be used in AE or VAE
-                    colnames=colnames,
-                    batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
+                train_out = training_AEs(
+                    rawdata=rawdata,
+                    rawlabels=rawlabels,
+                    batch_size=batch_size,
                     random_seed=random_seed,
-                    modelname=modelname,  # choose from "VAE", "AE"
-                    num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
+                    modelname=modelname,
+                    num_epochs=num_epochs,
                     learning_rate=learning_rate,
-                    kl_weight=kl_weight,  # only take effect if model name is VAE, default value is
-                    early_stop=early_stop,  # whether use early stopping rule
-                    early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
-                    pre_model=pre_model,  # load pre-trained model from transfer learning
-                    save_model=None,  # save model for transfer learning, specify the path if want to save model
-                    loss_fn="MSE",  # only choose WMSE if you know the weights, ow. choose MSE by default
-                    save_recons=False,  # whether save reconstructed data, if True, savepath must be provided
-                    new_size=new_size,  # how many new samples you want to generate
-                    save_new=True,  # whether save new samples, if True, savepathnew must be provided
-                    plot=False,
-                )  # whether plot reconstructed samples' heatmap
-
-                print("VAEs model training for one pilot size one draw finished.")
-                log_pd = pd.DataFrame(
-                    {
-                        "kl": log_dict["train_kl_loss_per_batch"],
-                        "recons": log_dict["train_reconstruction_loss_per_batch"],
-                    }
+                    kl_weight=kl_weight,
+                    early_stop=early_stop,
+                    early_stop_num=early_stop_num,
+                    pre_model=pre_model,
+                    save_model=None,
+                    loss_fn="MSE",
+                    new_size=effective_new_size,
+                    verbose=verbose_level,
                 )
-                # Directory is already created by get_output_path
-                log_pd.to_csv(Path(losspath), index=False)
-            elif "maf" in modelname:
-                training_flows(
-                    savepathnew=savepathnew,
+            elif modelname in (
+                "maf",
+                "realnvp",
+                "glow",
+                "maf-split",
+                "maf-split-glow",
+            ):
+                train_out = training_flows(
                     rawdata=rawdata,
                     batch_frac=batch_frac,
                     valid_batch_frac=0.3,
                     random_seed=random_seed,
                     modelname=modelname,
                     num_blocks=5,
-                    num_epoches=num_epochs,
+                    num_epochs=num_epochs,
                     learning_rate=learning_rate,
-                    new_size=new_size,
+                    new_size=effective_new_size,
                     num_hidden=226,
-                    early_stop=early_stop,  # whether use early stopping rule
+                    early_stop=early_stop,
                     early_stop_num=early_stop_num,
-                    # stop training if loss does not improve for early_stop_num epochs
-                    pre_model=pre_model,  # load pre-trained model from transfer learning
+                    pre_model=pre_model,
                     save_model=None,
-                    plot=False,
+                    verbose=verbose_level,
                 )
-            elif "realnvp" in modelname:
-                training_flows(
-                    savepathnew=savepathnew,
-                    rawdata=rawdata,
-                    batch_frac=batch_frac,
-                    valid_batch_frac=0.3,
-                    random_seed=random_seed,
-                    modelname=modelname,
-                    num_blocks=5,
-                    num_epoches=num_epochs,
-                    learning_rate=learning_rate,
-                    new_size=new_size,
-                    num_hidden=226,
-                    early_stop=early_stop,  # whether use early stopping rule
-                    early_stop_num=early_stop_num,
-                    # stop training if loss does not improve for early_stop_num epochs
-                    pre_model=pre_model,  # load pre-trained model from transfer learning
-                    save_model=None,
-                    plot=False,
-                )
-
-            elif "glow" in modelname:
-                training_flows(
-                    savepathnew=savepathnew,
-                    rawdata=rawdata,
-                    batch_frac=batch_frac,
-                    valid_batch_frac=0.3,
-                    random_seed=random_seed,
-                    modelname=modelname,
-                    num_blocks=5,
-                    num_epoches=num_epochs,
-                    learning_rate=learning_rate,
-                    new_size=new_size,
-                    num_hidden=226,
-                    early_stop=early_stop,  # whether use early stopping rule
-                    early_stop_num=early_stop_num,
-                    # stop training if loss does not improve for early_stop_num epochs
-                    pre_model=pre_model,  # load pre-trained model from transfer learning
-                    save_model=None,
-                    plot=False,
-                )
-
             else:
-                print("wait for other models")
+                raise ValueError(f"Unsupported model: {model!r}")
 
+            # Assemble SyngResult for this run
+            gen_np = train_out.generated_data.detach().numpy()
 
-# %% Define application of experiment
-def ApplyExperiment(
-    path: Optional[Union[str, Path]] = None,
-    dataname: str = "",
-    apply_log: bool = True,
-    new_size: Union[int, List[int]] = 500,
-    model: str = "VAE1-10",
-    batch_frac: float = 0.1,
-    learning_rate: float = 0.0005,
-    epoch: Optional[int] = None,
-    val_ratio: float = 0.2,
-    early_stop_num: Optional[int] = None,
-    off_aug: Optional[str] = None,
-    AE_head_num: int = 2,
-    Gaussian_head_num: int = 9,
-    pre_model: Optional[str] = None,
-    save_model: Optional[str] = None,
-    use_scheduler: bool = False,
-    step_size: int = 10,
-    gamma: float = 0.5,
-    cap: bool = False,
-    random_seed: int = 123,
-    data_dir: Optional[Union[str, Path]] = None,
-    output_dir: Optional[Union[str, Path]] = None,
-) -> None:
-    r"""
-    Train deep generative models and generate new samples.
+            # For CVAE, add label column name
+            gen_colnames = list(colnames)
+            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+                gen_colnames = gen_colnames + ["label"]
 
-    This function trains VAE, CVAE, GAN, WGAN, WGANGP, MAF, GLOW, or RealNVP
-    given data, model parameters, and generates new samples of specified size.
+            gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
 
-    Parameters
-    ----------
-    path : str or None, default=None
-        DEPRECATED: Use data_dir and output_dir instead.
-        Legacy path for reading real data and saving new data.
-    dataname : str
-        Pure data name without .csv extension. E.g., "BRCASubtypeSel_train"
-    apply_log : bool, default=True
-        Whether to apply log2 transformation before training.
-    new_size : int or list of int
-        Number of generated samples. For CVAE, group sample size is new_size/2.
-    model : str, default="VAE1-10"
-        Name of the model to train.
-    batch_frac : float, default=0.1
-        Batch fraction (proportion of data per batch).
-    learning_rate : float, default=0.0005
-        Learning rate for training.
-    epoch : int or None
-        Number of epochs, or None for early stopping.
-    val_ratio : float, default=0.2
-        Ratio of validation set.
-    early_stop_num : int or None
-        Stop training if loss doesn't improve for this many epochs.
-    off_aug : str or None
-        Offline augmentation: "AE_head", "Gaussian_head", or None.
-    AE_head_num : int, default=2
-        Fold multiplier for AE head augmentation.
-    Gaussian_head_num : int, default=9
-        Fold multiplier for Gaussian head augmentation.
-    pre_model : str or None
-        Path to pre-trained model for transfer learning.
-    save_model : str or None
-        Path to save the trained model.
-    use_scheduler : bool, default=False
-        Whether to use learning rate scheduler.
-    step_size : int, default=10
-        Step size for scheduler.
-    gamma : float, default=0.5
-        Gamma for scheduler.
-    cap : bool, default=False
-        Whether to cap new samples.
-    random_seed : int, default=123
-        Random seed for reproducibility.
-    data_dir : str, Path, or None
-        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
-    output_dir : str, Path, or None
-        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
-    """
-    # Handle path parameter for backward compatibility
-    if output_dir is None and path is not None:
-        output_dir = Path(path)
-    elif output_dir is not None:
-        output_dir = Path(output_dir)
-    else:
-        output_dir = Path.cwd()
+            recon_df = None
+            if train_out.reconstructed_data is not None:
+                recon_np = train_out.reconstructed_data.detach().numpy()
 
-    if data_dir is None and path is not None:
-        data_dir = Path(path)
+                # For CVAE, add label column name
+                recon_colnames = list(colnames)
+                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+                    recon_colnames = recon_colnames + ["label"]
 
-    # Read in data
-    if data_dir is not None:
-        read_path = Path(data_dir) / f"{dataname}.csv"
-    else:
-        read_path = Path(f"{dataname}.csv")
+                recon_df = pd.DataFrame(
+                    recon_np, columns=recon_colnames[: recon_np.shape[1]]
+                )
 
-    try:
-        if read_path.exists():
-            df = pd.read_csv(read_path, header=0)
-        else:
-            # Try loading from bundled data
-            df = load_dataset(dataname, data_path=read_path)
-    except FileNotFoundError:
-        # Fallback for bundled datasets
-        df = load_dataset(dataname)
+            loss_df = _build_loss_df(train_out.log_dict, modelname)
 
-    print(f"1. Read data: {dataname}")
+            run_metadata = {
+                "model": model,
+                "modelname": modelname,
+                "dataname": dataname,
+                "num_epochs": num_epochs,
+                "epochs_trained": train_out.epochs_trained,
+                "seed": random_seed,
+                "kl_weight": kl_weight,
+                "pilot_size": n_pilot,
+                "draw": rand_pilot,
+                "input_shape": (n_samples, len(colnames)),
+                "early_stop": early_stop,
+                "early_stop_patience": early_stop_num,
+            }
 
-    dat_pd = df
-    data_pd = dat_pd.select_dtypes(include=np.number)
-    if "groups" in data_pd.columns:
-        data_pd = data_pd.drop(columns=["groups"])
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
-    colnames = data_pd.columns
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-    n_samples = oridata.shape[0]
-    if "groups" in dat_pd.columns:
-        groups = dat_pd["groups"]
-    else:
-        groups = None
+            runs[(n_pilot, rand_pilot)] = SyngResult(
+                generated_data=gen_df,
+                loss=loss_df,
+                reconstructed_data=recon_df,
+                model_state=train_out.model_state,
+                metadata=run_metadata,
+            )
 
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
-
-    # get model name and kl_weight if modelname is some autoencoder
-    if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
-        kl_weight = int(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[4])
-        modelname = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[1]
-    else:
-        modelname = model
-        kl_weight = 1
-
-    print("2. Determine the model is " + model + " with kl-weight = " + str(kl_weight))
-
-    rawdata = oridata
-    rawlabels = orilabels
-
-    # decide batch fraction in file name
-    model = "batch" + str(batch_frac).replace(".", "") + "_" + model
-
-    # decide epoch
-    num_epochs = epoch
-    if early_stop_num is not None:
-        early_stop = True
-        epoch_info = "early_stop"
-        model = "epochES_" + model
-    else:
-        early_stop = False
-        epoch_info = str(epoch)
-        model = "epoch" + epoch_info + "_" + model
-
-    # decide offline augmentation
-    if off_aug == "AE_head":
-        AE_head = True
-        Gaussian_head = False
-        off_aug_info = off_aug
-    elif off_aug == "Gaussian_head":
-        Gaussian_head = True
-        AE_head = False
-        off_aug_info = off_aug
-    else:
-        AE_head = False
-        Gaussian_head = False
-        off_aug_info = "No"
-
-    print(
-        "3. Determine the training parameters are epoch = "
-        + epoch_info
-        + " off_aug = "
-        + off_aug_info
-        + " learing rate = "
-        + str(learning_rate)
-        + " batch_frac = "
-        + str(batch_frac)
+    pilot_result = PilotResult(
+        runs=runs,
+        metadata={
+            "model": model,
+            "modelname": modelname,
+            "dataname": dataname,
+            "pilot_sizes": pilot_size,
+            "num_epochs": num_epochs,
+            "seed": random_seed,
+        },
     )
 
-    if pre_model is not None:
-        model = model + "_transfrom" + re.search(r"from([A-Z]+)_", pre_model).group(1)
+    if output_dir is not None:
+        pilot_result.save(output_dir)
 
-    # hyperparameters
-    # random_seed = 123
-
-    # Build output paths using output_dir
-    savepath = str(output_dir / f"{dataname}_{model}_recons.csv")
-    savepathnew = str(output_dir / f"{dataname}_{model}_generated.csv")
-    losspath = str(output_dir / f"{dataname}_{model}_loss.csv")
-    ensure_dir(output_dir)
-
-    if Gaussian_head:
-        rawdata, rawlabels = Gaussian_aug(
-            rawdata, rawlabels, multiplier=[Gaussian_head_num]
-        )
-        savepath = str(output_dir / f"{dataname}_Gaussianhead_{model}_recons.csv")
-        savepathnew = str(output_dir / f"{dataname}_Gaussianhead_{model}_generated.csv")
-        losspath = str(output_dir / f"{dataname}_Gaussianhead_{model}_loss.csv")
-        print("Gaussian head is added.")
-
-    if AE_head:
-        savepathextend = str(output_dir / f"{dataname}_AEhead_{model}_extend.csv")
-        savepath = str(output_dir / f"{dataname}_AEhead_{model}_recons.csv")
-        savepathnew = str(output_dir / f"{dataname}_AEhead_{model}_generated.csv")
-        losspath = str(output_dir / f"{dataname}_AEhead_{model}_loss.csv")
-        print("AE reconstruction head is added, reconstruction starting ...")
-        feed_data, feed_labels = training_iter(
-            iter_times=AE_head_num,  # how many times to iterative, will get pilot_size * 2^iter_times reconstructed samples
-            savepathextend=savepathextend,  # save path of the extended dataset
-            rawdata=rawdata,  # pilot data
-            rawlabels=rawlabels,  # pilot labels
-            random_seed=random_seed,
-            modelname="AE",  # choose from AE, VAE
-            num_epochs=1000,  # maximum number of epochs if early stop is not triggered, default value for AEhead is 1000
-            batch_size=round(
-                rawdata.shape[0] * 0.1
-            ),  # batch size, note rawdata.shape[0] = n_pilot if no AE_head
-            learning_rate=0.0005,  # learning rate, default value for AEhead is 0.0005
-            early_stop=False,  # AEhead by default does not utilize early stopping rule
-            early_stop_num=30,  # won't take effect since early_stop == False
-            kl_weight=1,  # only take effect if model name is VAE, default value is 2
-            loss_fn="MSE",  # only choose WMSE if you know the weights, ow. choose MSE by default
-            replace=True,  # whether to replace the failure features in each reconstruction
-            saveextend=False,  # whether to save the extended dataset, if true, savepathextend must be provided
-            plot=False,
-        )  # whether or not plot the heatmap of extended data
-
-        rawdata = feed_data
-        rawlabels = feed_labels
-        print("AEhead added.")
-
-    print("3. Training starts ......")
-    # Training
-    if "GAN" in modelname:
-        log_dict = training_GANs(
-            savepathnew=savepathnew,  # path to save newly generated samples
-            rawdata=rawdata,  # raw data matrix with samples in row, features in column
-            rawlabels=rawlabels,  # labels for each sample, n_samples * 1, will not be used in AE or VAE
-            batch_size=round(
-                rawdata.shape[0] * batch_frac
-            ),  # batch size, note rawdata.shape[0] = n_pilot if no AE_head
-            random_seed=random_seed,
-            modelname=modelname,  # choose from "GAN","WGAN","WGANGP"
-            num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
-            learning_rate=learning_rate,
-            new_size=new_size,  # how many new samples you want to generate
-            early_stop=early_stop,  # whether use early stopping rule
-            early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
-            pre_model=pre_model,  # load pre-trained model from transfer learning
-            save_model=save_model,  # save model for transfer learning, specify the path if want to save model
-            save_new=True,  # whether to save the newly generated samples
-            plot=False,
-        )  # whether to plot the heatmaps of reconstructed and newly generated samples with the original ones
-
-        print("GAN model training finished.")
-
-        log_pd = pd.DataFrame(
-            {
-                "discriminator": log_dict["train_discriminator_loss_per_batch"],
-                "generator": log_dict["train_generator_loss_per_batch"],
-            }
-        )
-        # Directory is already ensured to exist
-        log_pd.to_csv(Path(losspath), index=False)
-
-    elif "AE" in modelname:
-        log_dict = training_AEs(
-            savepath=savepath,  # path to save reconstructed samples
-            savepathnew=savepathnew,  # path to save newly generated samples
-            rawdata=rawdata,  # raw data tensor with samples in row, features in column
-            rawlabels=rawlabels,  # abels for each sample, n_samples * 1, will not be used in AE or VAE
-            colnames=colnames,  # colnames saved
-            batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
-            random_seed=random_seed,
-            modelname=modelname,  # choose from "VAE", "AE"
-            num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
-            learning_rate=learning_rate,
-            val_ratio=val_ratio,  # validation set ratio
-            kl_weight=kl_weight,  # only take effect if model name is VAE, default value is
-            early_stop=early_stop,  # whether use early stopping rule
-            early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
-            pre_model=pre_model,  # load pre-trained model from transfer learning
-            save_model=save_model,  # save model for transfer learning, specify the path if want to save model
-            cap=cap,  # whether capping the new samples
-            loss_fn="MSE",  # only choose WMSE if you know the weights, ow. choose MSE by default
-            save_recons=False,  # whether save reconstructed data, if True, savepath must be provided
-            new_size=new_size,  # how many new samples you want to generate
-            save_new=True,  # whether save new samples, if True, savepathnew must be provided
-            plot=False,
-            use_scheduler=use_scheduler,
-            step_size=step_size,
-            gamma=gamma,
-        )  # whether plot reconstructed samples' heatmap
-
-        print("VAEs model training finished.")
-        log_pd = pd.DataFrame(
-            {
-                "kl": log_dict["val_kl_loss_per_batch"],
-                "recons": log_dict["val_reconstruction_loss_per_batch"],
-            }
-        )
-        # Directory is already ensured to exist
-        log_pd.to_csv(Path(losspath), index=False)
-    elif "maf" in modelname:
-        training_flows(
-            savepathnew=savepathnew,
-            rawdata=rawdata,
-            batch_frac=batch_frac,
-            valid_batch_frac=0.3,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_blocks=5,
-            num_epoches=num_epochs,
-            learning_rate=learning_rate,
-            new_size=new_size,
-            num_hidden=226,
-            early_stop=early_stop,  # whether use early stopping rule
-            early_stop_num=early_stop_num,
-            # stop training if loss does not improve for early_stop_num epochs
-            pre_model=pre_model,  # load pre-trained model from transfer learning
-            save_model=save_model,
-            plot=False,
-        )
-    elif "realnvp" in modelname:
-        training_flows(
-            savepathnew=savepathnew,
-            rawdata=rawdata,
-            batch_frac=batch_frac,
-            valid_batch_frac=0.3,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_blocks=5,
-            num_epoches=num_epochs,
-            learning_rate=learning_rate,
-            new_size=new_size,
-            num_hidden=226,
-            early_stop=early_stop,  # whether use early stopping rule
-            early_stop_num=early_stop_num,
-            # stop training if loss does not improve for early_stop_num epochs
-            pre_model=pre_model,  # load pre-trained model from transfer learning
-            save_model=save_model,
-            plot=False,
-        )
-
-    elif "glow" in modelname:
-        training_flows(
-            savepathnew=savepathnew,
-            rawdata=rawdata,
-            batch_frac=batch_frac,
-            valid_batch_frac=0.3,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_blocks=5,
-            num_epoches=num_epochs,
-            learning_rate=learning_rate,
-            new_size=new_size,
-            num_hidden=226,
-            early_stop=early_stop,  # whether use early stopping rule
-            early_stop_num=early_stop_num,
-            # stop training if loss does not improve for early_stop_num epochs
-            pre_model=pre_model,  # load pre-trained model from transfer learning
-            save_model=save_model,
-            plot=False,
-        )
-
-    else:
-        print("wait for other models")
+    return pilot_result
 
 
-# %% Define transfer learing
-def TransferExperiment(
-    pilot_size: Optional[List[int]] = None,
-    fromname: str = "",
-    toname: str = "",
-    fromsize: int = 500,
-    model: str = "VAE1-10",
+def transfer(
+    source_data: pd.DataFrame | str | Path,
+    target_data: pd.DataFrame | str | Path,
+    *,
+    source_name: str | None = None,
+    target_name: str | None = None,
+    pilot_size: list[int] | None = None,
+    source_size: int = 500,
     new_size: int = 500,
+    model: str = "VAE1-10",
     apply_log: bool = True,
-    epoch: Optional[int] = None,
     batch_frac: float = 0.1,
     learning_rate: float = 0.0005,
-    off_aug: Optional[str] = None,
-    data_dir: Optional[Union[str, Path]] = None,
-    output_dir: Optional[Union[str, Path]] = None,
-) -> None:
-    """
-    Run transfer learning using deep generative models.
+    epoch: int | None = None,
+    early_stop_patience: int | None = None,
+    off_aug: str | None = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    random_seed: int = 123,
+    output_dir: str | Path | None = None,
+    verbose: int | str = "minimal",
+) -> SyngResult | PilotResult:
+    """Train on source data, then fine-tune and generate on target data.
 
-    This function trains VAE, CVAE, GAN, WGAN, WGANGP, MAF, GLOW, or RealNVP
-    using transfer learning. The model is first trained on the pre-training
-    dataset, then fine-tuned on the target dataset.
+    The model is first trained on *source_data* and its state is saved.
+    Then the saved state is loaded as a pre-trained model and fine-tuned
+    on *target_data*.
+
+    This replaces the legacy ``TransferExperiment`` function.
 
     Parameters
     ----------
-    pilot_size : list of int or None
-        If None, uses ApplyExperiment for fine-tuning and new_size takes effect.
-        Otherwise, uses PilotExperiment with the specified pilot sizes.
-    fromname : str
-        Name of the pre-training dataset (without .csv extension).
-    toname : str
-        Name of the fine-tuning dataset (without .csv extension).
-    fromsize : int, default=500
-        Number of samples to generate when pre-training.
-    new_size : int, default=500
-        Sample size for generated samples in ApplyExperiment mode.
-    apply_log : bool, default=True
-        Whether to apply log2 transformation before training.
-    model : str, default="VAE1-10"
-        Name of the model to train.
-    batch_frac : float, default=0.1
+    source_data : DataFrame, str, or Path
+        Pre-training dataset.
+    target_data : DataFrame, str, or Path
+        Fine-tuning / target dataset.
+    source_name : str or None
+        Short name for the source dataset.
+    target_name : str or None
+        Short name for the target dataset.
+    pilot_size : list[int] or None
+        If set, uses ``pilot_study`` for the target phase.  Otherwise
+        uses ``generate``.
+    source_size : int
+        Number of samples to generate during pre-training.
+    new_size : int
+        Number of samples to generate in ``generate`` mode.
+    model : str
+        Model specification.
+    apply_log : bool
+        Apply log2 preprocessing.
+    batch_frac : float
         Batch fraction.
-    learning_rate : float, default=0.0005
+    learning_rate : float
         Learning rate.
     epoch : int or None
-        Number of epochs, or None for early stopping.
+        Fixed epoch count, or ``None`` for early stopping.  See
+        :func:`generate` for the full interaction table.
+    early_stop_patience : int or None
+        Stop if loss does not improve for this many epochs.  When ``None``
+        and ``epoch`` is also ``None``, defaults to ``30``.  See
+        :func:`generate` for the full interaction table.
     off_aug : str or None
-        Offline augmentation: "AE_head", "Gaussian_head", or None.
-    data_dir : str, Path, or None
-        Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
+        Offline augmentation mode.
+    AE_head_num : int
+        Fold multiplier for AE-head augmentation.
+    Gaussian_head_num : int
+        Fold multiplier for Gaussian-head augmentation.
+    random_seed : int
+        Random seed.
     output_dir : str, Path, or None
-        Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+        If set, save results here.
+    verbose : int or str
+        Verbosity level — see :func:`generate` for details.
+
+    Returns
+    -------
+    SyngResult or PilotResult
+        ``SyngResult`` when ``pilot_size`` is ``None``, otherwise
+        ``PilotResult``.
     """
-    # Set up directories
+    import tempfile
+
+    fromname = derive_dataname(source_data, source_name)
+    toname = derive_dataname(target_data, target_name)
+
+    # We need a temp file to pass the model state between the two phases.
+    # If output_dir is set, use a Transfer subdir; otherwise use a temp dir.
     if output_dir is not None:
-        output_dir = Path(output_dir)
+        transfer_dir = Path(output_dir) / "Transfer"
+        transfer_dir.mkdir(parents=True, exist_ok=True)
+        save_model_path = str(transfer_dir / f"{toname}_from{fromname}_{model}.pt")
+        _cleanup_transfer = False
     else:
-        output_dir = Path.cwd()
+        _transfer_tmpdir = tempfile.mkdtemp()
+        save_model_path = str(
+            Path(_transfer_tmpdir) / f"{toname}_from{fromname}_{model}.pt"
+        )
+        _cleanup_transfer = True
 
-    if data_dir is not None:
-        data_dir = Path(data_dir)
-
-    # Create transfer subdirectory for models
-    transfer_dir = output_dir / "Transfer"
-    ensure_dir(transfer_dir)
-
-    save_model_path = str(transfer_dir / f"{toname}_from{fromname}_{model}.pt")
-
-    ApplyExperiment(
-        dataname=fromname,
-        apply_log=apply_log,
-        new_size=[fromsize],
+    # --- Phase 1: pre-train on source ------------------------------------
+    _source_result = generate(
+        data=source_data,
+        name=fromname,
+        new_size=[source_size],
         model=model,
+        apply_log=apply_log,
         batch_frac=batch_frac,
         learning_rate=learning_rate,
         epoch=epoch,
-        early_stop_num=30,
+        early_stop_patience=early_stop_patience,
         off_aug=off_aug,
-        AE_head_num=2,
-        Gaussian_head_num=9,
+        AE_head_num=AE_head_num,
+        Gaussian_head_num=Gaussian_head_num,
         pre_model=None,
         save_model=save_model_path,
-        data_dir=data_dir,
-        output_dir=transfer_dir,
+        random_seed=random_seed,
+        output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
+        verbose=verbose,
     )
 
-    # training toname using pre-model
-    pre_model_path = save_model_path
+    # --- Phase 2: fine-tune on target ------------------------------------
     if pilot_size is not None:
-        PilotExperiment(
-            dataname=toname,
+        result = pilot_study(
+            data=target_data,
             pilot_size=pilot_size,
+            name=toname,
             model=model,
             batch_frac=batch_frac,
             learning_rate=learning_rate,
-            pre_model=pre_model_path,
             epoch=epoch,
+            early_stop_patience=early_stop_patience,
             off_aug=off_aug,
-            early_stop_num=30,
-            AE_head_num=2,
-            Gaussian_head_num=9,
-            data_dir=data_dir,
+            AE_head_num=AE_head_num,
+            Gaussian_head_num=Gaussian_head_num,
+            pre_model=save_model_path,
+            random_seed=random_seed,
             output_dir=output_dir,
+            verbose=verbose,
         )
     else:
-        ApplyExperiment(
-            dataname=toname,
-            apply_log=apply_log,
-            new_size=[new_size],
+        result = generate(
+            data=target_data,
+            name=toname,
+            new_size=new_size,
             model=model,
+            apply_log=apply_log,
             batch_frac=batch_frac,
             learning_rate=learning_rate,
             epoch=epoch,
-            early_stop_num=30,
+            early_stop_patience=early_stop_patience,
             off_aug=off_aug,
-            AE_head_num=2,
-            Gaussian_head_num=9,
-            pre_model=pre_model_path,
-            save_model=None,
-            data_dir=data_dir,
-            output_dir=transfer_dir,
+            AE_head_num=AE_head_num,
+            Gaussian_head_num=Gaussian_head_num,
+            pre_model=save_model_path,
+            random_seed=random_seed,
+            output_dir=output_dir,
+            verbose=verbose,
         )
+
+    # Cleanup temp dir if we created one
+    if _cleanup_transfer:
+        import shutil
+
+        shutil.rmtree(_transfer_tmpdir, ignore_errors=True)
+
+    return result

@@ -1,21 +1,40 @@
-# -*- coding: utf-8 -*-
-
-import torch
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 import os
 import random
-import torch.nn.functional as F
+
+import numpy as np
+import torch
 
 
-def preprocessinglog2(dataset):
-    # log2 pre-processing of count data
+def preprocessinglog2(dataset: torch.Tensor) -> torch.Tensor:
+    """Apply log2 transformation to count data.
+
+    Parameters
+    ----------
+    dataset : torch.Tensor
+        Input count data tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        Log2-transformed data: log2(dataset + 1).
+    """
     return torch.log2(dataset + 1)
 
 
-def set_all_seeds(seed):
+def set_all_seeds(seed: int) -> None:
+    """Set random seeds for reproducibility across all libraries.
+
+    Sets the global seed for (in order):
+    - PL_GLOBAL_SEED environment variable
+    - Python's random module
+    - NumPy's random module
+    - PyTorch's CPU and all CUDA devices
+
+    Parameters
+    ----------
+    seed : int
+        Seed value for all RNG sources.
+    """
     # set random seed
     os.environ["PL_GLOBAL_SEED"] = str(seed)
     random.seed(seed)
@@ -24,9 +43,33 @@ def set_all_seeds(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def create_labels(n_samples, groups=None):
+def create_labels(
+    n_samples: int, groups: torch.Tensor | np.ndarray | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create binary labels and blur labels for two-group data.
+
+    Generates crisp (0/1) labels for binary classification, and fuzzy
+    labels used during training:
+    - For group 0: blurlabels ∈ [0, 1]
+    - For group 1: blurlabels ∈ [9, 10]
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples.
+    groups : torch.Tensor or np.ndarray, optional
+        Group membership array with values indicating class. If None,
+        all samples are assigned to group 0 (class 0).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(labels, blurlabels)`` where ``labels`` are crisp binary labels
+        and ``blurlabels`` are fuzzy labels. Both have shape ``[n_samples, 1]``.
+    """
     # create binary labels and blurry labels for training two-group data
-    set_all_seeds(10)  # randomness only for blur labels generation.
+    # Use a local generator so we don't mutate global RNG state.
+    _rng = torch.Generator().manual_seed(10)
     if groups is None:
         labels = torch.zeros([n_samples, 1])
         blurlabels = labels
@@ -35,13 +78,40 @@ def create_labels(n_samples, groups=None):
         labels = torch.zeros([n_samples, 1]).to(torch.float32)
         labels[groups != base, 0] = 1
         blurlabels = torch.zeros([n_samples, 1]).to(torch.float32)
-        blurlabels[groups != base, 0] = (10 - 9) * torch.rand(sum(groups != base)) + 9
-        blurlabels[groups == base, 0] = (1 - 0) * torch.rand(sum(groups == base)) + 0
+        blurlabels[groups != base, 0] = (10 - 9) * torch.rand(
+            sum(groups != base), generator=_rng
+        ) + 9
+        blurlabels[groups == base, 0] = (1 - 0) * torch.rand(
+            sum(groups == base), generator=_rng
+        ) + 0
     return labels, blurlabels
 
 
-def create_labels_mul(n_samples, groups=None):
-    set_all_seeds(10)
+def create_labels_mul(
+    n_samples: int, groups: torch.Tensor | np.ndarray | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create multi-group labels and blur labels for multi-class data.
+
+    Generates crisp group labels and fuzzy (offset) labels used
+    during multi-class training.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples.
+    groups : torch.Tensor or np.ndarray, optional
+        Categorical group membership. If None, all samples are
+        assigned to group 0.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(labels, blurlabels)`` where ``labels`` are crisp group
+        indices (one per sample) and ``blurlabels`` are offset labels.
+        Both have shape ``[n_samples, 1]``.
+    """
+    # Use a local generator so we don't mutate global RNG state.
+    _rng = torch.Generator().manual_seed(10)
 
     if groups is None:
         labels = torch.zeros([n_samples, 1], dtype=torch.float32)
@@ -52,11 +122,42 @@ def create_labels_mul(n_samples, groups=None):
     codes = groups_cat.cat.codes
     group_tensor = torch.from_numpy(codes.copy().values)
     labels = group_tensor.float().unsqueeze(1)
-    blurlabels = labels + torch.rand_like(labels)
+    blurlabels = labels + torch.rand(labels.shape, generator=_rng)
     return labels, blurlabels
 
 
-def draw_pilot(dataset, labels, blurlabels, n_pilot, seednum):
+def draw_pilot(
+    dataset: torch.Tensor,
+    labels: torch.Tensor,
+    blurlabels: torch.Tensor,
+    n_pilot: int,
+    seednum: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Draw a pilot dataset with balanced group sampling.
+
+    Maintains group balance when drawing a pilot subset. For single-group
+    data, performs random sampling. For multi-group data, independently
+    samples ``n_pilot`` rows from each group.
+
+    Parameters
+    ----------
+    dataset : torch.Tensor
+        Input samples, shape ``[n_samples, n_features]``.
+    labels : torch.Tensor
+        Crisp labels, shape ``[n_samples, 1]``.
+    blurlabels : torch.Tensor
+        Fuzzy labels, shape ``[n_samples, 1]``.
+    n_pilot : int
+        Target number of samples per group.
+    seednum : int
+        Random seed to use for reproducible draws.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(pilot_data, pilot_labels, pilot_blurlabels)`` — the drawn
+        pilot subset with preserved group balance.
+    """
     # draw pilot datasets
     set_all_seeds(
         seednum
@@ -96,7 +197,36 @@ def draw_pilot(dataset, labels, blurlabels, n_pilot, seednum):
     return rawdata, rawlabels, rawblurlabels
 
 
-def Gaussian_aug(rawdata, rawlabels, multiplier):
+def Gaussian_aug(
+    rawdata: torch.Tensor, rawlabels: torch.Tensor, multiplier: list[int]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Augment pilot data by adding Gaussian noise.
+
+    Performs offline augmentation by repeatedly concatenating the
+    original data with perturbed copies (original + Gaussian noise).
+
+    Parameters
+    ----------
+    rawdata : torch.Tensor
+        Pilot data, shape ``[n_samples, n_features]``.
+    rawlabels : torch.Tensor
+        Pilot labels, shape ``[n_samples, 1]``.
+    multiplier : list[int]
+        Augmentation multiplier per group. If single-group, use ``[m]``
+        to replicate ``m`` times. If multi-group, use ``[m1, m2, ...]``
+        for each group respectively.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(augmented_data, augmented_labels)`` where augmented_data has
+        been expanded by replicating with Gaussian noise.
+
+    Notes
+    -----
+    Each augmentation step adds ``N(0, 1)`` noise, so the augmented
+    dataset has size ``n_samples * (1 + sum(multiplier))``.
+    """
     # Gaussian augmentation
     # This function performs offline augmentation by adding gaussian noise to the
     # log2 counts, rawdata is the data generated from draw_pilot(), so does rawlabels,
@@ -107,7 +237,7 @@ def Gaussian_aug(rawdata, rawlabels, multiplier):
     oriraw = rawdata
     orirawlabels = rawlabels
     for all_mult in multiplier:
-        for mult in list(range(all_mult)):
+        for _mult in list(range(all_mult)):
             rawdata = torch.cat(
                 (
                     rawdata,
@@ -123,90 +253,67 @@ def Gaussian_aug(rawdata, rawlabels, multiplier):
     return rawdata, rawlabels
 
 
-def plot_training_loss(
-    minibatch_losses, num_epochs, averaging_iterations=100, custom_label=""
-):
-    iter_per_epoch = len(minibatch_losses) // num_epochs
+def reconstruct_samples(
+    model,
+    modelname: str,
+    data_loader,
+    n_features: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reconstruct samples through a trained autoencoder.
 
-    plt.figure()
-    ax1 = plt.subplot(1, 1, 1)
-    ax1.plot(
-        range(len(minibatch_losses)),
-        (minibatch_losses),
-        label=f"Minibatch Loss{custom_label}",
-    )
-    ax1.set_xlabel("Iterations")
-    ax1.set_ylabel("Loss")
+    Passes all batches in *data_loader* through *model* and concatenates
+    the originals with their reconstructions.
 
-    if len(minibatch_losses) < 1001:
-        num_losses = len(minibatch_losses) // 2
-    else:
-        num_losses = 1000
+    Parameters
+    ----------
+    model : nn.Module
+        Trained autoencoder (AE, VAE, or CVAE).
+    modelname : str
+        Model type identifier (``"AE"``, ``"VAE"``, or ``"CVAE"``).
+    data_loader : DataLoader
+        DataLoader yielding ``(features, labels)`` tuples.
+    n_features : int
+        Number of input features (columns) in the data.
 
-    ax1.set_ylim([0, np.max(minibatch_losses[num_losses:]) * 1.5])
-
-    ax1.plot(
-        np.convolve(
-            minibatch_losses,
-            np.ones(
-                averaging_iterations,
-            )
-            / averaging_iterations,
-            mode="valid",
-        ),
-        label=f"Running Average{custom_label}",
-    )
-    ax1.legend()
-
-    ###################
-    # Set scond x-axis
-    ax2 = ax1.twiny()
-    newlabel = list(range(num_epochs + 1))
-
-    newpos = [e * iter_per_epoch for e in newlabel]
-
-    ax2.set_xticks(newpos[::10])
-    ax2.set_xticklabels(newlabel[::10])
-
-    ax2.xaxis.set_ticks_position("bottom")
-    ax2.xaxis.set_label_position("bottom")
-    ax2.spines["bottom"].set_position(("outward", 45))
-    ax2.set_xlabel("Epochs")
-    ax2.set_xlim(ax1.get_xlim())
-    ###################
-
-    plt.tight_layout()
-
-
-def plot_recons_samples(
-    savepath, model, modelname, data_loader, n_features, plot=False
-):
-    # plot reconstructed samples heatmap and save reconstructed samples as .csv file
-
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(data, labels)`` where *data* is the vertical concatenation
+        ``[originals; reconstructions]`` with shape
+        ``[2 * n_samples, n_features(+1 for CVAE)]`` and *labels* is
+        the label tensor.
+    """
     orig_all = torch.zeros([1, n_features])
     decoded_all = torch.zeros([1, n_features])
     labels = torch.zeros(0, dtype=torch.long)
 
-    for batch_idx, (features, lab) in enumerate(data_loader):
-        # compatible with two types of labels:
+    for _batch_idx, (features, lab) in enumerate(data_loader):
+        # Compatible with two types of labels:
         # - (N, C) one-hot -> use argmax
         # - (N, 1) single column/real number 0/1 -> directly squeeze to (N,)
         if isinstance(lab, torch.Tensor):
             if lab.dim() == 2:
                 if lab.size(1) > 1:
-                    labels_batch = torch.argmax(lab, dim=1)  # shape: (batch_size,)
+                    labels_batch = torch.argmax(lab, dim=1)
                 else:
                     labels_batch = lab.squeeze(1).long()
             else:
                 labels_batch = lab.long()
         else:
-            # revert: convert non-tensor labels to tensor
             labels_batch = torch.as_tensor(lab).long()
         labels = torch.cat((labels, labels_batch), dim=0)
 
         with torch.no_grad():
             if modelname == "CVAE":
-                encoded, z_mean, z_log_var, decoded_images = model(features, lab)
+                # Ensure labels_batch is 2D for concatenation
+                labels_for_model = (
+                    labels_batch.unsqueeze(1)
+                    if labels_batch.dim() == 1
+                    else labels_batch
+                )
+                encoded, z_mean, z_log_var, decoded_images = model(
+                    features, labels_for_model
+                )
             elif modelname == "VAE":
                 encoded, z_mean, z_log_var, decoded_images = model(features)
             else:
@@ -219,66 +326,46 @@ def plot_recons_samples(
     decoded_all = decoded_all[1:]
 
     if modelname == "CVAE":
-        labels = labels.unsqueeze(1).float()  # shape: (N,1)
+        labels = labels.unsqueeze(1).float()
         orig_all = torch.cat((orig_all, labels), dim=1)
         decoded_all = torch.cat((decoded_all, labels), dim=1)
-    if plot:
-        sns.heatmap(
-            torch.cat((orig_all, decoded_all), dim=0).detach().numpy(), cmap="YlGnBu"
-        )
-        plt.show()
 
-    if savepath is not None:
-        # Directory is pre-created by get_output_path() in experiments.py
-        np.savetxt(
-            savepath,
-            torch.cat((orig_all, decoded_all), dim=0).detach().numpy(),
-            delimiter=",",
-        )
-    else:
-        return torch.cat((orig_all, decoded_all), dim=0).detach(), labels
+    return torch.cat((orig_all, decoded_all), dim=0).detach(), labels
 
 
-# def plot_latent_space_with_labels(num_classes, data_loader, encoding_fn):
-#     d = {i:[] for i in range(num_classes)}
-
-#     with torch.no_grad():
-#         for i, (features,targets) in enumerate(data_loader):
-#             embedding = encoding_fn(features)
-#             for i in range(num_classes):
-#                 if i in targets:
-#                     mask = targets == i
-#                     d[i].append(embedding[mask].numpy())
-
-#     colors = list(mcolors.TABLEAU_COLORS.items())
-#     for i in range(num_classes):
-#         d[i] = np.concatenate(d[i])
-#         plt.scatter(
-#             d[i][:, 0], d[i][:, 1],
-#             color=colors[i][1],
-#             label=f'{i}',
-#             alpha=0.5)
-
-#     plt.legend()
-
-
-def plot_new_samples(
+def generate_samples(
     model,
-    modelname,
-    savepathnew,
-    latent_size,
-    num_images,
-    plot=False,
-    colnames=None,
-    col_max=None,
-    col_sd=None,
-):
-    # plot new samples heatmap and save new samples as .csv file
+    modelname: str,
+    latent_size: int,
+    num_images: int | list[int],
+    col_max: torch.Tensor | None = None,
+    col_sd: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Generate synthetic samples from a trained generative model.
 
+    Parameters
+    ----------
+    model : nn.Module
+        Trained generative model (AE, VAE, CVAE, GAN, or flow).
+    modelname : str
+        Model type identifier (``"AE"``, ``"VAE"``, ``"CVAE"``,
+        ``"GANs"``, ``"glow"``, ``"realnvp"``, ``"maf"``).
+    latent_size : int
+        Dimensionality of the latent space.
+    num_images : int or list[int]
+        Number of samples to generate.  For CVAE with multiple groups,
+        pass ``[n_group_0, n_group_1, ..., replicate_factor]``.
+    col_max : torch.Tensor or None
+        Per-feature maximum values for capping (optional).
+    col_sd : torch.Tensor or None
+        Per-feature standard deviations for capping (optional).
+
+    Returns
+    -------
+    torch.Tensor
+        Generated samples as a 2-D tensor ``[n_samples, n_features]``.
+    """
     with torch.no_grad():
-        ##########################
-        ###### RANDOM SAMPLE #####
-        ##########################
         if isinstance(num_images, int) or len(num_images) == 1:
             if not isinstance(num_images, int):
                 num_images = num_images[0]
@@ -295,7 +382,7 @@ def plot_new_samples(
                     ids = torch.full((n_c,), fill_value=class_id, dtype=torch.float32)
                     labels_list.append(ids)
                 one_group_labels = torch.cat(labels_list)
-                labels = one_group_labels.unsqueeze(1)  # shape = [N, 1]
+                labels = one_group_labels.unsqueeze(1)
 
                 rand_features = torch.cat((rand_features, labels), dim=1)
                 new_images = model.decoder(rand_features)
@@ -306,29 +393,22 @@ def plot_new_samples(
                 new_images = model.decoder(rand_features)
             elif modelname == "GANs":
                 new_images = model.generator(rand_features)
-            elif modelname == "glow":
-                new_images = model.sample(num_images)
-            elif modelname == "realnvp":
-                new_images = model.sample(num_images)
-            elif modelname == "maf":
+            elif modelname in ("glow", "realnvp", "maf"):
                 new_images = model.sample(num_images)
         else:
-            # if new_size = num_images = [n_for_0, n_for_1, ... , n_for_(num_classes-1), replicate]
+            # Multi-group: num_images = [n_for_0, ..., n_for_(K-1), replicate]
             counts = num_images[:-1]
             repli = num_images[-1]
             num_images_repe = sum(counts)
-            num_images = num_images_repe * repli
-            rand_features = torch.randn(num_images, latent_size)
+            total = num_images_repe * repli
+            rand_features = torch.randn(total, latent_size)
             if modelname == "CVAE":
-                if len(num_images) != num_classes + 1:
-                    raise ValueError("num_images should have length num_classes+1")
-
                 labels_list = []
                 for class_id, n_c in enumerate(counts):
                     ids = torch.full((n_c,), fill_value=class_id, dtype=torch.float32)
                     labels_list.append(ids)
                 one_group_labels = torch.cat(labels_list)
-                labels = one_group_labels.repeat(repli).unsqueeze(1)  # shape = [N, 1]
+                labels = one_group_labels.repeat(repli).unsqueeze(1)
 
                 rand_features = torch.cat((rand_features, labels), dim=1)
                 new_images = model.decoder(rand_features)
@@ -339,111 +419,30 @@ def plot_new_samples(
                 new_images = model.decoder(rand_features)
             elif modelname == "GANs":
                 new_images = model.generator(rand_features)
-            elif modelname == "glow":
-                new_images = model.sample(num_images)
-            elif modelname == "realnvp":
-                new_images = model.sample(num_images)
-            elif modelname == "maf":
-                new_images = model.sample(num_images)
+            elif modelname in ("glow", "realnvp", "maf"):
+                new_images = model.sample(total)
 
-        # === Cap ===
+        # Cap: threshold outliers to col_max + noise
         if (col_max is not None) and (col_sd is not None):
             device = new_images.device
             col_max = col_max.to(device)
             col_sd = col_sd.to(device)
 
-            # Except for CVAE label col
+            # Exclude CVAE label column from capping
             feat_cols = new_images.size(1) - (1 if modelname == "CVAE" else 0)
             x = new_images[:, :feat_cols]
 
-            thr = col_max[:feat_cols] + col_sd[:feat_cols]  # 阈值
+            # threshold = col_max + col_sd
+            thr = col_max[:feat_cols] + col_sd[:feat_cols]
             noise = torch.normal(
-                mean=torch.zeros_like(col_sd[:feat_cols]), std=0.1 * col_sd[:feat_cols]
-            )  # N(0,0.1*sd)
-            cap_val = col_max[:feat_cols] + noise  # cap 值
+                mean=torch.zeros_like(col_sd[:feat_cols]),
+                std=0.1 * col_sd[:feat_cols],
+            )
+            # cap value = col_max + small noise
+            cap_val = col_max[:feat_cols] + noise
 
-            mask = x > thr  # 超阈值位置
-
+            mask = x > thr
             x = torch.where(mask, cap_val.unsqueeze(0).expand_as(x), x)
             new_images = torch.cat((x, new_images[:, feat_cols:]), dim=1)
 
-        ##########################
-        ### VISUALIZATION
-        ##########################
-        # last column of saved data is the labels: 0 for MXF, 20 for PMFH
-        # either generated for VAE or setted for CVAE
-        if plot:
-            sns.heatmap(new_images.detach().numpy(), cmap="YlGnBu")
-            plt.show()
-
-        if savepathnew is not None:
-            # Directory is pre-created by get_output_path() in experiments.py
-            np.savetxt(savepathnew, new_images.detach().numpy(), delimiter=",")
-        else:
-            return new_images
-
-
-def plot_multiple_training_losses(
-    losses_list, num_epochs, averaging_iterations=100, custom_labels_list=None
-):
-    for i, _ in enumerate(losses_list):
-        if not len(losses_list[i]) == len(losses_list[0]):
-            raise ValueError(
-                "All loss tensors need to have the same number of elements."
-            )
-
-    if custom_labels_list is None:
-        custom_labels_list = [str(i) for i, _ in enumerate(custom_labels_list)]
-
-    iter_per_epoch = len(losses_list[0]) // num_epochs
-
-    plt.figure()
-    ax1 = plt.subplot(1, 1, 1)
-
-    for i, minibatch_loss_tensor in enumerate(losses_list):
-        ax1.plot(
-            range(len(minibatch_loss_tensor)),
-            (minibatch_loss_tensor),
-            label=f"Minibatch Loss{custom_labels_list[i]}",
-        )
-        ax1.set_xlabel("Iterations")
-        ax1.set_ylabel("Loss")
-
-        ax1.plot(
-            np.convolve(
-                minibatch_loss_tensor,
-                np.ones(
-                    averaging_iterations,
-                )
-                / averaging_iterations,
-                mode="valid",
-            ),
-            color="black",
-        )
-
-    if len(losses_list[0]) < 1000:
-        num_losses = len(losses_list[0]) // 2
-    else:
-        num_losses = 1000
-    maxes = [np.max(losses_list[i][num_losses:]) for i, _ in enumerate(losses_list)]
-    ax1.set_ylim([0, np.max(maxes) * 1.5])
-    ax1.legend()
-
-    ###################
-    # Set scond x-axis
-    ax2 = ax1.twiny()
-    newlabel = list(range(num_epochs + 1))
-
-    newpos = [e * iter_per_epoch for e in newlabel]
-
-    ax2.set_xticks(newpos[::10])
-    ax2.set_xticklabels(newlabel[::10])
-
-    ax2.xaxis.set_ticks_position("bottom")
-    ax2.xaxis.set_label_position("bottom")
-    ax2.spines["bottom"].set_position(("outward", 45))
-    ax2.set_xlabel("Epochs")
-    ax2.set_xlim(ax1.get_xlim())
-    ###################
-
-    plt.tight_layout()
+    return new_images

@@ -8,9 +8,9 @@ for data augmentation of bulk transcriptomic sequencing data using deep generati
    :target: https://badge.fury.io/py/syng-bts
    :alt: PyPI version
 
-.. image:: https://img.shields.io/badge/python-3.8+-blue.svg
+.. image:: https://img.shields.io/badge/python-3.10+-blue.svg
    :target: https://www.python.org/downloads/
-   :alt: Python 3.8+
+   :alt: Python 3.10+
 
 .. image:: https://img.shields.io/badge/License-AGPL%20v3-blue.svg
    :target: https://www.gnu.org/licenses/agpl-3.0
@@ -38,37 +38,42 @@ Install SyNG-BTS:
 
    pip install syng-bts
 
-Run a pilot experiment:
+Generate synthetic data:
 
 .. code-block:: python
 
-   from syng_bts import PilotExperiment, load_dataset
+   from syng_bts import generate
 
-   # Load example data
-   data = load_dataset("SKCMPositive_4")
-   print(f"Dataset shape: {data.shape}")
+   result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
+   print(result.generated_data.shape)
+   figs = result.plot_loss()
 
-   # Train VAE and generate samples
-   PilotExperiment(
-       dataname="SKCMPositive_4",
-       pilot_size=[100],
+Run a pilot study:
+
+.. code-block:: python
+
+   from syng_bts import pilot_study
+
+   result = pilot_study(
+       data="SKCMPositive_4",
+       pilot_size=[50, 100],
        model="VAE1-10",
-       batch_frac=0.1,
-       learning_rate=0.0005,
-       early_stop_num=30,
+       early_stop_patience=30,
    )
+   print(result.summary())
 
 For more details, see the :doc:`usage` guide.
+For upgrading from v2.x, see the :doc:`migration` guide.
 
 Citation
 --------
 
 If you use SyNG-BTS in your research, please cite:
 
-   Qin, L.-X., Qi, Y., Wang, X., & Dueren, Y. (2025). Optimizing sample size
-   for supervised machine learning with bulk transcriptomic sequencing: a
-   learning curve approach. *BMC Bioinformatics*, 26, 83.
-   https://doi.org/10.1186/s12859-025-06079-9
+   Qin, L.-X., et al. (2025). Optimizing sample size for supervised machine
+   learning with bulk transcriptomic sequencing: a learning curve approach.
+   *BMC Bioinformatics*, 26.
+   https://doi.org/10.1093/bib/bbaf097
 
 Contents
 --------
@@ -78,6 +83,7 @@ Contents
    :caption: Getting Started
 
    usage
+   migration
 
 .. toctree::
    :maxdepth: 2
@@ -97,9 +103,9 @@ Contents
 Links
 -----
 
-- **GitHub Repository**: https://github.com/LXQin/SyNG-BTS
+- **GitHub Repository**: https://github.com/Omics-Data-Synthesis/SyNG-BTS
 - **PyPI Package**: https://pypi.org/project/syng-bts/
-- **Issue Tracker**: https://github.com/LXQin/SyNG-BTS/issues
+- **Issue Tracker**: https://github.com/Omics-Data-Synthesis/SyNG-BTS
 
 Indices and tables
 ------------------

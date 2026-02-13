@@ -6,7 +6,6 @@ output directories in a cross-platform compatible way.
 """
 
 from pathlib import Path
-from typing import Optional, Union
 
 import pandas as pd
 
@@ -16,18 +15,11 @@ try:
 except ImportError:
     from importlib_resources import as_file, files
 
-# For older Python compatibility
-try:
-    import importlib.resources as pkg_resources
-except ImportError:
-    pass
-
-
 # Default output directory
-_DEFAULT_OUTPUT_DIR: Optional[Path] = None
+_DEFAULT_OUTPUT_DIR: Path | None = None
 
 
-def set_default_output_dir(path: Union[str, Path, None]) -> None:
+def set_default_output_dir(path: str | Path | None) -> None:
     """
     Set the default output directory for all SyNG-BTS operations.
 
@@ -43,7 +35,7 @@ def set_default_output_dir(path: Union[str, Path, None]) -> None:
         _DEFAULT_OUTPUT_DIR = Path(path)
 
 
-def get_output_dir(output_dir: Union[str, Path, None] = None) -> Path:
+def get_output_dir(output_dir: str | Path | None = None) -> Path:
     """
     Get the output directory to use for saving files.
 
@@ -64,7 +56,7 @@ def get_output_dir(output_dir: Union[str, Path, None] = None) -> Path:
     return Path.cwd()
 
 
-def ensure_dir(path: Union[str, Path]) -> Path:
+def ensure_dir(path: str | Path) -> Path:
     """
     Ensure a directory exists, creating it if necessary.
 
@@ -84,7 +76,7 @@ def ensure_dir(path: Union[str, Path]) -> Path:
 
 
 def get_output_path(
-    output_dir: Union[str, Path, None],
+    output_dir: str | Path | None,
     subdir: str,
     filename: str,
     create_dir: bool = True,
@@ -157,8 +149,8 @@ def load_bundled_data(subdir: str, filename: str) -> pd.DataFrame:
 
 def load_data(
     dataname: str,
-    data_path: Union[str, Path, None] = None,
-    bundled_info: Optional[tuple] = None,
+    data_path: str | Path | None = None,
+    bundled_info: tuple | None = None,
 ) -> pd.DataFrame:
     """
     Load data from a file path or bundled package resource.
@@ -250,7 +242,7 @@ BUNDLED_DATASETS = {
 
 def load_dataset(
     dataname: str,
-    data_path: Union[str, Path, None] = None,
+    data_path: str | Path | None = None,
 ) -> pd.DataFrame:
     """
     Load a dataset, checking bundled data if not found at path.

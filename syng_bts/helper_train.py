@@ -172,7 +172,7 @@ def train_AE(
     for epoch in range(num_epochs):
         epoch_train_loss = []
         epoch_val_loss = []
-        for batch_idx, (features, _) in enumerate(train_loader):
+        for _batch_idx, (features, _) in enumerate(train_loader):
             model.train()
             # FORWARD AND BACK PROP
             encoded, decoded = model(features)
@@ -310,7 +310,7 @@ def train_VAE(
 
         epoch_train_loss = []
         epoch_val_loss = []
-        for batch_idx, (features, _) in enumerate(train_loader):
+        for _batch_idx, (features, _) in enumerate(train_loader):
             model.train()
             # FORWARD AND BACK PROP
             encoded, z_mean, z_log_var, decoded = model(features)
@@ -478,7 +478,7 @@ def train_CVAE(
 
         epoch_train_loss = []
         epoch_val_loss = []
-        for batch_idx, (features, lab) in enumerate(train_loader):
+        for _batch_idx, (features, lab) in enumerate(train_loader):
             model.train()
             if lab.dim() == 1:  # label (dim = 1)
                 lab = lab.unsqueeze(1)
@@ -621,7 +621,7 @@ def train_GAN(
     best_model = model
     for epoch in range(num_epochs):
         model.train()
-        for batch_idx, (features, _) in enumerate(train_loader):
+        for _batch_idx, (features, _) in enumerate(train_loader):
             batch_size = features.size(0)
 
             # real images
@@ -754,7 +754,7 @@ def train_WGAN(
     for epoch in range(num_epochs):
         epoch_loss = []
         model.train()
-        for batch_idx, (features, _) in enumerate(train_loader):
+        for _batch_idx, (features, _) in enumerate(train_loader):
             batch_size = features.size(0)
 
             # real images
@@ -918,7 +918,7 @@ def train_WGANGP(
         epoch_loss = []
         model.train()
 
-        for batch_idx, (features, _) in enumerate(train_loader):
+        for _batch_idx, (features, _) in enumerate(train_loader):
             batch_size = features.size(0)
 
             # real images
@@ -1331,7 +1331,7 @@ class ActNorm(nn.Module):
         self.initialized = False
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
-        if self.initialized == False:
+        if not self.initialized:
             self.weight.data.copy_(torch.log(1.0 / (inputs.std(0) + 1e-12)))
             self.bias.data.copy_(inputs.mean(0))
             self.initialized = True

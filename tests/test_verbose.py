@@ -11,7 +11,6 @@ Covers:
 - tqdm is no longer imported anywhere in the package
 """
 
-import importlib
 
 import pytest
 

@@ -11,9 +11,7 @@ Covers:
 - create_labels / create_labels_mul global RNG preservation
 """
 
-import inspect
 import os
-import re
 
 import matplotlib.pyplot as plt
 import numpy as np

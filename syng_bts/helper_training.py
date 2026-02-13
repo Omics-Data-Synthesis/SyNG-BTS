@@ -613,7 +613,7 @@ def training_flows(
         model.train()
         train_loss = 0
 
-        for batch_idx, data in enumerate(train_loader):
+        for _batch_idx, data in enumerate(train_loader):
             if isinstance(data, list):
                 if len(data) > 1:
                     cond_data = data[1].float()

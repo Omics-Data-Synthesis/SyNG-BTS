@@ -44,7 +44,12 @@ def sample_result(sample_generated, sample_loss):
     return SyngResult(
         generated_data=sample_generated,
         loss=sample_loss,
-        metadata={"model": "VAE1-10", "dataname": "test", "seed": 42},
+        metadata={
+            "model": "VAE1-10",
+            "dataname": "test",
+            "seed": 42,
+            "epochs_trained": 50,
+        },
     )
 
 
@@ -162,7 +167,7 @@ class TestSyngResult:
         result = SyngResult(
             generated_data=sample_generated,
             loss=loss,
-            metadata={"model": "VAE1-10", "num_epochs": 10},
+            metadata={"model": "VAE1-10", "epochs_trained": 10},
         )
         figs = result.plot_loss(x_axis="epochs")
         assert set(figs.keys()) == {"kl", "recons"}
@@ -176,30 +181,40 @@ class TestSyngResult:
         with pytest.raises(ValueError, match="x_axis must be"):
             sample_result.plot_loss(x_axis="batches")
 
-    def test_plot_loss_missing_num_epochs_for_epochs_axis(self, sample_result):
-        """Test plot_loss raises ValueError when x_axis='epochs' but num_epochs missing."""
-        with pytest.raises(ValueError, match="num_epochs"):
-            sample_result.plot_loss(x_axis="epochs")
+    def test_plot_loss_missing_num_epochs_for_epochs_axis(
+        self, sample_generated, sample_loss
+    ):
+        """Test plot_loss raises ValueError when x_axis='epochs' but epochs_trained missing."""
+        from syng_bts import SyngResult
+
+        # Create result without epochs_trained in metadata
+        result_no_epochs = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"model": "VAE1-10"},
+        )
+        with pytest.raises(ValueError, match="epochs_trained"):
+            result_no_epochs.plot_loss(x_axis="epochs")
 
     def test_plot_loss_non_numeric_num_epochs_for_epochs_axis(self, sample_generated):
-        """Test plot_loss raises ValueError when num_epochs is non-numeric."""
+        """Test plot_loss raises ValueError when epochs_trained is non-numeric."""
         from syng_bts import SyngResult
 
         loss = pd.DataFrame({"loss": np.random.rand(20)})
         result = SyngResult(
             generated_data=sample_generated,
             loss=loss,
-            metadata={"num_epochs": "ten"},
+            metadata={"epochs_trained": "ten"},
         )
-        with pytest.raises(ValueError, match="num_epochs"):
+        with pytest.raises(ValueError, match="epochs_trained"):
             result.plot_loss(x_axis="epochs")
 
     def test_plot_loss_invalid_running_average_window(self, sample_result):
         """Test plot_loss raises ValueError when running_average_window <= 0."""
         with pytest.raises(ValueError, match="running_average_window must be > 0"):
-            sample_result.plot_loss(running_average_window=0)
+            sample_result.plot_loss(running_average_window=0, x_axis="iterations")
         with pytest.raises(ValueError, match="running_average_window must be > 0"):
-            sample_result.plot_loss(running_average_window=-5)
+            sample_result.plot_loss(running_average_window=-5, x_axis="iterations")
 
     def test_plot_loss_window_larger_than_series(self, sample_generated):
         """Test plot_loss raises ValueError when window exceeds series length."""
@@ -209,6 +224,7 @@ class TestSyngResult:
         result = SyngResult(
             generated_data=sample_generated,
             loss=short_loss,
+            metadata={"epochs_trained": 3},
         )
         with pytest.raises(ValueError, match="larger than"):
             result.plot_loss(running_average_window=100)
@@ -228,7 +244,7 @@ class TestSyngResult:
         result = SyngResult(
             generated_data=sample_generated,
             loss=loss,
-            metadata={"model": "AE"},
+            metadata={"model": "AE", "epochs_trained": 100},
         )
         figs = result.plot_loss(running_average_window=10)
         fig = figs["loss"]
@@ -574,7 +590,7 @@ class TestPilotResult:
                         "dataname": "test",
                         "pilot_size": ps,
                         "draw": draw,
-                        "num_epochs": 10,
+                        "epochs_trained": 10,
                     },
                 )
         return PilotResult(

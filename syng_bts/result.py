@@ -156,8 +156,8 @@ class SyngResult:
 
     def plot_loss(
         self,
-        running_average_window: int = 50,
-        x_axis: str = "iterations",
+        running_average_window: int = 25,
+        x_axis: str = "epochs",
     ) -> dict[str, plt.Figure]:
         """Plot the training loss curve(s), one figure per loss column.
 
@@ -168,10 +168,11 @@ class SyngResult:
         ----------
         running_average_window : int
             Window size for the running-average overlay. Must be > 0.
+            Default: 25.
         x_axis : str
-            ``"iterations"`` (default) numbers data points 0…N-1.
-            ``"epochs"`` maps the x-axis to epoch space using
-            ``metadata["num_epochs"]`` (must be present and > 0).
+            ``"epochs"`` (default) maps the x-axis to epoch space using
+            ``metadata["epochs_trained"]`` (must be present and > 0).
+            ``"iterations"`` numbers data points 0…N-1.
 
         Returns
         -------
@@ -183,7 +184,7 @@ class SyngResult:
         ValueError
             If *running_average_window* ≤ 0, if *x_axis* is not
             ``"iterations"`` or ``"epochs"``, if ``x_axis="epochs"``
-            but ``metadata["num_epochs"]`` is missing or ≤ 0, or if
+            but ``metadata["epochs_trained"]`` is missing or ≤ 0, or if
             the window is larger than a loss series.
         """
         if running_average_window <= 0:
@@ -194,22 +195,22 @@ class SyngResult:
             raise ValueError(f"x_axis must be 'iterations' or 'epochs', got {x_axis!r}")
         num_epochs: float | None = None
         if x_axis == "epochs":
-            raw_num_epochs = self.metadata.get("num_epochs")
+            raw_num_epochs = self.metadata.get("epochs_trained")
             if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 )
             try:
                 num_epochs = float(raw_num_epochs)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 ) from exc
             if num_epochs <= 0:
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 )
 
@@ -547,8 +548,8 @@ class PilotResult:
     def plot_loss(
         self,
         aggregate: bool = False,
-        running_average_window: int = 50,
-        x_axis: str = "iterations",
+        running_average_window: int = 25,
+        x_axis: str = "epochs",
     ) -> dict[tuple[int, int], dict[str, plt.Figure]] | dict[str, plt.Figure]:
         """Plot loss curves for every run.
 
@@ -561,11 +562,12 @@ class PilotResult:
             figures.
         running_average_window : int
             Window size for the running-average overlay (per-run mode
-            only). Must be > 0.
+            only). Must be > 0. Default: 25.
         x_axis : str
-            ``"iterations"`` or ``"epochs"``. In per-run mode this is
-            forwarded to each ``SyngResult.plot_loss()`` call. In
-            aggregate mode it controls the x-axis for each run overlay.
+            ``"epochs"`` (default) maps the x-axis to epoch space using
+            ``metadata["epochs_trained"]`` (must be present and > 0).
+            ``"iterations"`` numbers data points 0…N-1.
+            In aggregate mode it controls the x-axis for each run overlay.
 
         Returns
         -------
@@ -602,22 +604,22 @@ class PilotResult:
                     continue
                 values = result.loss[col].to_numpy()
                 if x_axis == "epochs":
-                    raw_num_epochs = result.metadata.get("num_epochs")
+                    raw_num_epochs = result.metadata.get("epochs_trained")
                     if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         )
                     try:
                         num_epochs = float(raw_num_epochs)
                     except (TypeError, ValueError) as exc:
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         ) from exc
                     if num_epochs <= 0:
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         )
                     x = np.linspace(0, num_epochs, len(values))

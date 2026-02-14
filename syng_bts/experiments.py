@@ -12,11 +12,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 
-from .data_utils import derive_dataname, resolve_data
+from .data_utils import _validate_feature_data, derive_dataname, resolve_data
 from .helper_train import _resolve_verbose
 from .helper_training import (
     training_AEs,
@@ -291,13 +290,12 @@ def generate(
     verbose_level = _resolve_verbose(verbose)
 
     # --- 1. Resolve data -------------------------------------------------
-    df = resolve_data(data)
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
     dataname = derive_dataname(data, name)
 
     # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df.select_dtypes(include=np.number)
-    if "groups" in data_pd.columns:
-        data_pd = data_pd.drop(columns=["groups"])
+    data_pd = df
     colnames = list(data_pd.columns)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
 
@@ -307,8 +305,7 @@ def generate(
     n_samples = oridata.shape[0]
 
     # --- 3. Labels -------------------------------------------------------
-    groups = df["groups"] if "groups" in df.columns else None
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=bundled_groups)
 
     # --- 4. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
@@ -541,19 +538,17 @@ def pilot_study(
     verbose_level = _resolve_verbose(verbose)
 
     # --- 1. Resolve data -------------------------------------------------
-    df = resolve_data(data)
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
     dataname = derive_dataname(data, name)
 
-    data_pd = df.select_dtypes(include=np.number)
-    if "groups" in data_pd.columns:
-        data_pd = data_pd.drop(columns=["groups"])
+    data_pd = df
     colnames = list(data_pd.columns)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
     oridata = preprocessinglog2(oridata)
     n_samples = oridata.shape[0]
 
-    groups = df["groups"] if "groups" in df.columns else None
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=bundled_groups)
 
     modelname, kl_weight = _parse_model_spec(model)
 

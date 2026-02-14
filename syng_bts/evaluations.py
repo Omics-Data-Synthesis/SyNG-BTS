@@ -225,17 +225,22 @@ def evaluation(
         figures.  Neither figure has been displayed; the caller decides
         when to call ``plt.show()`` or ``fig.savefig()``.
     """
-    real_df = resolve_data(real_data)
-    gen_df = resolve_data(generated_data)
+    real_df, bundled_groups_real = resolve_data(real_data)
+    gen_df, _bundled_groups_gen = resolve_data(generated_data)
 
     # --- Derive group labels ------------------------------------------------
     groups_real: pd.Series | None = None
     groups_generated: pd.Series | None = None
 
-    has_groups_col = "groups" in real_df.columns
+    # Use bundled groups if available, else fall back to column
+    raw_groups_source = bundled_groups_real
+    if raw_groups_source is None and "groups" in real_df.columns:
+        raw_groups_source = real_df["groups"]
+
+    has_groups_col = raw_groups_source is not None
 
     if has_groups_col:
-        raw_groups = real_df["groups"]
+        raw_groups = raw_groups_source
         unique_groups = sorted(raw_groups.unique())
 
         if group_names is not None:

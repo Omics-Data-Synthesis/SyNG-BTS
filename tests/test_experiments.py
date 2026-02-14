@@ -660,11 +660,41 @@ class TestGenerate:
                 learning_rate=LR,
             )
 
+    def test_generate_rejects_metadata_columns(self, sample_data):
+        """generate() rejects user DataFrames with metadata-like columns."""
+        bad = sample_data.copy()
+        bad["groups"] = 0
+
+        with pytest.raises(ValueError, match="metadata column"):
+            generate(
+                data=bad,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
+    def test_generate_rejects_non_numeric_columns(self, sample_data):
+        """generate() rejects user DataFrames with non-numeric columns."""
+        bad = sample_data.copy()
+        bad["sample_name"] = "A"
+
+        with pytest.raises(ValueError, match="non-numeric"):
+            generate(
+                data=bad,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
     def test_generate_with_dataframe_input(self):
         """generate() works with a DataFrame loaded from bundled dataset."""
         from syng_bts import resolve_data
 
-        df = resolve_data("SKCMPositive_4")
+        df, _groups = resolve_data("SKCMPositive_4")
         result = generate(
             data=df,
             model="VAE1-10",
@@ -729,6 +759,21 @@ class TestPilotStudy:
             learning_rate=LR,
         )
         assert isinstance(result, PilotResult)
+
+    def test_pilot_study_rejects_metadata_columns(self, sample_data):
+        """pilot_study() rejects user DataFrames with metadata-like columns."""
+        bad = sample_data.copy()
+        bad["samples"] = "TCGA-XX"
+
+        with pytest.raises(ValueError, match="metadata column"):
+            pilot_study(
+                data=bad,
+                pilot_size=[10],
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
 
     def test_runs_count(self, sample_data):
         """5 draws per pilot size."""

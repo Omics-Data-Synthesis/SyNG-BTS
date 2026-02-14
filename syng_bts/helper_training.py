@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+import time
 from typing import NamedTuple
 
 import torch
@@ -674,9 +675,7 @@ def training_flows(
     best_train_epoch = 0
     best_model = model
 
-    import time as _time
-
-    start_time = _time.time()
+    start_time = time.time()
 
     for epoch in range(num_epochs):
         global_step, train_loss = train_one_epoch(epoch, global_step)
@@ -709,10 +708,10 @@ def training_flows(
                 epoch=epoch,
                 num_epochs=num_epochs,
                 loss_dict={"train_loss": train_loss},
-                elapsed_time=_time.time() - start_time,
+                elapsed_time=time.time() - start_time,
             )
 
-    total_time = (_time.time() - start_time) / 60
+    total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
 

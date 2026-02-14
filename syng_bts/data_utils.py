@@ -168,69 +168,6 @@ def _read_bundled_parquet(subdir: str, filename: str) -> pd.DataFrame:
         ) from e
 
 
-def load_data(
-    dataname: str,
-    data_path: str | Path | None = None,
-    bundled_info: tuple | None = None,
-) -> pd.DataFrame:
-    """
-    Load data from a file path or bundled package resource.
-
-    First tries to load from the specified path. If the file doesn't exist
-    and bundled_info is specified, tries to load from package resources.
-
-    Parameters
-    ----------
-    dataname : str
-        The data name (without .csv extension).
-    data_path : str, Path, or None
-        Path to the data file or directory containing the file.
-        If a directory, will look for {dataname}.csv in it.
-    bundled_info : tuple, optional
-        Tuple of (subdir, filename) to load bundled data from if file not found.
-
-    Returns
-    -------
-    pd.DataFrame
-        The loaded data.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the data cannot be found in either location.
-    """
-    filename = f"{dataname}.csv"
-
-    # Determine the full file path
-    if data_path is not None:
-        path = Path(data_path)
-        if path.is_dir():
-            file_path = path / filename
-        else:
-            file_path = path
-    else:
-        file_path = Path(filename)
-
-    # Try loading from file path first
-    if file_path.exists():
-        return pd.read_csv(file_path, header=0)
-
-    # Try loading from bundled data (drop groups for backward compat)
-    if bundled_info is not None:
-        try:
-            subdir, bundled_filename = bundled_info
-            df, _groups = load_bundled_data(subdir, bundled_filename)
-            return df
-        except (FileNotFoundError, ModuleNotFoundError):
-            pass
-
-    raise FileNotFoundError(
-        f"Could not find data '{dataname}'. "
-        f"Looked in: {file_path}"
-        + (f" and bundled data '{bundled_info}'" if bundled_info else "")
-    )
-
-
 # Map of known bundled datasets to their package locations and subdirectories.
 # Format: "dataset_name": ("subdir_path", "features.parquet", "groups.parquet" | None)
 BUNDLED_DATASETS: dict[str, tuple[str, str, str | None]] = {
@@ -289,43 +226,6 @@ BUNDLED_DATASETS: dict[str, tuple[str, str, str | None]] = {
 }
 
 
-def load_dataset(
-    dataname: str,
-    data_path: str | Path | None = None,
-) -> pd.DataFrame:
-    """
-    Load a dataset, checking bundled data if not found at path.
-
-    This is a convenience function that automatically checks if the dataset
-    is a known bundled dataset.
-
-    Parameters
-    ----------
-    dataname : str
-        The dataset name (without .csv extension).
-    data_path : str, Path, or None
-        Optional path to look for the data first.
-
-    Returns
-    -------
-    pd.DataFrame
-        The loaded data.
-
-    Examples
-    --------
-    >>> from syng_bts import load_dataset
-    >>> # Load bundled example data
-    >>> data = load_dataset("SKCMPositive_4")
-    >>> # Load from custom path
-    >>> data = load_dataset("my_data", data_path="./my_data_dir/")
-    """
-    bundled_info = BUNDLED_DATASETS.get(dataname)
-    if bundled_info is not None:
-        # Extract (subdir, feature_filename) for load_data compatibility
-        bundled_info = (bundled_info[0], bundled_info[1])
-    return load_data(dataname, data_path, bundled_info)
-
-
 def list_bundled_datasets() -> list:
     """
     List all available bundled datasets.
@@ -333,7 +233,7 @@ def list_bundled_datasets() -> list:
     Returns
     -------
     list
-        List of dataset names that can be loaded with load_dataset().
+        List of dataset names that can be loaded with :func:`resolve_data`.
     """
     return list(BUNDLED_DATASETS.keys())
 

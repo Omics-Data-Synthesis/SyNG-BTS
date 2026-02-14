@@ -13,6 +13,8 @@ runs/
 *.csvplot
 *_generated.csv
 *_loss.csv
+*_metadata.json
+*_reconstructed.csv
 *.pt
 
 # ============================================

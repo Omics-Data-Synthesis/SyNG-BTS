@@ -109,39 +109,36 @@ def get_output_path(
 
 def load_bundled_data(subdir: str, filename: str) -> pd.DataFrame:
     """
-    Load a bundled CSV data file from the package's data directory.
+    Load a bundled Parquet data file from the package's data directory.
 
     Parameters
     ----------
     subdir : str
         The subdirectory within syng_bts/data/ (e.g., "examples", "transfer").
     filename : str
-        The filename to load.
+        The Parquet filename to load.
 
     Returns
     -------
     pd.DataFrame
-        The loaded data.
+        The loaded feature data (index preserved from Parquet).
     """
     try:
-        # Construct the path within the data package
         data_package = files("syng_bts.data")
-        # Navigate through subdirectories
         resource = data_package
         for part in subdir.split("/"):
             resource = resource.joinpath(part)
         resource = resource.joinpath(filename)
 
         with as_file(resource) as path:
-            return pd.read_csv(path, header=0)
+            return pd.read_parquet(path, engine="pyarrow")
     except (TypeError, AttributeError, FileNotFoundError) as e:
-        # Fallback: try direct file path (for development/editable installs)
         import syng_bts
 
         package_dir = Path(syng_bts.__file__).parent
         file_path = package_dir / "data" / subdir / filename
         if file_path.exists():
-            return pd.read_csv(file_path, header=0)
+            return pd.read_parquet(file_path, engine="pyarrow")
         raise FileNotFoundError(
             f"Could not find bundled data file: {subdir}/{filename}"
         ) from e
@@ -209,33 +206,60 @@ def load_data(
     )
 
 
-# Map of known bundled datasets to their package locations and subdirectories
-# Format: "dataset_name": ("subdir_path", "filename.csv")
-BUNDLED_DATASETS = {
+# Map of known bundled datasets to their package locations and subdirectories.
+# Format: "dataset_name": ("subdir_path", "features.parquet", "groups.parquet" | None)
+BUNDLED_DATASETS: dict[str, tuple[str, str, str | None]] = {
     # Example datasets
-    "SKCMPositive_4": ("examples", "SKCMPositive_4.csv"),
+    "SKCMPositive_4": ("examples", "SKCMPositive_4.parquet", None),
     # Transfer learning datasets
-    "BRCA": ("transfer", "BRCA.csv"),
-    "PRAD": ("transfer", "PRAD.csv"),
+    "BRCA": ("transfer", "BRCA.parquet", None),
+    "PRAD": ("transfer", "PRAD.parquet", None),
     # BRCA subtype case study
-    "BRCASubtypeSel": ("case/brca_subtype", "BRCASubtypeSel.csv"),
-    "BRCASubtypeSel_test": ("case/brca_subtype", "BRCASubtypeSel_test.csv"),
-    "BRCASubtypeSel_train": ("case/brca_subtype", "BRCASubtypeSel_train.csv"),
+    "BRCASubtypeSel": (
+        "case/brca_subtype",
+        "BRCASubtypeSel.parquet",
+        "BRCASubtypeSel_groups.parquet",
+    ),
+    "BRCASubtypeSel_test": (
+        "case/brca_subtype",
+        "BRCASubtypeSel_test.parquet",
+        "BRCASubtypeSel_test_groups.parquet",
+    ),
+    "BRCASubtypeSel_train": (
+        "case/brca_subtype",
+        "BRCASubtypeSel_train.parquet",
+        "BRCASubtypeSel_train_groups.parquet",
+    ),
     # LIHC subtype case study
-    "LIHCSubtypeFamInd": ("case/lihc_subtype", "LIHCSubtypeFamInd.csv"),
-    "LIHCSubtypeFamInd_DESeq": ("case/lihc_subtype", "LIHCSubtypeFamInd_DESeq.csv"),
-    "LIHCSubtypeFamInd_test74": ("case/lihc_subtype", "LIHCSubtypeFamInd_test74.csv"),
+    "LIHCSubtypeFamInd": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd.parquet",
+        "LIHCSubtypeFamInd_groups.parquet",
+    ),
+    "LIHCSubtypeFamInd_DESeq": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_DESeq.parquet",
+        "LIHCSubtypeFamInd_DESeq_groups.parquet",
+    ),
+    "LIHCSubtypeFamInd_test74": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_test74.parquet",
+        "LIHCSubtypeFamInd_test74_groups.parquet",
+    ),
     "LIHCSubtypeFamInd_test74_DESeq": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_test74_DESeq.csv",
+        "LIHCSubtypeFamInd_test74_DESeq.parquet",
+        "LIHCSubtypeFamInd_test74_DESeq_groups.parquet",
     ),
     "LIHCSubtypeFamInd_train294": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_train294.csv",
+        "LIHCSubtypeFamInd_train294.parquet",
+        "LIHCSubtypeFamInd_train294_groups.parquet",
     ),
     "LIHCSubtypeFamInd_train294_DESeq": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_train294_DESeq.csv",
+        "LIHCSubtypeFamInd_train294_DESeq.parquet",
+        "LIHCSubtypeFamInd_train294_DESeq_groups.parquet",
     ),
 }
 
@@ -271,6 +295,9 @@ def load_dataset(
     >>> data = load_dataset("my_data", data_path="./my_data_dir/")
     """
     bundled_info = BUNDLED_DATASETS.get(dataname)
+    if bundled_info is not None:
+        # Extract (subdir, feature_filename) for load_data compatibility
+        bundled_info = (bundled_info[0], bundled_info[1])
     return load_data(dataname, data_path, bundled_info)
 
 
@@ -349,14 +376,16 @@ def resolve_data(data: "pd.DataFrame | str | Path") -> pd.DataFrame:
             return pd.read_csv(path, header=0)
         raise FileNotFoundError(f"Data file not found: {path}")
 
-    # 4. Treat as a bundled dataset name — strip .csv if the user added it
+    # 4. Treat as a bundled dataset name — strip .csv/.parquet if the user added it
     name = data_str
     if name.lower().endswith(".csv"):
         name = name[: -len(".csv")]
+    elif name.lower().endswith(".parquet"):
+        name = name[: -len(".parquet")]
 
     bundled_info = BUNDLED_DATASETS.get(name)
     if bundled_info is not None:
-        subdir, filename = bundled_info
+        subdir, filename, _groups = bundled_info
         return load_bundled_data(subdir, filename)
 
     # 5. Last resort: try as a local file (e.g. "myfile.csv" in cwd)

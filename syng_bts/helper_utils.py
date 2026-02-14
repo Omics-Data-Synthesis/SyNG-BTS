@@ -25,21 +25,38 @@ def preprocessinglog2(dataset: torch.Tensor) -> torch.Tensor:
 def inverse_log2(data: pd.DataFrame) -> pd.DataFrame:
     """Inverse the log2(x+1) transformation back to count scale.
 
-    Applies ``2^x - 1`` to all numeric columns.
+    Applies ``2^x - 1`` to all columns. Raises an error if any
+    non-numeric columns are present.
 
     Parameters
     ----------
     data : pd.DataFrame
-        Data in log2-transformed scale.
+        Data in log2-transformed scale. All columns must be numeric.
 
     Returns
     -------
     pd.DataFrame
-        Data in count scale (``2^x - 1``).
+        Data in count scale (``2^x - 1``) with original column order preserved.
+
+    Raises
+    ------
+    ValueError
+        If any non-numeric columns are present in the DataFrame.
     """
     result = data.copy()
-    numeric_cols = result.select_dtypes(include=[np.number]).columns
-    result[numeric_cols] = np.power(2, result[numeric_cols]) - 1
+
+    # Check that all columns are numeric
+    non_numeric_cols = [
+        col for col in result.columns if not pd.api.types.is_numeric_dtype(result[col])
+    ]
+    if non_numeric_cols:
+        raise ValueError(
+            f"Cannot apply inverse log2 transform: non-numeric columns found: {non_numeric_cols}. "
+            "All columns must be numeric (feature data only)."
+        )
+
+    # Apply transformation to all columns
+    result[:] = np.power(2, result) - 1
     return result
 
 

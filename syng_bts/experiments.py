@@ -365,7 +365,7 @@ def generate(
     # --- 2. Extract numeric data, capture column names -------------------
     data_pd = df
     colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
 
     if apply_log:
         oridata = preprocessinglog2(oridata)
@@ -523,6 +523,19 @@ def generate(
         if recon_df is not None:
             recon_df = inverse_log2(recon_df)
 
+    # --- 10c. Validate column order consistency ---------------------------
+    # Defensive check: ensure all DataFrames have the same column order
+    if not gen_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in generated_data. "
+            "This is an internal error; please report it."
+        )
+    if recon_df is not None and not recon_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in reconstructed_data. "
+            "This is an internal error; please report it."
+        )
+
     loss_df = _build_loss_df(train_out.log_dict, modelname)
 
     metadata = {
@@ -640,7 +653,7 @@ def pilot_study(
     # --- 2. Extract numeric data, capture column names -------------------
     data_pd = df
     colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
     if apply_log:
         oridata = preprocessinglog2(oridata)
     n_samples = oridata.shape[0]
@@ -821,6 +834,19 @@ def pilot_study(
                 gen_df = inverse_log2(gen_df)
                 if recon_df is not None:
                     recon_df = inverse_log2(recon_df)
+
+            # -- Validate column order consistency -------------------------
+            # Defensive check: ensure all DataFrames have the same column order
+            if not gen_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in generated_data. "
+                    "This is an internal error; please report it."
+                )
+            if recon_df is not None and not recon_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in reconstructed_data. "
+                    "This is an internal error; please report it."
+                )
 
             # Per-draw original data subset
             pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()

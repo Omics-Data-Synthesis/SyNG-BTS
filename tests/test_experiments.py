@@ -310,6 +310,49 @@ class TestResultSchema:
         assert isinstance(result.model_state, dict)
         assert len(result.model_state) > 0
 
+    def test_column_order_preservation(self, sample_data):
+        """Column order is preserved across all DataFrames (original, generated, reconstructed).
+
+        This test verifies that column order is maintained throughout the entire
+        data pipeline, from input through tensor operations to final DataFrames.
+        """
+        # Use AE model which produces reconstruction, and apply_log to test inverse transform
+        result = generate(
+            data=sample_data,
+            model="AE",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            apply_log=True,  # Test inverse transform path
+        )
+
+        # Get expected column order from input
+        expected_cols = list(sample_data.columns)
+
+        # Verify original_data preserves column order
+        assert result.original_data is not None
+        assert list(result.original_data.columns) == expected_cols, (
+            "original_data column order differs from input"
+        )
+
+        # Verify generated_data preserves column order
+        assert list(result.generated_data.columns) == expected_cols, (
+            "generated_data column order differs from input"
+        )
+
+        # Verify reconstructed_data preserves column order
+        assert result.reconstructed_data is not None
+        assert list(result.reconstructed_data.columns) == expected_cols, (
+            "reconstructed_data column order differs from input"
+        )
+
+        # Verify all three match each other
+        assert list(result.generated_data.columns) == list(result.original_data.columns)
+        assert list(result.reconstructed_data.columns) == list(
+            result.original_data.columns
+        )
+
     def test_pilot_result_schema(self, sample_data):
         """PilotResult.runs has correct keys and each value is a SyngResult."""
         result = pilot_study(

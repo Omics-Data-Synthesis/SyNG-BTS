@@ -3,7 +3,7 @@ Migration Guide (v2.x → v3.0)
 
 SyNG-BTS v3.0 is a **breaking** release that replaces the file-centric API
 with a Pythonic, DataFrame-friendly interface. This guide covers the key
-changes.
+changes. See also the `v3.0 → v3.1 section <v31-changes_>`_ below.
 
 .. contents:: Table of Contents
    :local:
@@ -148,3 +148,40 @@ Quick Migration Checklist
 7. Use ``result.save(output_dir)`` when you need files on disk.
 8. Replace standalone plot calls with ``result.plot_loss()`` / ``result.plot_heatmap()``.
 9. Update eval calls: ``dat_real`` → ``real_data``, ``random_state`` → ``random_seed``.
+
+.. _v31-changes:
+
+Changes in v3.1
+================
+
+SyNG-BTS v3.1 mainly tightens data and evaluation contracts.
+
+- ``resolve_data()`` now returns ``(dataframe, groups_or_none)``.
+  Update callers to unpack both values.
+- Group labels are explicit API inputs (``groups=``, ``source_groups=``,
+  ``target_groups=``); do not pass metadata columns inside feature data.
+- User feature DataFrames are strict: numeric columns only; ``groups`` and
+  ``samples`` columns are rejected.
+- Bundled datasets are stored as Parquet (transparent via loader APIs).
+- Generated/reconstructed outputs are returned in count scale when
+  ``apply_log=True``.
+- ``SyngResult``/``PilotResult`` include ``original_data``.
+- ``evaluation()`` uses ``real_groups``/``generated_groups``;
+  ``load_data()`` and ``load_dataset()`` are removed.
+
+.. code-block:: python
+
+   # v3.0
+   data = resolve_data("SKCMPositive_4")
+
+   # v3.1
+   data, groups = resolve_data("SKCMPositive_4")
+
+v3.1 Quick Migration Checklist
+------------------------------
+
+1. Unpack loader returns: ``data, groups = resolve_data(...)``.
+2. Pass labels via ``groups=`` (or transfer equivalents), not DataFrame columns.
+3. Remove ``groups`` / ``samples`` columns from user input DataFrames.
+4. Replace ``group_names=`` with ``real_groups=`` / ``generated_groups=``.
+5. Replace ``load_data()`` / ``load_dataset()`` with ``resolve_data()``.

@@ -30,9 +30,10 @@ Use the data utility functions to access bundled datasets:
    print(datasets)
 
    # Load a specific dataset as a DataFrame
-   data = resolve_data("SKCMPositive_4")
+   data, groups = resolve_data("SKCMPositive_4")
    print(f"Shape: {data.shape}")
    print(f"Columns: {data.columns.tolist()[:5]}...")
+   print(f"Groups: {groups}")  # None for datasets without group labels
 
 Available Datasets
 ------------------
@@ -142,11 +143,13 @@ You can use your own datasets as DataFrames or CSV file paths:
    # Save results to disk
    result.save("./results/")
 
-Your CSV file should have:
+Your CSV or Parquet file should have:
 
 - Samples as rows
 - Features (genes/miRNAs) as columns
 - First column can be sample IDs or index
+- Do **not** include ``groups`` or ``samples`` columns — pass group labels
+  via the ``groups`` parameter instead
 
 Data Source
 -----------

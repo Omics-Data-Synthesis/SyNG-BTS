@@ -356,6 +356,199 @@ class TestSyngResult:
         assert isinstance(loaded, dict)
 
 
+class TestOriginalData:
+    """Test original_data field on SyngResult and PilotResult."""
+
+    def test_syng_result_original_data_default_none(
+        self, sample_generated, sample_loss
+    ):
+        """SyngResult.original_data defaults to None."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={},
+        )
+        assert result.original_data is None
+
+    def test_syng_result_with_original_data(
+        self, sample_data, sample_generated, sample_loss
+    ):
+        """SyngResult stores original_data when provided."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={},
+        )
+        assert result.original_data is not None
+        pd.testing.assert_frame_equal(result.original_data, sample_data)
+
+    def test_save_writes_original_csv(
+        self, sample_data, sample_generated, sample_loss, temp_dir
+    ):
+        """save() writes an _original.csv when original_data is present."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={"dataname": "test"},
+        )
+        paths = result.save(temp_dir)
+        assert "original" in paths
+        assert paths["original"].exists()
+
+    def test_save_no_original_csv_when_none(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """save() does not write _original.csv when original_data is None."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "test"},
+        )
+        paths = result.save(temp_dir)
+        assert "original" not in paths
+
+    def test_load_restores_original_data(
+        self, sample_data, sample_generated, sample_loss, temp_dir
+    ):
+        """load() restores original_data from _original.csv."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={"dataname": "test"},
+        )
+        result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        assert loaded.original_data is not None
+        pd.testing.assert_frame_equal(loaded.original_data, sample_data, atol=1e-6)
+
+    def test_load_no_original_returns_none(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """load() sets original_data=None when no _original.csv exists."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "test"},
+        )
+        result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        assert loaded.original_data is None
+
+    def test_summary_includes_original_shape(
+        self, sample_data, sample_generated, sample_loss
+    ):
+        """summary() mentions original-data shape when present."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={},
+        )
+        s = result.summary()
+        assert "original" in s.lower()
+
+    def test_repr_shows_has_original(self, sample_data, sample_generated, sample_loss):
+        """__repr__ includes has_original=True when original_data is present."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={},
+        )
+        assert "has_original=True" in repr(result)
+
+    def test_plot_heatmap_original(self, sample_data, sample_generated, sample_loss):
+        """plot_heatmap(which='original') works."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            original_data=sample_data,
+            metadata={},
+        )
+        fig = result.plot_heatmap(which="original")
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_heatmap_original_missing_raises(self, sample_generated, sample_loss):
+        """plot_heatmap(which='original') raises when no original_data."""
+        from syng_bts import SyngResult
+
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={},
+        )
+        with pytest.raises(ValueError, match="[Oo]riginal"):
+            result.plot_heatmap(which="original")
+
+    def test_pilot_result_original_data(
+        self, sample_data, sample_generated, sample_loss
+    ):
+        """PilotResult stores top-level original_data."""
+        from syng_bts import PilotResult, SyngResult
+
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated,
+                loss=sample_loss,
+                metadata={},
+            )
+        }
+        pr = PilotResult(runs=runs, metadata={}, original_data=sample_data)
+        assert pr.original_data is not None
+        pd.testing.assert_frame_equal(pr.original_data, sample_data)
+
+    def test_pilot_result_save_writes_original(
+        self, sample_data, sample_generated, sample_loss, temp_dir
+    ):
+        """PilotResult.save() writes top-level _original.csv."""
+        from syng_bts import PilotResult, SyngResult
+
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated,
+                loss=sample_loss,
+                metadata={"dataname": "test", "model": "VAE1-10"},
+            )
+        }
+        pr = PilotResult(
+            runs=runs,
+            metadata={"dataname": "test", "model": "VAE1-10"},
+            original_data=sample_data,
+        )
+        pr.save(temp_dir)
+        # Check that the top-level original CSV was written
+        original_files = list(temp_dir.glob("*_original.csv"))
+        assert len(original_files) >= 1
+
+
 class TestPilotResult:
     """Test PilotResult container."""
 

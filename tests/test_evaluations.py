@@ -318,6 +318,38 @@ class TestEvaluationFunction:
         for f in figs.values():
             plt.close(f)
 
+    def test_evaluation_generated_bundled_groups_used_as_fallback(self, monkeypatch):
+        """Generated bundled groups are used when generated_groups is omitted."""
+        from syng_bts import evaluation
+        from syng_bts.data_utils import resolve_data
+
+        real_df, real_bundled_groups = resolve_data("BRCASubtypeSel_test")
+        gen_df, gen_bundled_groups = resolve_data("BRCASubtypeSel_test")
+        assert real_bundled_groups is not None
+        assert gen_bundled_groups is not None
+
+        captured: dict[str, pd.Series | None] = {}
+
+        def _capture_umap(*args, **kwargs):
+            captured["groups_real"] = kwargs.get("groups_real")
+            captured["groups_generated"] = kwargs.get("groups_generated")
+            return plt.figure()
+
+        monkeypatch.setattr("syng_bts.evaluations.UMAP_eval", _capture_umap)
+
+        figs = evaluation(
+            "BRCASubtypeSel_test",
+            "BRCASubtypeSel_test",
+            apply_log=False,
+        )
+        assert isinstance(figs, dict)
+        assert captured["groups_real"] is not None
+        assert captured["groups_generated"] is not None
+        assert len(captured["groups_real"]) == len(real_df)
+        assert len(captured["groups_generated"]) == len(gen_df)
+        for f in figs.values():
+            plt.close(f)
+
     def test_evaluation_no_groups(self, sample_data):
         """evaluation() works without any group information."""
         from syng_bts import evaluation

@@ -17,7 +17,7 @@ These models are trained on a pilot dataset and can synthesize additional sample
 ## Features
 
 - **Multiple Generative Models**: VAE, CVAE, GAN, WGANGP, and flow-based models (MAF)
-- **TODO** : Run pilot experiments, generate synthetic data, and perform transfer learning with a unified API
+- **Unified API**: Run pilot experiments, generate synthetic data, and perform transfer learning
 - **DataFrame-First API**: Accept pandas DataFrames, CSV file paths, or bundled dataset names
 - **Rich Result Objects**: `SyngResult` / `PilotResult` with built-in plotting and export
 - **In-Memory Pipeline**: No disk I/O by default — results stay in memory until you choose to save
@@ -151,7 +151,7 @@ result = generate(
 from syng_bts import generate, resolve_data, heatmap_eval, UMAP_eval
 
 result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
-real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
+real_data, _groups = resolve_data("SKCMPositive_4")
 
 # Built-in heatmap on result object
 fig = result.plot_heatmap()
@@ -192,6 +192,7 @@ SyNG-BTS requires Python 3.10+ and the following packages:
 - seaborn (>=0.12.0)
 - tensorboardX (>=2.6.0)
 - umap-learn (>=0.5.6)
+- pyarrow (>=14.0.0)
 
 ## Documentation
 

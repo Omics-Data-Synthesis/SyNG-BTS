@@ -14,7 +14,7 @@ from .data_utils import resolve_data
 
 
 def _coerce_groups(
-    groups: pd.Series | np.ndarray | list | tuple | None,
+    groups: pd.Series | np.ndarray | list | tuple | pd.Index | None,
     *,
     param_name: str,
     expected_len: int,
@@ -214,8 +214,8 @@ def evaluation(
     real_data: pd.DataFrame | str | Path,
     generated_data: pd.DataFrame | str | Path,
     *,
-    real_groups: pd.Series | np.ndarray | list | tuple | None = None,
-    generated_groups: pd.Series | np.ndarray | list | tuple | None = None,
+    real_groups: pd.Series | np.ndarray | list | tuple | pd.Index | None = None,
+    generated_groups: pd.Series | np.ndarray | list | tuple | pd.Index | None = None,
     n_samples: int | None = 200,
     apply_log: bool = True,
     random_seed: int = 42,
@@ -232,14 +232,14 @@ def evaluation(
         a bundled dataset name (resolved via :func:`resolve_data`).
     generated_data : pd.DataFrame, str, or Path
         The generated/synthetic dataset. Same input types as *real_data*.
-    real_groups : pd.Series, np.ndarray, list, tuple, or None, optional
+    real_groups : pd.Series, np.ndarray, list, tuple, pd.Index, or None, optional
         Group labels for the real samples.  When provided, takes
         precedence over any bundled groups resolved from *real_data*.
         Values are used as-is for plot labels (converted to ``str``).
-    generated_groups : pd.Series, np.ndarray, list, tuple, or None, optional
+    generated_groups : pd.Series, np.ndarray, list, tuple, pd.Index, or None, optional
         Group labels for the generated samples.  When provided, takes
-        precedence over heuristic label detection.  Values are used
-        as-is for plot labels (converted to ``str``).
+        precedence over any bundled groups resolved from *generated_data*.
+        Values are used as-is for plot labels (converted to ``str``).
     n_samples : int or None, default 200
         Number of samples from each end of the dataset to use for
         visualization (to keep UMAP fast).  If ``None``, all samples are
@@ -258,7 +258,7 @@ def evaluation(
         when to call ``plt.show()`` or ``fig.savefig()``.
     """
     real_df, bundled_groups_real = resolve_data(real_data)
-    gen_df, _bundled_groups_gen = resolve_data(generated_data)
+    gen_df, bundled_groups_gen = resolve_data(generated_data)
 
     # --- Resolve group labels -----------------------------------------------
     # Precedence: explicit parameter > bundled groups > None
@@ -275,6 +275,8 @@ def evaluation(
 
     if groups_real is None and bundled_groups_real is not None:
         groups_real = bundled_groups_real.reset_index(drop=True).astype(str)
+    if groups_generated is None and bundled_groups_gen is not None:
+        groups_generated = bundled_groups_gen.reset_index(drop=True).astype(str)
 
     # --- Prepare numeric matrices -------------------------------------------
     real_numeric = real_df.select_dtypes(include=[np.number])

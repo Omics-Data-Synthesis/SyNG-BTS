@@ -40,7 +40,7 @@ try:
     __version__ = version("syng-bts")
 except PackageNotFoundError:
     # Package is not installed (running from source)
-    __version__ = "3.0.1"
+    __version__ = "3.1.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"

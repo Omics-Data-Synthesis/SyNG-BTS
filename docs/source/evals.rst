@@ -75,10 +75,9 @@ Examples
 
 .. code-block:: python
 
-   import numpy as np
    from syng_bts import resolve_data, heatmap_eval
 
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
+   real_data, _groups = resolve_data("SKCMPositive_4")
    fig = heatmap_eval(real_data=real_data.head(50))
 
 **Example 2: Compare real and generated data**
@@ -88,7 +87,7 @@ Examples
    from syng_bts import generate, resolve_data, heatmap_eval
 
    result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
+   real_data, _groups = resolve_data("SKCMPositive_4")
 
    fig = heatmap_eval(
        real_data=real_data.head(50),
@@ -112,11 +111,10 @@ Examples
 
 .. code-block:: python
 
-   import numpy as np
    from syng_bts import generate, resolve_data, UMAP_eval
 
    result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=500)
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
+   real_data, _groups = resolve_data("SKCMPositive_4")
 
    fig = UMAP_eval(
        real_data=real_data,
@@ -129,10 +127,9 @@ Examples
 .. code-block:: python
 
    import pandas as pd
-   import numpy as np
    from syng_bts import resolve_data, UMAP_eval
 
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include=[np.number])
+   real_data, _groups = resolve_data("SKCMPositive_4")
 
    groups_real = pd.Series(["Group A", "Group B"] * (len(real_data) // 2))
 
@@ -192,7 +189,7 @@ A typical end-to-end workflow:
    )
 
    # Step 2: Load original data for comparison
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
+   real_data, _groups = resolve_data("SKCMPositive_4")
 
    # Step 3: Visualize training loss (one figure per loss column)
    figs_loss = result.plot_loss()

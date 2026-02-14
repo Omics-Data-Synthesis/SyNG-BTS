@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -175,6 +176,68 @@ def _resolve_early_stopping_config(
         return default_max_epochs, True, default_patience
 
 
+def _coerce_groups_array(
+    groups: pd.Series | np.ndarray,
+    *,
+    n_samples: int,
+    param_name: str,
+) -> np.ndarray:
+    """Normalize user/bundled groups to a 1D numpy array."""
+    if isinstance(groups, pd.Series):
+        arr = groups.to_numpy()
+    elif isinstance(groups, np.ndarray):
+        arr = groups
+    else:
+        raise TypeError(
+            f"'{param_name}' must be a pandas Series, numpy ndarray, or None, "
+            f"got {type(groups).__name__}"
+        )
+
+    if arr.ndim != 1:
+        raise ValueError(
+            f"'{param_name}' must be one-dimensional, got shape {arr.shape}"
+        )
+
+    if arr.shape[0] != n_samples:
+        raise ValueError(
+            f"'{param_name}' length ({arr.shape[0]}) must match number of "
+            f"samples ({n_samples})"
+        )
+
+    return arr
+
+
+def _validate_binary_groups(groups: np.ndarray, *, param_name: str) -> None:
+    """Enforce v3.1 binary-group scope (<= 2 distinct classes)."""
+    unique = pd.Series(groups).dropna().unique()
+    if len(unique) > 2:
+        raise ValueError(
+            f"'{param_name}' has {len(unique)} classes, but SyNG-BTS supports only "
+            "binary groups (at most 2 classes)."
+        )
+
+
+def _resolve_effective_groups(
+    explicit_groups: pd.Series | np.ndarray | None,
+    bundled_groups: pd.Series | None,
+    *,
+    n_samples: int,
+    param_name: str,
+) -> np.ndarray | None:
+    """Resolve groups using explicit precedence: argument > bundled."""
+    candidate = explicit_groups if explicit_groups is not None else bundled_groups
+    if candidate is None:
+        return None
+
+    group_array = _coerce_groups_array(
+        candidate,
+        n_samples=n_samples,
+        param_name=param_name,
+    )
+    _validate_binary_groups(group_array, param_name=param_name)
+    return group_array
+
+
 # =========================================================================
 # New public API
 # =========================================================================
@@ -184,6 +247,7 @@ def generate(
     data: pd.DataFrame | str | Path,
     *,
     name: str | None = None,
+    groups: pd.Series | np.ndarray | None = None,
     new_size: int | list[int] = 500,
     model: str = "VAE1-10",
     apply_log: bool = True,
@@ -219,6 +283,9 @@ def generate(
     name : str or None
         Short name for output filenames.  Derived automatically when
         ``None``.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels. When provided, these labels take
+        precedence over bundled dataset groups.
     new_size : int or list[int]
         Number of synthetic samples to generate.
     model : str
@@ -303,9 +370,18 @@ def generate(
         oridata = preprocessinglog2(oridata)
 
     n_samples = oridata.shape[0]
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
 
     # --- 3. Labels -------------------------------------------------------
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=bundled_groups)
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
 
     # --- 4. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
@@ -472,7 +548,9 @@ def pilot_study(
     pilot_size: list[int],
     *,
     name: str | None = None,
+    groups: pd.Series | np.ndarray | None = None,
     model: str = "VAE1-10",
+    apply_log: bool = True,
     batch_frac: float = 0.1,
     learning_rate: float = 0.0005,
     epoch: int | None = None,
@@ -501,8 +579,13 @@ def pilot_study(
         List of pilot sizes to evaluate.
     name : str or None
         Short name for output filenames.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels. When provided, these labels take
+        precedence over bundled dataset groups.
     model : str
         Model specification (e.g. ``"VAE1-10"``).
+    apply_log : bool
+        Apply ``log2(x + 1)`` preprocessing.
     batch_frac : float
         Batch size as a fraction of sample count.
     learning_rate : float
@@ -545,10 +628,21 @@ def pilot_study(
     data_pd = df
     colnames = list(data_pd.columns)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
-    oridata = preprocessinglog2(oridata)
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
     n_samples = oridata.shape[0]
 
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=bundled_groups)
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
+
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
 
     modelname, kl_weight = _parse_model_spec(model)
 
@@ -568,7 +662,7 @@ def pilot_study(
     for n_pilot in pilot_size:
         for rand_pilot in range(1, 6):
             # Draw pilot sub-sample
-            rawdata, rawlabels, rawblurlabels = draw_pilot(
+            rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
                 dataset=oridata,
                 labels=orilabels,
                 blurlabels=oriblurlabels,
@@ -718,6 +812,7 @@ def pilot_study(
                 "kl_weight": kl_weight,
                 "pilot_size": n_pilot,
                 "draw": rand_pilot,
+                "pilot_indices": pilot_indices.tolist(),
                 "input_shape": (n_samples, len(colnames)),
                 "early_stop": early_stop,
                 "early_stop_patience": early_stop_num,
@@ -755,6 +850,8 @@ def transfer(
     *,
     source_name: str | None = None,
     target_name: str | None = None,
+    source_groups: pd.Series | np.ndarray | None = None,
+    target_groups: pd.Series | np.ndarray | None = None,
     pilot_size: list[int] | None = None,
     source_size: int = 500,
     new_size: int = 500,
@@ -789,6 +886,10 @@ def transfer(
         Short name for the source dataset.
     target_name : str or None
         Short name for the target dataset.
+    source_groups : pd.Series, np.ndarray, or None
+        Optional binary groups for the source dataset.
+    target_groups : pd.Series, np.ndarray, or None
+        Optional binary groups for the target dataset.
     pilot_size : list[int] or None
         If set, uses ``pilot_study`` for the target phase.  Otherwise
         uses ``generate``.
@@ -853,6 +954,7 @@ def transfer(
     _source_result = generate(
         data=source_data,
         name=fromname,
+        groups=source_groups,
         new_size=[source_size],
         model=model,
         apply_log=apply_log,
@@ -876,7 +978,9 @@ def transfer(
             data=target_data,
             pilot_size=pilot_size,
             name=toname,
+            groups=target_groups,
             model=model,
+            apply_log=apply_log,
             batch_frac=batch_frac,
             learning_rate=learning_rate,
             epoch=epoch,
@@ -893,6 +997,7 @@ def transfer(
         result = generate(
             data=target_data,
             name=toname,
+            groups=target_groups,
             new_size=new_size,
             model=model,
             apply_log=apply_log,

@@ -231,12 +231,13 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot_data, pilot_labels, pilot_blur = draw_pilot(
+        pilot_data, pilot_labels, pilot_blur, pilot_indices = draw_pilot(
             dataset, labels, blurlabels, n_pilot=20, seednum=42
         )
 
         assert len(pilot_data) == 20
         assert len(pilot_labels) == 20
+        assert len(pilot_indices) == 20
 
     def test_draw_pilot_two_labels(self):
         """Test draw_pilot with two labels draws from both groups."""
@@ -246,11 +247,12 @@ class TestPilotDrawing:
         labels = torch.cat([torch.zeros(50, 1), torch.ones(50, 1)])
         blurlabels = labels.clone()
 
-        pilot_data, pilot_labels, pilot_blur = draw_pilot(
+        pilot_data, pilot_labels, pilot_blur, pilot_indices = draw_pilot(
             dataset, labels, blurlabels, n_pilot=20, seednum=42
         )
 
         assert len(pilot_data) == 40  # 20 per group
+        assert len(pilot_indices) == 40
 
     def test_draw_pilot_reproducible(self):
         """Test draw_pilot is reproducible with same seed."""
@@ -260,10 +262,15 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot1, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
-        pilot2, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
+        pilot1, _, _, idx1 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+        pilot2, _, _, idx2 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
 
         assert torch.allclose(pilot1, pilot2)
+        assert torch.equal(idx1, idx2)
 
     def test_draw_pilot_different_seeds(self):
         """Test draw_pilot gives different results with different seeds."""
@@ -273,10 +280,45 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot1, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
-        pilot2, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=99)
+        pilot1, _, _, idx1 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+        pilot2, _, _, idx2 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=99
+        )
 
         assert not torch.allclose(pilot1, pilot2)
+        assert not torch.equal(idx1, idx2)
+
+    def test_draw_pilot_indices_single_group(self):
+        """draw_pilot always returns selected row indices for provenance."""
+        from syng_bts.helper_utils import draw_pilot
+
+        dataset = torch.randn(100, 50)
+        labels = torch.zeros(100, 1)
+        blurlabels = labels.clone()
+
+        pilot_data, _pilot_labels, _pilot_blur, pilot_indices = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+
+        assert pilot_indices.shape[0] == 20
+        assert torch.allclose(pilot_data, dataset[pilot_indices, :])
+
+    def test_draw_pilot_indices_two_groups(self):
+        """draw_pilot returns global row indices for two-group draws."""
+        from syng_bts.helper_utils import draw_pilot
+
+        dataset = torch.randn(100, 50)
+        labels = torch.cat([torch.zeros(50, 1), torch.ones(50, 1)])
+        blurlabels = labels.clone()
+
+        pilot_data, _pilot_labels, _pilot_blur, pilot_indices = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+
+        assert pilot_indices.shape[0] == 40
+        assert torch.allclose(pilot_data, dataset[pilot_indices, :])
 
 
 # ===========================================================================

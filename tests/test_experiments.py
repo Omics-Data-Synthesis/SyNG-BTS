@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from syng_bts import generate, pilot_study, transfer
+from syng_bts.data_utils import resolve_data
 from syng_bts.experiments import (
     _build_loss_df,
     _compute_new_size,
@@ -690,6 +691,21 @@ class TestGenerate:
                 learning_rate=LR,
             )
 
+    def test_generate_rejects_non_binary_groups(self, sample_data):
+        """generate() enforces binary-group scope in v3.1."""
+        groups = pd.Series(["A", "B", "C", "A", "B"] * 4)
+
+        with pytest.raises(ValueError, match="supports only binary groups"):
+            generate(
+                data=sample_data,
+                groups=groups,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
     def test_generate_with_dataframe_input(self):
         """generate() works with a DataFrame loaded from bundled dataset."""
         from syng_bts import resolve_data
@@ -889,6 +905,39 @@ class TestPilotStudy:
         assert isinstance(result, PilotResult)
         assert len(result.runs) == 5
 
+    def test_explicit_groups_override_bundled_groups(self):
+        """Explicit groups take precedence over bundled groups."""
+        grouped_df, _ = resolve_data("BRCASubtypeSel")
+        groups_all_zero = pd.Series(["class0"] * len(grouped_df))
+
+        result = pilot_study(
+            data="BRCASubtypeSel",
+            groups=groups_all_zero,
+            pilot_size=[8],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+
+        for run in result.runs.values():
+            assert run.metadata["pilot_size"] == 8
+
+    def test_pilot_study_rejects_non_binary_groups(self, sample_data):
+        """pilot_study() enforces binary-group scope in v3.1."""
+        groups = pd.Series(["A", "B", "C", "A", "B"] * 4)
+
+        with pytest.raises(ValueError, match="supports only binary groups"):
+            pilot_study(
+                data=sample_data,
+                groups=groups,
+                pilot_size=[10],
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
 
 # =========================================================================
 # transfer()
@@ -966,6 +1015,50 @@ class TestTransfer:
             learning_rate=LR,
         )
         assert isinstance(result, SyngResult)
+
+    def test_transfer_forwards_groups_and_apply_log(self, sample_data, monkeypatch):
+        """transfer() forwards new group and apply_log args to downstream calls."""
+        import syng_bts.experiments as exp
+
+        observed: dict[str, object] = {}
+
+        def fake_generate(*args, **kwargs):
+            if kwargs.get("pre_model") is None:
+                observed["source_groups"] = kwargs.get("groups")
+            else:
+                observed["target_groups_generate"] = kwargs.get("groups")
+            return SyngResult(
+                generated_data=pd.DataFrame([[0.0]]),
+                loss=pd.DataFrame({"train_loss": [1.0]}),
+                metadata={"model": "AE", "dataname": "x", "seed": 1},
+            )
+
+        def fake_pilot_study(*args, **kwargs):
+            observed["target_groups_pilot"] = kwargs.get("groups")
+            observed["pilot_apply_log"] = kwargs.get("apply_log")
+            return PilotResult(runs={})
+
+        monkeypatch.setattr(exp, "generate", fake_generate)
+        monkeypatch.setattr(exp, "pilot_study", fake_pilot_study)
+
+        source_groups = pd.Series(["S0"] * len(sample_data))
+        target_groups = pd.Series(["T0"] * len(sample_data))
+
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            source_groups=source_groups,
+            target_groups=target_groups,
+            pilot_size=[10],
+            apply_log=False,
+            model="AE",
+            epoch=1,
+        )
+
+        assert isinstance(result, PilotResult)
+        assert observed["source_groups"] is source_groups
+        assert observed["target_groups_pilot"] is target_groups
+        assert observed["pilot_apply_log"] is False
 
 
 # =========================================================================

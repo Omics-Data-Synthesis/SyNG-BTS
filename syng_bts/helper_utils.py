@@ -132,7 +132,7 @@ def draw_pilot(
     blurlabels: torch.Tensor,
     n_pilot: int,
     seednum: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Draw a pilot dataset with balanced group sampling.
 
     Maintains group balance when drawing a pilot subset. For single-group
@@ -151,12 +151,11 @@ def draw_pilot(
         Target number of samples per group.
     seednum : int
         Random seed to use for reproducible draws.
-
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        ``(pilot_data, pilot_labels, pilot_blurlabels)`` — the drawn
-        pilot subset with preserved group balance.
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(pilot_data, pilot_labels, pilot_blurlabels, pilot_indices)``
+        where ``pilot_indices`` are row indices into the original dataset.
     """
     # draw pilot datasets
     set_all_seeds(
@@ -181,6 +180,8 @@ def draw_pilot(
         labels_2 = labels[labels[:, 0] != base, :]
         blurlabels_1 = blurlabels[labels[:, 0] == base, :]
         blurlabels_2 = blurlabels[labels[:, 0] != base, :]
+        global_indices_1 = torch.where(labels[:, 0] == base)[0]
+        global_indices_2 = torch.where(labels[:, 0] != base)[0]
         shuffled_indices_1 = torch.randperm(n_samples_1)
         pilot_indices_1 = shuffled_indices_1[-n_pilot_1:]
         rawdata_1 = dataset_1[pilot_indices_1, :]
@@ -191,10 +192,14 @@ def draw_pilot(
         rawdata_2 = dataset_2[pilot_indices_2, :]
         rawlabels_2 = labels_2[pilot_indices_2, :]
         rawblurlabels_2 = blurlabels_2[pilot_indices_2, :]
+        pilot_indices = torch.cat(
+            (global_indices_1[pilot_indices_1], global_indices_2[pilot_indices_2]),
+            dim=0,
+        )
         rawdata = torch.cat((rawdata_1, rawdata_2), dim=0)
         rawlabels = torch.cat((rawlabels_1, rawlabels_2), dim=0)
         rawblurlabels = torch.cat((rawblurlabels_1, rawblurlabels_2), dim=0)
-    return rawdata, rawlabels, rawblurlabels
+    return rawdata, rawlabels, rawblurlabels, pilot_indices
 
 
 def Gaussian_aug(

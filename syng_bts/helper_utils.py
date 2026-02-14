@@ -2,6 +2,7 @@ import os
 import random
 
 import numpy as np
+import pandas as pd
 import torch
 
 
@@ -19,6 +20,44 @@ def preprocessinglog2(dataset: torch.Tensor) -> torch.Tensor:
         Log2-transformed data: log2(dataset + 1).
     """
     return torch.log2(dataset + 1)
+
+
+def inverse_log2(data: pd.DataFrame) -> pd.DataFrame:
+    """Inverse the log2(x+1) transformation back to count scale.
+
+    Applies ``2^x - 1`` to all columns. Raises an error if any
+    non-numeric columns are present.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Data in log2-transformed scale. All columns must be numeric.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data in count scale (``2^x - 1``) with original column order preserved.
+
+    Raises
+    ------
+    ValueError
+        If any non-numeric columns are present in the DataFrame.
+    """
+    result = data.copy()
+
+    # Check that all columns are numeric
+    non_numeric_cols = [
+        col for col in result.columns if not pd.api.types.is_numeric_dtype(result[col])
+    ]
+    if non_numeric_cols:
+        raise ValueError(
+            f"Cannot apply inverse log2 transform: non-numeric columns found: {non_numeric_cols}. "
+            "All columns must be numeric (feature data only)."
+        )
+
+    # Apply transformation to all columns
+    result[:] = np.power(2, result) - 1
+    return result
 
 
 def set_all_seeds(seed: int) -> None:
@@ -132,7 +171,7 @@ def draw_pilot(
     blurlabels: torch.Tensor,
     n_pilot: int,
     seednum: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Draw a pilot dataset with balanced group sampling.
 
     Maintains group balance when drawing a pilot subset. For single-group
@@ -151,12 +190,11 @@ def draw_pilot(
         Target number of samples per group.
     seednum : int
         Random seed to use for reproducible draws.
-
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        ``(pilot_data, pilot_labels, pilot_blurlabels)`` — the drawn
-        pilot subset with preserved group balance.
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(pilot_data, pilot_labels, pilot_blurlabels, pilot_indices)``
+        where ``pilot_indices`` are row indices into the original dataset.
     """
     # draw pilot datasets
     set_all_seeds(
@@ -181,6 +219,8 @@ def draw_pilot(
         labels_2 = labels[labels[:, 0] != base, :]
         blurlabels_1 = blurlabels[labels[:, 0] == base, :]
         blurlabels_2 = blurlabels[labels[:, 0] != base, :]
+        global_indices_1 = torch.where(labels[:, 0] == base)[0]
+        global_indices_2 = torch.where(labels[:, 0] != base)[0]
         shuffled_indices_1 = torch.randperm(n_samples_1)
         pilot_indices_1 = shuffled_indices_1[-n_pilot_1:]
         rawdata_1 = dataset_1[pilot_indices_1, :]
@@ -191,10 +231,14 @@ def draw_pilot(
         rawdata_2 = dataset_2[pilot_indices_2, :]
         rawlabels_2 = labels_2[pilot_indices_2, :]
         rawblurlabels_2 = blurlabels_2[pilot_indices_2, :]
+        pilot_indices = torch.cat(
+            (global_indices_1[pilot_indices_1], global_indices_2[pilot_indices_2]),
+            dim=0,
+        )
         rawdata = torch.cat((rawdata_1, rawdata_2), dim=0)
         rawlabels = torch.cat((rawlabels_1, rawlabels_2), dim=0)
         rawblurlabels = torch.cat((rawblurlabels_1, rawblurlabels_2), dim=0)
-    return rawdata, rawlabels, rawblurlabels
+    return rawdata, rawlabels, rawblurlabels, pilot_indices
 
 
 def Gaussian_aug(

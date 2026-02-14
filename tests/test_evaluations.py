@@ -259,68 +259,155 @@ class TestEvaluationFunction:
         for f in figs.values():
             plt.close(f)
 
-    def test_evaluation_with_groups_column(self):
-        """evaluation() detects 'groups' column and derives labels."""
+    def test_evaluation_with_explicit_groups(self, sample_data):
+        """evaluation() accepts explicit real_groups and generated_groups."""
         from syng_bts import evaluation
 
-        np.random.seed(42)
-        real = pd.DataFrame(
-            np.random.rand(30, 10), columns=[f"g{i}" for i in range(10)]
-        )
-        real["groups"] = ["TypeA"] * 15 + ["TypeB"] * 15
-
-        gen = pd.DataFrame(np.random.rand(30, 11))  # extra label column
-        gen.iloc[:, -1] = [1] * 15 + [0] * 15
-
-        figs = evaluation(real, gen, group_names=["Alpha", "Beta"], apply_log=False)
-        assert isinstance(figs, dict)
-        for f in figs.values():
-            plt.close(f)
-
-    def test_evaluation_with_groups_default_names(self):
-        """Without group_names, defaults to 'Group 0' / 'Group 1'."""
-        from syng_bts import evaluation
-
-        np.random.seed(42)
-        real = pd.DataFrame(
-            np.random.rand(30, 10), columns=[f"g{i}" for i in range(10)]
-        )
-        real["groups"] = ["TypeA"] * 15 + ["TypeB"] * 15
-
-        gen = pd.DataFrame(np.random.rand(30, 11))
-        gen.iloc[:, -1] = [1] * 15 + [0] * 15
-
-        figs = evaluation(real, gen, apply_log=False)
-        assert isinstance(figs, dict)
-        for f in figs.values():
-            plt.close(f)
-
-    def test_evaluation_group_names_wrong_length(self, sample_data):
-        """group_names with wrong length raises ValueError."""
-        from syng_bts import evaluation
-
-        real = sample_data.copy()
-        real["groups"] = ["A"] * 10 + ["B"] * 10
         gen = sample_data * 1.1 + 0.01
+        real_groups = pd.Series(["TypeA"] * 10 + ["TypeB"] * 10)
+        gen_groups = pd.Series(["TypeA"] * 10 + ["TypeB"] * 10)
 
-        with pytest.raises(ValueError, match="exactly 2 elements"):
-            evaluation(real, gen, group_names=["X", "Y", "Z"], apply_log=False)
+        figs = evaluation(
+            sample_data,
+            gen,
+            real_groups=real_groups,
+            generated_groups=gen_groups,
+            apply_log=False,
+        )
+        assert isinstance(figs, dict)
+        for f in figs.values():
+            plt.close(f)
 
-    def test_evaluation_bundled_dataset(self):
-        """evaluation() works with a bundled dataset name."""
+    def test_evaluation_explicit_groups_override_bundled(self):
+        """Explicit real_groups take precedence over bundled groups."""
+        from syng_bts import evaluation
+        from syng_bts.data_utils import resolve_data
+
+        real_df, bundled_groups = resolve_data("BRCASubtypeSel_test")
+        assert bundled_groups is not None  # bundled groups exist
+
+        gen = real_df * 1.1 + 0.01
+        custom_groups = pd.Series(
+            ["CustomA"] * (len(real_df) // 2)
+            + ["CustomB"] * (len(real_df) - len(real_df) // 2)
+        )
+
+        figs = evaluation(
+            real_df,
+            gen,
+            real_groups=custom_groups,
+            apply_log=False,
+        )
+        assert isinstance(figs, dict)
+        for f in figs.values():
+            plt.close(f)
+
+    def test_evaluation_bundled_groups_used_as_fallback(self):
+        """Bundled groups are used when no explicit groups are passed."""
+        from syng_bts import evaluation
+        from syng_bts.data_utils import resolve_data
+
+        real_df, bundled_groups = resolve_data("BRCASubtypeSel_test")
+        assert bundled_groups is not None
+
+        gen = real_df * 1.1 + 0.01
+
+        # No explicit groups — bundled should be used
+        figs = evaluation(real_df, gen, apply_log=False)
+        assert isinstance(figs, dict)
+        for f in figs.values():
+            plt.close(f)
+
+    def test_evaluation_generated_bundled_groups_used_as_fallback(self, monkeypatch):
+        """Generated bundled groups are used when generated_groups is omitted."""
+        from syng_bts import evaluation
+        from syng_bts.data_utils import resolve_data
+
+        real_df, real_bundled_groups = resolve_data("BRCASubtypeSel_test")
+        gen_df, gen_bundled_groups = resolve_data("BRCASubtypeSel_test")
+        assert real_bundled_groups is not None
+        assert gen_bundled_groups is not None
+
+        captured: dict[str, pd.Series | None] = {}
+
+        def _capture_umap(*args, **kwargs):
+            captured["groups_real"] = kwargs.get("groups_real")
+            captured["groups_generated"] = kwargs.get("groups_generated")
+            return plt.figure()
+
+        monkeypatch.setattr("syng_bts.evaluations.UMAP_eval", _capture_umap)
+
+        figs = evaluation(
+            "BRCASubtypeSel_test",
+            "BRCASubtypeSel_test",
+            apply_log=False,
+        )
+        assert isinstance(figs, dict)
+        assert captured["groups_real"] is not None
+        assert captured["groups_generated"] is not None
+        assert len(captured["groups_real"]) == len(real_df)
+        assert len(captured["groups_generated"]) == len(gen_df)
+        for f in figs.values():
+            plt.close(f)
+
+    def test_evaluation_no_groups(self, sample_data):
+        """evaluation() works without any group information."""
         from syng_bts import evaluation
 
-        try:
-            figs = evaluation(
-                real_data="BRCASubtypeSel_test",
-                generated_data="BRCASubtypeSel_train_epoch285_CVAE1-20_generated",
-                group_names=["Ductal", "Lobular"],
+        gen = sample_data * 1.1 + 0.01
+        figs = evaluation(sample_data, gen, apply_log=False)
+        assert isinstance(figs, dict)
+        for f in figs.values():
+            plt.close(f)
+
+    def test_evaluation_accepts_list_and_ndarray_groups(self, sample_data):
+        """evaluation() accepts list/ndarray group labels."""
+        from syng_bts import evaluation
+
+        gen = sample_data * 1.1 + 0.01
+        real_groups = ["A"] * 10 + ["B"] * 10
+        gen_groups = np.array(["A"] * 10 + ["B"] * 10)
+
+        figs = evaluation(
+            sample_data,
+            gen,
+            real_groups=real_groups,
+            generated_groups=gen_groups,
+            apply_log=False,
+        )
+        assert isinstance(figs, dict)
+        for f in figs.values():
+            plt.close(f)
+
+    def test_evaluation_real_groups_length_mismatch_raises(self, sample_data):
+        """real_groups length mismatch raises ValueError."""
+        from syng_bts import evaluation
+
+        gen = sample_data * 1.1 + 0.01
+        bad_real_groups = pd.Series(["A"] * (len(sample_data) - 1))
+
+        with pytest.raises(ValueError, match="real_groups length"):
+            evaluation(
+                sample_data,
+                gen,
+                real_groups=bad_real_groups,
+                apply_log=False,
             )
-            assert isinstance(figs, dict)
-            for f in figs.values():
-                plt.close(f)
-        except (FileNotFoundError, ValueError):
-            pytest.skip("Bundled BRCA data not available")
+
+    def test_evaluation_generated_groups_length_mismatch_raises(self, sample_data):
+        """generated_groups length mismatch raises ValueError."""
+        from syng_bts import evaluation
+
+        gen = sample_data * 1.1 + 0.01
+        bad_gen_groups = pd.Series(["A"] * (len(gen) - 1))
+
+        with pytest.raises(ValueError, match="generated_groups length"):
+            evaluation(
+                sample_data,
+                gen,
+                generated_groups=bad_gen_groups,
+                apply_log=False,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +459,7 @@ class TestEvaluationFunctionsExist:
         assert "dat_real" not in umap_sig.parameters
 
     def test_old_evaluation_params_removed(self):
-        """evaluation() no longer accepts old generated_input/real_input/data_dir."""
+        """evaluation() no longer accepts old generated_input/real_input/data_dir/group_names."""
         import inspect
 
         from syng_bts import evaluation
@@ -381,3 +468,4 @@ class TestEvaluationFunctionsExist:
         assert "generated_input" not in sig.parameters
         assert "real_input" not in sig.parameters
         assert "data_dir" not in sig.parameters
+        assert "group_names" not in sig.parameters

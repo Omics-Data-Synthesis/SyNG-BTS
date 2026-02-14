@@ -290,7 +290,7 @@ SyNG-BTS includes several bundled datasets for testing and examples:
    # ['SKCMPositive_4', 'BRCA', 'PRAD', 'BRCASubtypeSel', ...]
 
    # Load a bundled dataset as a DataFrame
-   data = resolve_data("SKCMPositive_4")
+   data, groups = resolve_data("SKCMPositive_4")
    print(f"Shape: {data.shape}")
 
 Available bundled datasets:

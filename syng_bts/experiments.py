@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .data_utils import derive_dataname, resolve_data
+from .data_utils import _validate_feature_data, derive_dataname, resolve_data
 from .helper_train import _resolve_verbose
 from .helper_training import (
     training_AEs,
@@ -28,6 +28,7 @@ from .helper_utils import (
     Gaussian_aug,
     create_labels,
     draw_pilot,
+    inverse_log2,
     preprocessinglog2,
 )
 from .result import PilotResult, SyngResult
@@ -176,6 +177,68 @@ def _resolve_early_stopping_config(
         return default_max_epochs, True, default_patience
 
 
+def _coerce_groups_array(
+    groups: pd.Series | np.ndarray,
+    *,
+    n_samples: int,
+    param_name: str,
+) -> np.ndarray:
+    """Normalize user/bundled groups to a 1D numpy array."""
+    if isinstance(groups, pd.Series):
+        arr = groups.to_numpy()
+    elif isinstance(groups, np.ndarray):
+        arr = groups
+    else:
+        raise TypeError(
+            f"'{param_name}' must be a pandas Series, numpy ndarray, or None, "
+            f"got {type(groups).__name__}"
+        )
+
+    if arr.ndim != 1:
+        raise ValueError(
+            f"'{param_name}' must be one-dimensional, got shape {arr.shape}"
+        )
+
+    if arr.shape[0] != n_samples:
+        raise ValueError(
+            f"'{param_name}' length ({arr.shape[0]}) must match number of "
+            f"samples ({n_samples})"
+        )
+
+    return arr
+
+
+def _validate_binary_groups(groups: np.ndarray, *, param_name: str) -> None:
+    """Enforce v3.1 binary-group scope (<= 2 distinct classes)."""
+    unique = pd.Series(groups).dropna().unique()
+    if len(unique) > 2:
+        raise ValueError(
+            f"'{param_name}' has {len(unique)} classes, but SyNG-BTS supports only "
+            "binary groups (at most 2 classes)."
+        )
+
+
+def _resolve_effective_groups(
+    explicit_groups: pd.Series | np.ndarray | None,
+    bundled_groups: pd.Series | None,
+    *,
+    n_samples: int,
+    param_name: str,
+) -> np.ndarray | None:
+    """Resolve groups using explicit precedence: argument > bundled."""
+    candidate = explicit_groups if explicit_groups is not None else bundled_groups
+    if candidate is None:
+        return None
+
+    group_array = _coerce_groups_array(
+        candidate,
+        n_samples=n_samples,
+        param_name=param_name,
+    )
+    _validate_binary_groups(group_array, param_name=param_name)
+    return group_array
+
+
 # =========================================================================
 # New public API
 # =========================================================================
@@ -185,6 +248,7 @@ def generate(
     data: pd.DataFrame | str | Path,
     *,
     name: str | None = None,
+    groups: pd.Series | np.ndarray | None = None,
     new_size: int | list[int] = 500,
     model: str = "VAE1-10",
     apply_log: bool = True,
@@ -220,6 +284,9 @@ def generate(
     name : str or None
         Short name for output filenames.  Derived automatically when
         ``None``.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels. When provided, these labels take
+        precedence over bundled dataset groups.
     new_size : int or list[int]
         Number of synthetic samples to generate.
     model : str
@@ -291,24 +358,31 @@ def generate(
     verbose_level = _resolve_verbose(verbose)
 
     # --- 1. Resolve data -------------------------------------------------
-    df = resolve_data(data)
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
     dataname = derive_dataname(data, name)
 
     # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df.select_dtypes(include=np.number)
-    if "groups" in data_pd.columns:
-        data_pd = data_pd.drop(columns=["groups"])
+    data_pd = df
     colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
 
     if apply_log:
         oridata = preprocessinglog2(oridata)
 
     n_samples = oridata.shape[0]
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
 
     # --- 3. Labels -------------------------------------------------------
-    groups = df["groups"] if "groups" in df.columns else None
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
 
     # --- 4. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
@@ -423,23 +497,44 @@ def generate(
     # --- 10. Assemble SyngResult -----------------------------------------
     gen_np = train_out.generated_data.detach().numpy()
 
-    # For CVAE, add label column name
-    gen_colnames = list(colnames)
+    # For CVAE, strip the appended label column — it is the conditioning
+    # input, not a generated feature.  Store it in metadata instead.
+    gen_labels = None
     if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-        gen_colnames = gen_colnames + ["label"]
+        gen_labels = pd.Series(gen_np[:, -1], name="label")
+        gen_np = gen_np[:, :-1]
 
-    gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
+    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
 
     recon_df = None
+    recon_labels = None
     if train_out.reconstructed_data is not None:
         recon_np = train_out.reconstructed_data.detach().numpy()
 
-        # For CVAE, add label column name
-        recon_colnames = list(colnames)
         if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-            recon_colnames = recon_colnames + ["label"]
+            recon_labels = pd.Series(recon_np[:, -1], name="label")
+            recon_np = recon_np[:, :-1]
 
-        recon_df = pd.DataFrame(recon_np, columns=recon_colnames[: recon_np.shape[1]])
+        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+    # --- 10b. Inverse log transform to count scale -----------------------
+    if apply_log:
+        gen_df = inverse_log2(gen_df)
+        if recon_df is not None:
+            recon_df = inverse_log2(recon_df)
+
+    # --- 10c. Validate column order consistency ---------------------------
+    # Defensive check: ensure all DataFrames have the same column order
+    if not gen_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in generated_data. "
+            "This is an internal error; please report it."
+        )
+    if recon_df is not None and not recon_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in reconstructed_data. "
+            "This is an internal error; please report it."
+        )
 
     loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -454,12 +549,15 @@ def generate(
         "input_shape": (n_samples, len(colnames)),
         "early_stop": early_stop,
         "early_stop_patience": early_stop_num,
+        "generated_labels": gen_labels,
+        "reconstructed_labels": recon_labels,
     }
 
     result = SyngResult(
         generated_data=gen_df,
         loss=loss_df,
         reconstructed_data=recon_df,
+        original_data=data_pd.copy(),
         model_state=train_out.model_state,
         metadata=metadata,
     )
@@ -475,7 +573,9 @@ def pilot_study(
     pilot_size: list[int],
     *,
     name: str | None = None,
+    groups: pd.Series | np.ndarray | None = None,
     model: str = "VAE1-10",
+    apply_log: bool = True,
     batch_frac: float = 0.1,
     learning_rate: float = 0.0005,
     epoch: int | None = None,
@@ -504,8 +604,13 @@ def pilot_study(
         List of pilot sizes to evaluate.
     name : str or None
         Short name for output filenames.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels. When provided, these labels take
+        precedence over bundled dataset groups.
     model : str
         Model specification (e.g. ``"VAE1-10"``).
+    apply_log : bool
+        Apply ``log2(x + 1)`` preprocessing.
     batch_frac : float
         Batch size as a fraction of sample count.
     learning_rate : float
@@ -541,23 +646,35 @@ def pilot_study(
     verbose_level = _resolve_verbose(verbose)
 
     # --- 1. Resolve data -------------------------------------------------
-    df = resolve_data(data)
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
     dataname = derive_dataname(data, name)
 
-    data_pd = df.select_dtypes(include=np.number)
-    if "groups" in data_pd.columns:
-        data_pd = data_pd.drop(columns=["groups"])
+    # --- 2. Extract numeric data, capture column names -------------------
+    data_pd = df
     colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
-    oridata = preprocessinglog2(oridata)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
     n_samples = oridata.shape[0]
 
-    groups = df["groups"] if "groups" in df.columns else None
-    orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
 
+    # --- 3. Labels -------------------------------------------------------
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
+
+    # --- 4. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # Epoch / early-stopping
+    # --- 5. Epoch / early-stopping logic ---------------------------------
     num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
         epoch=epoch,
         early_stop_patience=early_stop_patience,
@@ -565,6 +682,7 @@ def pilot_study(
         default_patience=30,
     )
 
+    # --- 6. Pilot loop ---------------------------------------------------
     # new_size = 5× pilot (per group if unbalanced)
     repli = 5
 
@@ -573,7 +691,7 @@ def pilot_study(
     for n_pilot in pilot_size:
         for rand_pilot in range(1, 6):
             # Draw pilot sub-sample
-            rawdata, rawlabels, rawblurlabels = draw_pilot(
+            rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
                 dataset=oridata,
                 labels=orilabels,
                 blurlabels=oriblurlabels,
@@ -688,28 +806,50 @@ def pilot_study(
             else:
                 raise ValueError(f"Unsupported model: {model!r}")
 
-            # Assemble SyngResult for this run
+            # -- Assemble SyngResult for this run -------------------------
             gen_np = train_out.generated_data.detach().numpy()
 
-            # For CVAE, add label column name
-            gen_colnames = list(colnames)
+            # For CVAE, strip the appended label column — it is the conditioning
+            # input, not a generated feature.  Store it in metadata instead.
+            gen_labels = None
             if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-                gen_colnames = gen_colnames + ["label"]
+                gen_labels = pd.Series(gen_np[:, -1], name="label")
+                gen_np = gen_np[:, :-1]
 
-            gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
+            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
 
             recon_df = None
+            recon_labels = None
             if train_out.reconstructed_data is not None:
                 recon_np = train_out.reconstructed_data.detach().numpy()
 
-                # For CVAE, add label column name
-                recon_colnames = list(colnames)
                 if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-                    recon_colnames = recon_colnames + ["label"]
+                    recon_labels = pd.Series(recon_np[:, -1], name="label")
+                    recon_np = recon_np[:, :-1]
 
-                recon_df = pd.DataFrame(
-                    recon_np, columns=recon_colnames[: recon_np.shape[1]]
+                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+            # -- Inverse log transform to count scale ---------------------
+            if apply_log:
+                gen_df = inverse_log2(gen_df)
+                if recon_df is not None:
+                    recon_df = inverse_log2(recon_df)
+
+            # -- Validate column order consistency -------------------------
+            # Defensive check: ensure all DataFrames have the same column order
+            if not gen_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in generated_data. "
+                    "This is an internal error; please report it."
                 )
+            if recon_df is not None and not recon_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in reconstructed_data. "
+                    "This is an internal error; please report it."
+                )
+
+            # Per-draw original data subset
+            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
 
             loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -723,21 +863,27 @@ def pilot_study(
                 "kl_weight": kl_weight,
                 "pilot_size": n_pilot,
                 "draw": rand_pilot,
+                "pilot_indices": pilot_indices.tolist(),
                 "input_shape": (n_samples, len(colnames)),
                 "early_stop": early_stop,
                 "early_stop_patience": early_stop_num,
+                "generated_labels": gen_labels,
+                "reconstructed_labels": recon_labels,
             }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
                 generated_data=gen_df,
                 loss=loss_df,
                 reconstructed_data=recon_df,
+                original_data=pilot_original,
                 model_state=train_out.model_state,
                 metadata=run_metadata,
             )
 
+    # --- 7. Assemble PilotResult -----------------------------------------
     pilot_result = PilotResult(
         runs=runs,
+        original_data=data_pd.copy(),
         metadata={
             "model": model,
             "modelname": modelname,
@@ -760,6 +906,8 @@ def transfer(
     *,
     source_name: str | None = None,
     target_name: str | None = None,
+    source_groups: pd.Series | np.ndarray | None = None,
+    target_groups: pd.Series | np.ndarray | None = None,
     pilot_size: list[int] | None = None,
     source_size: int = 500,
     new_size: int = 500,
@@ -794,6 +942,10 @@ def transfer(
         Short name for the source dataset.
     target_name : str or None
         Short name for the target dataset.
+    source_groups : pd.Series, np.ndarray, or None
+        Optional binary groups for the source dataset.
+    target_groups : pd.Series, np.ndarray, or None
+        Optional binary groups for the target dataset.
     pilot_size : list[int] or None
         If set, uses ``pilot_study`` for the target phase.  Otherwise
         uses ``generate``.
@@ -854,10 +1006,11 @@ def transfer(
         )
         _cleanup_transfer = True
 
-    # --- Phase 1: pre-train on source ------------------------------------
+    # --- 1. pre-train on source ------------------------------------------
     _source_result = generate(
         data=source_data,
         name=fromname,
+        groups=source_groups,
         new_size=[source_size],
         model=model,
         apply_log=apply_log,
@@ -875,13 +1028,15 @@ def transfer(
         verbose=verbose,
     )
 
-    # --- Phase 2: fine-tune on target ------------------------------------
+    # --- 2. fine-tune on target ------------------------------------------
     if pilot_size is not None:
         result = pilot_study(
             data=target_data,
             pilot_size=pilot_size,
             name=toname,
+            groups=target_groups,
             model=model,
+            apply_log=apply_log,
             batch_frac=batch_frac,
             learning_rate=learning_rate,
             epoch=epoch,
@@ -898,6 +1053,7 @@ def transfer(
         result = generate(
             data=target_data,
             name=toname,
+            groups=target_groups,
             new_size=new_size,
             model=model,
             apply_log=apply_log,

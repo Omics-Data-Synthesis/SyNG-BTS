@@ -13,6 +13,35 @@ from umap import UMAP
 from .data_utils import resolve_data
 
 
+def _coerce_groups(
+    groups: pd.Series | np.ndarray | list | tuple | pd.Index | None,
+    *,
+    param_name: str,
+    expected_len: int,
+) -> pd.Series | None:
+    """Coerce optional group labels to a length-validated Series."""
+    if groups is None:
+        return None
+
+    if isinstance(groups, pd.Series):
+        coerced = groups.reset_index(drop=True)
+    elif isinstance(groups, (np.ndarray, list, tuple, pd.Index)):
+        coerced = pd.Series(groups)
+    else:
+        raise TypeError(
+            f"{param_name} must be a pandas Series, numpy array, list, tuple, "
+            f"or None; got {type(groups).__name__}."
+        )
+
+    if len(coerced) != expected_len:
+        raise ValueError(
+            f"{param_name} length ({len(coerced)}) does not match the number "
+            f"of rows in the corresponding dataset ({expected_len})."
+        )
+
+    return coerced.astype(str)
+
+
 def heatmap_eval(
     real_data: pd.DataFrame,
     generated_data: pd.DataFrame | None = None,
@@ -39,8 +68,6 @@ def heatmap_eval(
         The matplotlib Figure containing the heatmap(s).
     """
     # Select only numeric columns.
-    # Non-numeric columns (e.g. groups) can be present but are ignored for the heatmap.
-    # TODO Remove this once we update the data loading to only return numeric data for evaluation.
     real_data_plot = real_data.select_dtypes(include=["number"])
     generated_data_plot = (
         generated_data.select_dtypes(include=["number"])
@@ -187,7 +214,8 @@ def evaluation(
     real_data: pd.DataFrame | str | Path,
     generated_data: pd.DataFrame | str | Path,
     *,
-    group_names: list[str] | None = None,
+    real_groups: pd.Series | np.ndarray | list | tuple | pd.Index | None = None,
+    generated_groups: pd.Series | np.ndarray | list | tuple | pd.Index | None = None,
     n_samples: int | None = 200,
     apply_log: bool = True,
     random_seed: int = 42,
@@ -204,17 +232,21 @@ def evaluation(
         a bundled dataset name (resolved via :func:`resolve_data`).
     generated_data : pd.DataFrame, str, or Path
         The generated/synthetic dataset. Same input types as *real_data*.
-    group_names : list of str or None, optional
-        Human-readable names for binary groups.  Must have exactly two
-        elements ``[name_for_0, name_for_1]``.  If ``None``, groups are
-        labelled ``"Group 0"`` and ``"Group 1"`` when a ``"groups"`` column
-        is present, or group information is skipped entirely.
+    real_groups : pd.Series, np.ndarray, list, tuple, pd.Index, or None, optional
+        Group labels for the real samples.  When provided, takes
+        precedence over any bundled groups resolved from *real_data*.
+        Values are used as-is for plot labels (converted to ``str``).
+    generated_groups : pd.Series, np.ndarray, list, tuple, pd.Index, or None, optional
+        Group labels for the generated samples.  When provided, takes
+        precedence over any bundled groups resolved from *generated_data*.
+        Values are used as-is for plot labels (converted to ``str``).
     n_samples : int or None, default 200
         Number of samples from each end of the dataset to use for
         visualization (to keep UMAP fast).  If ``None``, all samples are
         used.
     apply_log : bool, default True
-        Whether to apply ``log2(x + 1)`` transformation to the real data.
+        Whether to apply ``log2(x + 1)`` transformation to both real
+        and generated data before comparison.
     random_seed : int, default 42
         Random seed for UMAP reproducibility.
 
@@ -225,49 +257,38 @@ def evaluation(
         figures.  Neither figure has been displayed; the caller decides
         when to call ``plt.show()`` or ``fig.savefig()``.
     """
-    real_df = resolve_data(real_data)
-    gen_df = resolve_data(generated_data)
+    real_df, bundled_groups_real = resolve_data(real_data)
+    gen_df, bundled_groups_gen = resolve_data(generated_data)
 
-    # --- Derive group labels ------------------------------------------------
-    groups_real: pd.Series | None = None
-    groups_generated: pd.Series | None = None
+    # --- Resolve group labels -----------------------------------------------
+    # Precedence: explicit parameter > bundled groups > None
+    groups_real = _coerce_groups(
+        real_groups,
+        param_name="real_groups",
+        expected_len=len(real_df),
+    )
+    groups_generated = _coerce_groups(
+        generated_groups,
+        param_name="generated_groups",
+        expected_len=len(gen_df),
+    )
 
-    has_groups_col = "groups" in real_df.columns
-
-    if has_groups_col:
-        raw_groups = real_df["groups"]
-        unique_groups = sorted(raw_groups.unique())
-
-        if group_names is not None:
-            if len(group_names) != 2:
-                raise ValueError(
-                    f"group_names must have exactly 2 elements, got {len(group_names)}"
-                )
-            mapping = {unique_groups[0]: group_names[0]}
-            for g in unique_groups[1:]:
-                mapping[g] = group_names[1]
-        else:
-            mapping = {unique_groups[0]: "Group 0"}
-            for g in unique_groups[1:]:
-                mapping[g] = "Group 1"
-
-        groups_real = raw_groups.map(mapping)
-
-        # Generated data: last column is often the numeric group label
-        gen_label_col = gen_df.iloc[:, -1]
-        if set(gen_label_col.unique()) <= {0, 1}:
-            label_names = {0: mapping[unique_groups[0]], 1: list(mapping.values())[-1]}
-            groups_generated = gen_label_col.map(
-                lambda v, ln=label_names: ln.get(int(v), str(v))  # noqa: B023
-            )
+    if groups_real is None and bundled_groups_real is not None:
+        groups_real = bundled_groups_real.reset_index(drop=True).astype(str)
+    if groups_generated is None and bundled_groups_gen is not None:
+        groups_generated = bundled_groups_gen.reset_index(drop=True).astype(str)
 
     # --- Prepare numeric matrices -------------------------------------------
     real_numeric = real_df.select_dtypes(include=[np.number])
-    if apply_log:
-        real_numeric = np.log2(real_numeric + 1)
-
     gen_numeric = gen_df.iloc[:, : real_numeric.shape[1]].copy()
     gen_numeric.columns = real_numeric.columns
+
+    # When apply_log is True, log-transform both real and generated data so
+    # they are compared in the same (log2) scale.  Generated data is now
+    # returned in count scale by the experiment API (Phase 4).
+    if apply_log:
+        real_numeric = np.log2(real_numeric + 1)
+        gen_numeric = np.log2(gen_numeric + 1)
 
     # --- Sub-sample for speed -----------------------------------------------
     if n_samples is not None and n_samples < len(real_numeric):

@@ -36,38 +36,48 @@ class TestBundledDatasets:
         """Test loading SKCMPositive_4 bundled dataset via resolve_data."""
         from syng_bts import resolve_data
 
-        data = resolve_data("SKCMPositive_4")
+        data, groups = resolve_data("SKCMPositive_4")
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) > 0
         assert len(data.columns) > 0
+        # SKCMPositive_4 has no groups sidecar
+        assert groups is None
 
     def test_resolve_bundled_dataset_brca(self):
         """Test loading BRCA bundled dataset."""
         from syng_bts import resolve_data
 
-        data = resolve_data("BRCA")
+        data, groups = resolve_data("BRCA")
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) > 0
+        # BRCA has no groups sidecar
+        assert groups is None
 
     def test_resolve_bundled_dataset_prad(self):
         """Test loading PRAD bundled dataset."""
         from syng_bts import resolve_data
 
-        data = resolve_data("PRAD")
+        data, groups = resolve_data("PRAD")
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) > 0
+        # PRAD has no groups sidecar
+        assert groups is None
 
     def test_resolve_bundled_dataset_brca_subtype(self):
         """Test loading BRCA subtype case study dataset."""
         from syng_bts import resolve_data
 
-        data = resolve_data("BRCASubtypeSel")
+        data, groups = resolve_data("BRCASubtypeSel")
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) > 0
+        # BRCASubtypeSel has a groups sidecar
+        assert groups is not None
+        assert isinstance(groups, pd.Series)
+        assert len(groups) == len(data)
 
     def test_resolve_all_bundled_datasets(self):
         """Test that all bundled datasets can be loaded via resolve_data."""
@@ -76,9 +86,13 @@ class TestBundledDatasets:
         datasets = list_bundled_datasets()
 
         for name in datasets:
-            data = resolve_data(name)
+            data, groups = resolve_data(name)
             assert isinstance(data, pd.DataFrame), f"Failed to load {name}"
             assert len(data) > 0, f"Dataset {name} is empty"
+            # Groups should be Series or None
+            assert groups is None or isinstance(groups, pd.Series), (
+                f"Unexpected groups type for {name}: {type(groups)}"
+            )
 
     def test_resolve_nonexistent_dataset_raises(self):
         """Test that resolving a non-existent dataset raises an error."""
@@ -95,33 +109,36 @@ class TestDataLoading:
         """Test loading dataset from a file path via resolve_data."""
         from syng_bts import resolve_data
 
-        data = resolve_data(str(sample_csv_file))
+        data, groups = resolve_data(str(sample_csv_file))
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) == 20  # Sample data has 20 rows
+        assert groups is None  # User files never return groups
 
     def test_resolve_data_from_path_object(self, sample_csv_file):
         """Test resolve_data accepts Path objects."""
         from syng_bts import resolve_data
 
-        data = resolve_data(sample_csv_file)
+        data, groups = resolve_data(sample_csv_file)
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) == 20
+        assert groups is None
 
     def test_resolve_data_dataframe_passthrough(self, sample_data):
         """Test resolve_data passes DataFrame through unchanged."""
         from syng_bts import resolve_data
 
-        result = resolve_data(sample_data)
+        result, groups = resolve_data(sample_data)
 
         assert result is sample_data
+        assert groups is None
 
     def test_resolve_data_fallback_to_bundled(self):
         """Test that resolve_data falls back to bundled data."""
         from syng_bts import resolve_data
 
-        data = resolve_data("SKCMPositive_4")
+        data, _groups = resolve_data("SKCMPositive_4")
 
         assert isinstance(data, pd.DataFrame)
 
@@ -240,7 +257,7 @@ class TestDataLoadingEdgeCases:
         from syng_bts import resolve_data
 
         # resolve_data should strip .csv and find bundled dataset
-        data = resolve_data("SKCMPositive_4.csv")
+        data, _groups = resolve_data("SKCMPositive_4.csv")
         assert isinstance(data, pd.DataFrame)
 
     def test_resolve_data_path_types(self, temp_dir, sample_data):
@@ -252,11 +269,11 @@ class TestDataLoadingEdgeCases:
         sample_data.to_csv(csv_path, index=False)
 
         # Test with string path
-        data1 = resolve_data(str(csv_path))
+        data1, _g1 = resolve_data(str(csv_path))
         assert len(data1) == 20
 
         # Test with Path object
-        data2 = resolve_data(csv_path)
+        data2, _g2 = resolve_data(csv_path)
         assert len(data2) == 20
 
 
@@ -310,7 +327,7 @@ class TestResolveDataEdgeCases:
         """Test that .CSV extension is also stripped."""
         from syng_bts import resolve_data
 
-        df = resolve_data("SKCMPositive_4.CSV")
+        df, _groups = resolve_data("SKCMPositive_4.CSV")
         assert isinstance(df, pd.DataFrame)
         assert len(df) > 0
 
@@ -339,8 +356,9 @@ class TestResolveDataEdgeCases:
         """Paths with separators are treated as file paths."""
         from syng_bts import resolve_data
 
-        df = resolve_data(str(sample_csv_file))
+        df, groups = resolve_data(str(sample_csv_file))
         assert len(df) == 20
+        assert groups is None
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +426,149 @@ class TestDeriveDataname:
 
         result = derive_dataname("BRCASubtypeSel_train")
         assert result == "BRCASubtypeSel_train"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: tuple-return contract and strict validation
+# ---------------------------------------------------------------------------
+class TestResolveDataTupleReturn:
+    """Verify resolve_data() returns (DataFrame, Series | None) tuples."""
+
+    def test_bundled_no_groups_returns_none(self):
+        """Bundled datasets without groups return (df, None)."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data("SKCMPositive_4")
+        assert isinstance(df, pd.DataFrame)
+        assert groups is None
+
+    def test_bundled_with_groups_returns_series(self):
+        """Bundled datasets with groups return (df, Series)."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data("BRCASubtypeSel")
+        assert isinstance(df, pd.DataFrame)
+        assert isinstance(groups, pd.Series)
+        assert groups.name == "groups"
+        assert len(groups) == len(df)
+        # groups should have exactly 2 unique values (binary)
+        assert len(groups.unique()) == 2
+
+    def test_bundled_lihc_with_groups(self):
+        """LIHC grouped dataset returns groups correctly."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data("LIHCSubtypeFamInd")
+        assert isinstance(df, pd.DataFrame)
+        assert isinstance(groups, pd.Series)
+        assert len(groups) == len(df)
+        assert set(groups.unique()) == {"YES", "NO"}
+
+    def test_grouped_datasets_feature_only(self):
+        """Grouped datasets have no 'groups' or 'samples' columns in df."""
+        from syng_bts import resolve_data
+
+        for name in ["BRCASubtypeSel", "LIHCSubtypeFamInd"]:
+            df, groups = resolve_data(name)
+            assert "groups" not in df.columns, f"{name} has groups col in df"
+            assert "samples" not in df.columns, f"{name} has samples col in df"
+            assert groups is not None, f"{name} should have groups"
+
+    def test_dataframe_input_returns_none_groups(self, sample_data):
+        """DataFrame pass-through returns (df, None)."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data(sample_data)
+        assert df is sample_data
+        assert groups is None
+
+    def test_csv_file_returns_none_groups(self, sample_csv_file):
+        """CSV file input returns (df, None)."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data(str(sample_csv_file))
+        assert isinstance(df, pd.DataFrame)
+        assert groups is None
+
+    def test_parquet_file_returns_none_groups(self, temp_dir, sample_data):
+        """Parquet file input returns (df, None)."""
+        from syng_bts import resolve_data
+
+        pq_path = temp_dir / "test_data.parquet"
+        sample_data.to_parquet(pq_path, engine="pyarrow")
+
+        df, groups = resolve_data(str(pq_path))
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 20
+        assert groups is None
+
+    def test_parquet_suffix_stripped_for_bundled_lookup(self):
+        """resolve_data('SKCMPositive_4.parquet') resolves bundled."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data("SKCMPositive_4.parquet")
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+
+
+class TestValidateFeatureData:
+    """Tests for the strict data-contract validator."""
+
+    def test_valid_data_passes(self, sample_data):
+        """Valid numeric-only DataFrame passes validation."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        _validate_feature_data(sample_data)  # should not raise
+
+    def test_rejects_groups_column(self, sample_data):
+        """DataFrame with a 'groups' column is rejected."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = sample_data.copy()
+        bad["groups"] = 0
+        with pytest.raises(ValueError, match="metadata column"):
+            _validate_feature_data(bad)
+
+    def test_rejects_samples_column(self, sample_data):
+        """DataFrame with a 'samples' column is rejected."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = sample_data.copy()
+        bad["samples"] = "TCGA-XX"
+        with pytest.raises(ValueError, match="metadata column"):
+            _validate_feature_data(bad)
+
+    def test_rejects_non_numeric_columns(self):
+        """DataFrame with string columns is rejected."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = pd.DataFrame({"gene_1": [1.0, 2.0], "label": ["A", "B"]})
+        with pytest.raises(ValueError, match="non-numeric column"):
+            _validate_feature_data(bad)
+
+    def test_rejects_duplicate_index(self, sample_data):
+        """DataFrame with duplicate index values is rejected."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = sample_data.copy()
+        bad.index = [0] * len(bad)
+        with pytest.raises(ValueError, match="duplicate"):
+            _validate_feature_data(bad)
+
+    def test_case_insensitive_metadata_check(self, sample_data):
+        """Metadata column check is case-insensitive."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = sample_data.copy()
+        bad["Groups"] = 1
+        with pytest.raises(ValueError, match="metadata column"):
+            _validate_feature_data(bad)
+
+    def test_case_insensitive_samples_check(self, sample_data):
+        """'Samples' column (capitalized) is also rejected."""
+        from syng_bts.data_utils import _validate_feature_data
+
+        bad = sample_data.copy()
+        bad["Samples"] = "X"
+        with pytest.raises(ValueError, match="metadata column"):
+            _validate_feature_data(bad)

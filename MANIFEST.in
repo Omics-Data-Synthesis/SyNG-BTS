@@ -1,8 +1,8 @@
 # MANIFEST.in - Include data files in source distributions
-# This ensures CSV data files are included when building sdist packages
+# This ensures Parquet data files are included when building sdist packages
 
-# Include all CSV data files
-recursive-include syng_bts/data *.csv
+# Include all Parquet data files
+recursive-include syng_bts/data *.parquet
 
 # Include the py.typed marker for PEP 561 type checking
 include syng_bts/py.typed

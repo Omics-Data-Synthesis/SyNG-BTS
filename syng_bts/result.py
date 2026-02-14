@@ -67,6 +67,7 @@ class SyngResult:
     generated_data: pd.DataFrame
     loss: pd.DataFrame
     reconstructed_data: pd.DataFrame | None = None
+    original_data: pd.DataFrame | None = None
     model_state: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -130,6 +131,12 @@ class SyngResult:
             self.reconstructed_data.to_csv(recon_path, index=False)
             paths["reconstructed"] = recon_path
 
+        # Original data
+        if self.original_data is not None:
+            orig_path = out / f"{stem}_original.csv"
+            self.original_data.to_csv(orig_path, index=True)
+            paths["original"] = orig_path
+
         # Model state dict
         if self.model_state is not None:
             model_path = out / f"{stem}_model.pt"
@@ -149,8 +156,8 @@ class SyngResult:
 
     def plot_loss(
         self,
-        running_average_window: int = 50,
-        x_axis: str = "iterations",
+        running_average_window: int = 25,
+        x_axis: str = "epochs",
     ) -> dict[str, plt.Figure]:
         """Plot the training loss curve(s), one figure per loss column.
 
@@ -161,10 +168,11 @@ class SyngResult:
         ----------
         running_average_window : int
             Window size for the running-average overlay. Must be > 0.
+            Default: 25.
         x_axis : str
-            ``"iterations"`` (default) numbers data points 0…N-1.
-            ``"epochs"`` maps the x-axis to epoch space using
-            ``metadata["num_epochs"]`` (must be present and > 0).
+            ``"epochs"`` (default) maps the x-axis to epoch space using
+            ``metadata["epochs_trained"]`` (must be present and > 0).
+            ``"iterations"`` numbers data points 0…N-1.
 
         Returns
         -------
@@ -176,7 +184,7 @@ class SyngResult:
         ValueError
             If *running_average_window* ≤ 0, if *x_axis* is not
             ``"iterations"`` or ``"epochs"``, if ``x_axis="epochs"``
-            but ``metadata["num_epochs"]`` is missing or ≤ 0, or if
+            but ``metadata["epochs_trained"]`` is missing or ≤ 0, or if
             the window is larger than a loss series.
         """
         if running_average_window <= 0:
@@ -187,22 +195,22 @@ class SyngResult:
             raise ValueError(f"x_axis must be 'iterations' or 'epochs', got {x_axis!r}")
         num_epochs: float | None = None
         if x_axis == "epochs":
-            raw_num_epochs = self.metadata.get("num_epochs")
+            raw_num_epochs = self.metadata.get("epochs_trained")
             if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 )
             try:
                 num_epochs = float(raw_num_epochs)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 ) from exc
             if num_epochs <= 0:
                 raise ValueError(
-                    "x_axis='epochs' requires metadata['num_epochs'] > 0, "
+                    "x_axis='epochs' requires metadata['epochs_trained'] > 0, "
                     f"got {raw_num_epochs!r}"
                 )
 
@@ -284,10 +292,17 @@ class SyngResult:
                     "Reconstructed data is only produced by AE/VAE/CVAE models."
                 )
             df = self.reconstructed_data
+        elif which == "original":
+            if self.original_data is None:
+                raise ValueError(
+                    "No original data available in this result. "
+                    "Pass original_data when constructing the result."
+                )
+            df = self.original_data
         else:
             raise ValueError(
                 f"Unknown value which={which!r}; "
-                f"expected 'generated' or 'reconstructed'."
+                f"expected 'generated', 'reconstructed', or 'original'."
             )
 
         fig, ax = plt.subplots()
@@ -325,6 +340,9 @@ class SyngResult:
         if self.reconstructed_data is not None:
             r, c = self.reconstructed_data.shape
             parts.append(f"Reconstructed data: {r} rows × {c} cols")
+        if self.original_data is not None:
+            r, c = self.original_data.shape
+            parts.append(f"Original data: {r} rows × {c} cols")
         if "seed" in meta:
             parts.append(f"Random seed: {meta['seed']}")
         return " | ".join(parts)
@@ -333,12 +351,14 @@ class SyngResult:
         n_gen, n_feat = self.generated_data.shape
         model = self.metadata.get("model", "?")
         has_recon = self.reconstructed_data is not None
+        has_original = self.original_data is not None
         has_model = self.model_state is not None
         return (
             f"SyngResult(model={model!r}, "
             f"generated={n_gen}×{n_feat}, "
             f"loss_cols={list(self.loss.columns)}, "
             f"has_reconstructed={has_recon}, "
+            f"has_original={has_original}, "
             f"has_model_state={has_model})"
         )
 
@@ -418,6 +438,11 @@ class SyngResult:
         recon_path = d / f"{stem}_reconstructed.csv"
         reconstructed_data = pd.read_csv(recon_path) if recon_path.exists() else None
 
+        orig_path = d / f"{stem}_original.csv"
+        original_data = (
+            pd.read_csv(orig_path, index_col=0) if orig_path.exists() else None
+        )
+
         model_path = d / f"{stem}_model.pt"
         model_state = (
             torch.load(model_path, weights_only=False) if model_path.exists() else None
@@ -436,6 +461,7 @@ class SyngResult:
             generated_data=generated_data,
             loss=loss,
             reconstructed_data=reconstructed_data,
+            original_data=original_data,
             model_state=model_state,
             metadata=metadata,
         )
@@ -450,6 +476,8 @@ class PilotResult:
     runs : dict[tuple[int, int], SyngResult]
         Mapping of ``(pilot_size, draw_index)`` → individual run result.
         ``draw_index`` is 1-based (1 through 5).
+    original_data : pd.DataFrame or None
+        The full original input data (before subsetting).
     metadata : dict
         Shared metadata across all runs (model, data dimensions, etc.).
 
@@ -461,6 +489,7 @@ class PilotResult:
     """
 
     runs: dict[tuple[int, int], SyngResult] = field(default_factory=dict)
+    original_data: pd.DataFrame | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -500,13 +529,27 @@ class PilotResult:
         for (pilot_size, draw), result in sorted(self.runs.items()):
             run_prefix = f"{prefix}_pilot{pilot_size}_draw{draw}"
             all_paths[(pilot_size, draw)] = result.save(out, prefix=run_prefix)
+
+        # Save top-level original data
+        if self.original_data is not None:
+            orig_path = out / f"{prefix}_original.csv"
+            self.original_data.to_csv(orig_path, index=True)
+
+        # Save top-level metadata
+        if self.metadata:
+            meta_path = out / f"{prefix}_pilot_metadata.json"
+            meta_path.write_text(
+                json.dumps(self.metadata, indent=2, default=_json_serializable),
+                encoding="utf-8",
+            )
+
         return all_paths
 
     def plot_loss(
         self,
         aggregate: bool = False,
-        running_average_window: int = 50,
-        x_axis: str = "iterations",
+        running_average_window: int = 25,
+        x_axis: str = "epochs",
     ) -> dict[tuple[int, int], dict[str, plt.Figure]] | dict[str, plt.Figure]:
         """Plot loss curves for every run.
 
@@ -519,11 +562,12 @@ class PilotResult:
             figures.
         running_average_window : int
             Window size for the running-average overlay (per-run mode
-            only). Must be > 0.
+            only). Must be > 0. Default: 25.
         x_axis : str
-            ``"iterations"`` or ``"epochs"``. In per-run mode this is
-            forwarded to each ``SyngResult.plot_loss()`` call. In
-            aggregate mode it controls the x-axis for each run overlay.
+            ``"epochs"`` (default) maps the x-axis to epoch space using
+            ``metadata["epochs_trained"]`` (must be present and > 0).
+            ``"iterations"`` numbers data points 0…N-1.
+            In aggregate mode it controls the x-axis for each run overlay.
 
         Returns
         -------
@@ -560,22 +604,22 @@ class PilotResult:
                     continue
                 values = result.loss[col].to_numpy()
                 if x_axis == "epochs":
-                    raw_num_epochs = result.metadata.get("num_epochs")
+                    raw_num_epochs = result.metadata.get("epochs_trained")
                     if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         )
                     try:
                         num_epochs = float(raw_num_epochs)
                     except (TypeError, ValueError) as exc:
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         ) from exc
                     if num_epochs <= 0:
                         raise ValueError(
-                            "x_axis='epochs' requires metadata['num_epochs'] > 0 "
+                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
                             f"for run {(ps, draw)}, got {raw_num_epochs!r}"
                         )
                     x = np.linspace(0, num_epochs, len(values))
@@ -613,6 +657,10 @@ class PilotResult:
         pilot_sizes = sorted({ps for ps, _ in self.runs})
         lines.append(f"Pilot sizes: {pilot_sizes}")
 
+        if self.original_data is not None:
+            r, c = self.original_data.shape
+            lines.append(f"Original data: {r} rows × {c} cols")
+
         for key in sorted(self.runs):
             r = self.runs[key]
             n_gen = r.generated_data.shape[0]
@@ -630,6 +678,8 @@ class PilotResult:
         n_runs = len(self.runs)
         pilot_sizes = sorted({ps for ps, _ in self.runs})
         model = self.metadata.get("model", "?")
+        has_original = self.original_data is not None
         return (
-            f"PilotResult(model={model!r}, n_runs={n_runs}, pilot_sizes={pilot_sizes})"
+            f"PilotResult(model={model!r}, n_runs={n_runs}, "
+            f"pilot_sizes={pilot_sizes}, has_original={has_original})"
         )

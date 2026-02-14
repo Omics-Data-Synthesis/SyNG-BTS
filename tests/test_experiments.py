@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from syng_bts import generate, pilot_study, transfer
+from syng_bts.data_utils import resolve_data
 from syng_bts.experiments import (
     _build_loss_df,
     _compute_new_size,
@@ -308,6 +309,49 @@ class TestResultSchema:
         )
         assert isinstance(result.model_state, dict)
         assert len(result.model_state) > 0
+
+    def test_column_order_preservation(self, sample_data):
+        """Column order is preserved across all DataFrames (original, generated, reconstructed).
+
+        This test verifies that column order is maintained throughout the entire
+        data pipeline, from input through tensor operations to final DataFrames.
+        """
+        # Use AE model which produces reconstruction, and apply_log to test inverse transform
+        result = generate(
+            data=sample_data,
+            model="AE",
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            apply_log=True,  # Test inverse transform path
+        )
+
+        # Get expected column order from input
+        expected_cols = list(sample_data.columns)
+
+        # Verify original_data preserves column order
+        assert result.original_data is not None
+        assert list(result.original_data.columns) == expected_cols, (
+            "original_data column order differs from input"
+        )
+
+        # Verify generated_data preserves column order
+        assert list(result.generated_data.columns) == expected_cols, (
+            "generated_data column order differs from input"
+        )
+
+        # Verify reconstructed_data preserves column order
+        assert result.reconstructed_data is not None
+        assert list(result.reconstructed_data.columns) == expected_cols, (
+            "reconstructed_data column order differs from input"
+        )
+
+        # Verify all three match each other
+        assert list(result.generated_data.columns) == list(result.original_data.columns)
+        assert list(result.reconstructed_data.columns) == list(
+            result.original_data.columns
+        )
 
     def test_pilot_result_schema(self, sample_data):
         """PilotResult.runs has correct keys and each value is a SyngResult."""
@@ -660,11 +704,56 @@ class TestGenerate:
                 learning_rate=LR,
             )
 
+    def test_generate_rejects_metadata_columns(self, sample_data):
+        """generate() rejects user DataFrames with metadata-like columns."""
+        bad = sample_data.copy()
+        bad["groups"] = 0
+
+        with pytest.raises(ValueError, match="metadata column"):
+            generate(
+                data=bad,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
+    def test_generate_rejects_non_numeric_columns(self, sample_data):
+        """generate() rejects user DataFrames with non-numeric columns."""
+        bad = sample_data.copy()
+        bad["sample_name"] = "A"
+
+        with pytest.raises(ValueError, match="non-numeric"):
+            generate(
+                data=bad,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
+    def test_generate_rejects_non_binary_groups(self, sample_data):
+        """generate() enforces binary-group scope in v3.1."""
+        groups = pd.Series(["A", "B", "C", "A", "B"] * 4)
+
+        with pytest.raises(ValueError, match="supports only binary groups"):
+            generate(
+                data=sample_data,
+                groups=groups,
+                model="VAE1-10",
+                new_size=5,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
     def test_generate_with_dataframe_input(self):
         """generate() works with a DataFrame loaded from bundled dataset."""
         from syng_bts import resolve_data
 
-        df = resolve_data("SKCMPositive_4")
+        df, _groups = resolve_data("SKCMPositive_4")
         result = generate(
             data=df,
             model="VAE1-10",
@@ -712,6 +801,35 @@ class TestGenerate:
             df_back, result.generated_data, atol=1e-6, check_dtype=False
         )
 
+    def test_cvae_generated_data_feature_only(self, sample_data):
+        """CVAE generated_data is feature-only; labels in metadata."""
+        groups = pd.Series([0] * 10 + [1] * 10)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=10,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        # generated_data should match original columns (no label)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        assert "label" not in result.generated_data.columns
+        # Labels stored in metadata
+        assert result.metadata["generated_labels"] is not None
+        assert len(result.metadata["generated_labels"]) == len(result.generated_data)
+        # Non-CVAE models have None labels
+        result2 = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert result2.metadata["generated_labels"] is None
+
 
 # =========================================================================
 # pilot_study()
@@ -729,6 +847,21 @@ class TestPilotStudy:
             learning_rate=LR,
         )
         assert isinstance(result, PilotResult)
+
+    def test_pilot_study_rejects_metadata_columns(self, sample_data):
+        """pilot_study() rejects user DataFrames with metadata-like columns."""
+        bad = sample_data.copy()
+        bad["samples"] = "TCGA-XX"
+
+        with pytest.raises(ValueError, match="metadata column"):
+            pilot_study(
+                data=bad,
+                pilot_size=[10],
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
 
     def test_runs_count(self, sample_data):
         """5 draws per pilot size."""
@@ -792,7 +925,8 @@ class TestPilotStudy:
         for run in result.runs.values():
             assert list(run.generated_data.columns) == list(sample_data.columns)
 
-    def test_cvae_generated_data_includes_label_column(self, sample_data):
+    def test_cvae_generated_data_excludes_label_column(self, sample_data):
+        """CVAE generated_data is feature-only; labels in metadata."""
         result = pilot_study(
             data=sample_data,
             pilot_size=[10],
@@ -802,7 +936,13 @@ class TestPilotStudy:
             learning_rate=LR,
         )
         for run in result.runs.values():
-            assert run.generated_data.columns[-1] == "label"
+            # generated_data should match original columns (no label)
+            assert list(run.generated_data.columns) == list(sample_data.columns)
+            assert "label" not in run.generated_data.columns
+            # Labels stored in metadata
+            assert "generated_labels" in run.metadata
+            assert run.metadata["generated_labels"] is not None
+            assert len(run.metadata["generated_labels"]) == len(run.generated_data)
 
     def test_pilot_run_metadata_includes_epochs_trained(self, sample_data):
         result = pilot_study(
@@ -843,6 +983,39 @@ class TestPilotStudy:
         )
         assert isinstance(result, PilotResult)
         assert len(result.runs) == 5
+
+    def test_explicit_groups_override_bundled_groups(self):
+        """Explicit groups take precedence over bundled groups."""
+        grouped_df, _ = resolve_data("BRCASubtypeSel")
+        groups_all_zero = pd.Series(["class0"] * len(grouped_df))
+
+        result = pilot_study(
+            data="BRCASubtypeSel",
+            groups=groups_all_zero,
+            pilot_size=[8],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+
+        for run in result.runs.values():
+            assert run.metadata["pilot_size"] == 8
+
+    def test_pilot_study_rejects_non_binary_groups(self, sample_data):
+        """pilot_study() enforces binary-group scope in v3.1."""
+        groups = pd.Series(["A", "B", "C", "A", "B"] * 4)
+
+        with pytest.raises(ValueError, match="supports only binary groups"):
+            pilot_study(
+                data=sample_data,
+                groups=groups,
+                pilot_size=[10],
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
 
 
 # =========================================================================
@@ -921,6 +1094,50 @@ class TestTransfer:
             learning_rate=LR,
         )
         assert isinstance(result, SyngResult)
+
+    def test_transfer_forwards_groups_and_apply_log(self, sample_data, monkeypatch):
+        """transfer() forwards new group and apply_log args to downstream calls."""
+        import syng_bts.experiments as exp
+
+        observed: dict[str, object] = {}
+
+        def fake_generate(*args, **kwargs):
+            if kwargs.get("pre_model") is None:
+                observed["source_groups"] = kwargs.get("groups")
+            else:
+                observed["target_groups_generate"] = kwargs.get("groups")
+            return SyngResult(
+                generated_data=pd.DataFrame([[0.0]]),
+                loss=pd.DataFrame({"train_loss": [1.0]}),
+                metadata={"model": "AE", "dataname": "x", "seed": 1},
+            )
+
+        def fake_pilot_study(*args, **kwargs):
+            observed["target_groups_pilot"] = kwargs.get("groups")
+            observed["pilot_apply_log"] = kwargs.get("apply_log")
+            return PilotResult(runs={})
+
+        monkeypatch.setattr(exp, "generate", fake_generate)
+        monkeypatch.setattr(exp, "pilot_study", fake_pilot_study)
+
+        source_groups = pd.Series(["S0"] * len(sample_data))
+        target_groups = pd.Series(["T0"] * len(sample_data))
+
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            source_groups=source_groups,
+            target_groups=target_groups,
+            pilot_size=[10],
+            apply_log=False,
+            model="AE",
+            epoch=1,
+        )
+
+        assert isinstance(result, PilotResult)
+        assert observed["source_groups"] is source_groups
+        assert observed["target_groups_pilot"] is target_groups
+        assert observed["pilot_apply_log"] is False
 
 
 # =========================================================================

@@ -89,8 +89,8 @@ SyNG-BTS includes bundled datasets for testing:
    print(list_bundled_datasets())
    # ['SKCMPositive_4', 'BRCA', 'PRAD', 'BRCASubtypeSel', ...]
 
-   # Load a bundled dataset as a DataFrame
-   data = resolve_data("SKCMPositive_4")
+   # Load a bundled dataset (returns a tuple of DataFrame and optional groups)
+   data, groups = resolve_data("SKCMPositive_4")
    print(f"Dataset shape: {data.shape}")
 
 Generate Synthetic Data
@@ -184,7 +184,7 @@ Visualize generated data with heatmaps and UMAP:
    fig = result.plot_heatmap()
 
    # Standalone evaluation comparing real and generated data
-   real_data = resolve_data("SKCMPositive_4").select_dtypes(include="number")
+   real_data, _groups = resolve_data("SKCMPositive_4")
    heatmap_eval(real_data=real_data, generated_data=result.generated_data)
    UMAP_eval(real_data=real_data, generated_data=result.generated_data)
 

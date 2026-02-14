@@ -3,8 +3,8 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-import sys
 import os
+import sys
 
 # Add the package root to path for autodoc
 sys.path.insert(0, os.path.abspath("../.."))
@@ -22,8 +22,8 @@ try:
     version = __version__
     release = __version__
 except ImportError:
-    version = "3.0.1"
-    release = "3.0.1"
+    version = "3.1.0"
+    release = "3.1.0"
 
 # -- General configuration ---------------------------------------------------
 

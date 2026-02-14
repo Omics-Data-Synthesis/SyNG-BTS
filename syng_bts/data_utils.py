@@ -107,171 +107,123 @@ def get_output_path(
     return full_dir / filename
 
 
-def load_bundled_data(subdir: str, filename: str) -> pd.DataFrame:
+def load_bundled_data(
+    subdir: str,
+    filename: str,
+    groups_filename: str | None = None,
+) -> tuple[pd.DataFrame, pd.Series | None]:
     """
-    Load a bundled CSV data file from the package's data directory.
+    Load a bundled Parquet data file from the package's data directory.
 
     Parameters
     ----------
     subdir : str
         The subdirectory within syng_bts/data/ (e.g., "examples", "transfer").
     filename : str
-        The filename to load.
+        The Parquet filename to load (feature-only).
+    groups_filename : str or None
+        Optional sidecar Parquet filename containing a ``groups`` column.
+        When provided and the file exists, a :class:`pd.Series` is returned
+        as the second element of the tuple.
 
     Returns
     -------
-    pd.DataFrame
-        The loaded data.
+    tuple[pd.DataFrame, pd.Series | None]
+        ``(features_df, groups_series_or_none)``.  The groups Series shares
+        the same index as the features DataFrame.
     """
+    features_df = _read_bundled_parquet(subdir, filename)
+
+    groups: pd.Series | None = None
+    if groups_filename is not None:
+        try:
+            groups_df = _read_bundled_parquet(subdir, groups_filename)
+            groups = groups_df["groups"]
+        except (FileNotFoundError, KeyError):
+            groups = None
+
+    return features_df, groups
+
+
+def _read_bundled_parquet(subdir: str, filename: str) -> pd.DataFrame:
+    """Read a single Parquet file from the bundled data directory."""
     try:
-        # Construct the path within the data package
         data_package = files("syng_bts.data")
-        # Navigate through subdirectories
         resource = data_package
         for part in subdir.split("/"):
             resource = resource.joinpath(part)
         resource = resource.joinpath(filename)
 
         with as_file(resource) as path:
-            return pd.read_csv(path, header=0)
+            return pd.read_parquet(path, engine="pyarrow")
     except (TypeError, AttributeError, FileNotFoundError) as e:
-        # Fallback: try direct file path (for development/editable installs)
         import syng_bts
 
         package_dir = Path(syng_bts.__file__).parent
         file_path = package_dir / "data" / subdir / filename
         if file_path.exists():
-            return pd.read_csv(file_path, header=0)
+            return pd.read_parquet(file_path, engine="pyarrow")
         raise FileNotFoundError(
             f"Could not find bundled data file: {subdir}/{filename}"
         ) from e
 
 
-def load_data(
-    dataname: str,
-    data_path: str | Path | None = None,
-    bundled_info: tuple | None = None,
-) -> pd.DataFrame:
-    """
-    Load data from a file path or bundled package resource.
-
-    First tries to load from the specified path. If the file doesn't exist
-    and bundled_info is specified, tries to load from package resources.
-
-    Parameters
-    ----------
-    dataname : str
-        The data name (without .csv extension).
-    data_path : str, Path, or None
-        Path to the data file or directory containing the file.
-        If a directory, will look for {dataname}.csv in it.
-    bundled_info : tuple, optional
-        Tuple of (subdir, filename) to load bundled data from if file not found.
-
-    Returns
-    -------
-    pd.DataFrame
-        The loaded data.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the data cannot be found in either location.
-    """
-    filename = f"{dataname}.csv"
-
-    # Determine the full file path
-    if data_path is not None:
-        path = Path(data_path)
-        if path.is_dir():
-            file_path = path / filename
-        else:
-            file_path = path
-    else:
-        file_path = Path(filename)
-
-    # Try loading from file path first
-    if file_path.exists():
-        return pd.read_csv(file_path, header=0)
-
-    # Try loading from bundled data
-    if bundled_info is not None:
-        try:
-            subdir, bundled_filename = bundled_info
-            return load_bundled_data(subdir, bundled_filename)
-        except (FileNotFoundError, ModuleNotFoundError):
-            pass
-
-    raise FileNotFoundError(
-        f"Could not find data '{dataname}'. "
-        f"Looked in: {file_path}"
-        + (f" and bundled data '{bundled_info}'" if bundled_info else "")
-    )
-
-
-# Map of known bundled datasets to their package locations and subdirectories
-# Format: "dataset_name": ("subdir_path", "filename.csv")
-BUNDLED_DATASETS = {
+# Map of known bundled datasets to their package locations and subdirectories.
+# Format: "dataset_name": ("subdir_path", "features.parquet", "groups.parquet" | None)
+BUNDLED_DATASETS: dict[str, tuple[str, str, str | None]] = {
     # Example datasets
-    "SKCMPositive_4": ("examples", "SKCMPositive_4.csv"),
+    "SKCMPositive_4": ("examples", "SKCMPositive_4.parquet", None),
     # Transfer learning datasets
-    "BRCA": ("transfer", "BRCA.csv"),
-    "PRAD": ("transfer", "PRAD.csv"),
+    "BRCA": ("transfer", "BRCA.parquet", None),
+    "PRAD": ("transfer", "PRAD.parquet", None),
     # BRCA subtype case study
-    "BRCASubtypeSel": ("case/brca_subtype", "BRCASubtypeSel.csv"),
-    "BRCASubtypeSel_test": ("case/brca_subtype", "BRCASubtypeSel_test.csv"),
-    "BRCASubtypeSel_train": ("case/brca_subtype", "BRCASubtypeSel_train.csv"),
+    "BRCASubtypeSel": (
+        "case/brca_subtype",
+        "BRCASubtypeSel.parquet",
+        "BRCASubtypeSel_groups.parquet",
+    ),
+    "BRCASubtypeSel_test": (
+        "case/brca_subtype",
+        "BRCASubtypeSel_test.parquet",
+        "BRCASubtypeSel_test_groups.parquet",
+    ),
+    "BRCASubtypeSel_train": (
+        "case/brca_subtype",
+        "BRCASubtypeSel_train.parquet",
+        "BRCASubtypeSel_train_groups.parquet",
+    ),
     # LIHC subtype case study
-    "LIHCSubtypeFamInd": ("case/lihc_subtype", "LIHCSubtypeFamInd.csv"),
-    "LIHCSubtypeFamInd_DESeq": ("case/lihc_subtype", "LIHCSubtypeFamInd_DESeq.csv"),
-    "LIHCSubtypeFamInd_test74": ("case/lihc_subtype", "LIHCSubtypeFamInd_test74.csv"),
+    "LIHCSubtypeFamInd": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd.parquet",
+        "LIHCSubtypeFamInd_groups.parquet",
+    ),
+    "LIHCSubtypeFamInd_DESeq": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_DESeq.parquet",
+        "LIHCSubtypeFamInd_DESeq_groups.parquet",
+    ),
+    "LIHCSubtypeFamInd_test74": (
+        "case/lihc_subtype",
+        "LIHCSubtypeFamInd_test74.parquet",
+        "LIHCSubtypeFamInd_test74_groups.parquet",
+    ),
     "LIHCSubtypeFamInd_test74_DESeq": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_test74_DESeq.csv",
+        "LIHCSubtypeFamInd_test74_DESeq.parquet",
+        "LIHCSubtypeFamInd_test74_DESeq_groups.parquet",
     ),
     "LIHCSubtypeFamInd_train294": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_train294.csv",
+        "LIHCSubtypeFamInd_train294.parquet",
+        "LIHCSubtypeFamInd_train294_groups.parquet",
     ),
     "LIHCSubtypeFamInd_train294_DESeq": (
         "case/lihc_subtype",
-        "LIHCSubtypeFamInd_train294_DESeq.csv",
+        "LIHCSubtypeFamInd_train294_DESeq.parquet",
+        "LIHCSubtypeFamInd_train294_DESeq_groups.parquet",
     ),
 }
-
-
-def load_dataset(
-    dataname: str,
-    data_path: str | Path | None = None,
-) -> pd.DataFrame:
-    """
-    Load a dataset, checking bundled data if not found at path.
-
-    This is a convenience function that automatically checks if the dataset
-    is a known bundled dataset.
-
-    Parameters
-    ----------
-    dataname : str
-        The dataset name (without .csv extension).
-    data_path : str, Path, or None
-        Optional path to look for the data first.
-
-    Returns
-    -------
-    pd.DataFrame
-        The loaded data.
-
-    Examples
-    --------
-    >>> from syng_bts import load_dataset
-    >>> # Load bundled example data
-    >>> data = load_dataset("SKCMPositive_4")
-    >>> # Load from custom path
-    >>> data = load_dataset("my_data", data_path="./my_data_dir/")
-    """
-    bundled_info = BUNDLED_DATASETS.get(dataname)
-    return load_data(dataname, data_path, bundled_info)
 
 
 def list_bundled_datasets() -> list:
@@ -281,33 +233,102 @@ def list_bundled_datasets() -> list:
     Returns
     -------
     list
-        List of dataset names that can be loaded with load_dataset().
+        List of dataset names that can be loaded with :func:`resolve_data`.
     """
     return list(BUNDLED_DATASETS.keys())
 
 
-def resolve_data(data: "pd.DataFrame | str | Path") -> pd.DataFrame:
-    """
-    Resolve a flexible data input to a pandas DataFrame.
+def _read_user_file(path: Path) -> pd.DataFrame:
+    """Read a user-provided CSV or Parquet file."""
+    if path.suffix.lower() == ".parquet":
+        return pd.read_parquet(path, engine="pyarrow")
+    return pd.read_csv(path, header=0)
 
-    Accepts a DataFrame (returned as-is), a file path (loaded via
-    ``pd.read_csv``), or the name of a bundled dataset.
+
+# ---------------------------------------------------------------------------
+# Strict data-contract validator
+# ---------------------------------------------------------------------------
+
+_METADATA_COLUMNS = {"groups", "samples"}
+
+
+def _validate_feature_data(df: pd.DataFrame) -> None:
+    """Validate that a DataFrame conforms to the feature-only contract.
+
+    Experiment entry points should call this **after** resolving the data
+    (i.e. after ``resolve_data()``).  The validator checks:
+
+    1. All columns are numeric.
+    2. No metadata-like columns (``groups``, ``samples``) are present.
+    3. The index contains unique values (used as sample identifiers).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+       The feature DataFrame to validate.
+
+    Raises
+    ------
+    ValueError
+        If any of the above constraints are violated.
+    """
+    # 1. Reject metadata-like column names
+    bad_cols = _METADATA_COLUMNS & {c.lower() for c in df.columns}
+    if bad_cols:
+        offending = [c for c in df.columns if c.lower() in bad_cols]
+        raise ValueError(
+            f"DataFrame contains metadata column(s) {offending!r} which must "
+            "not be included in the feature matrix. Pass group labels via the "
+            "'groups' parameter instead and ensure sample IDs are in the "
+            "DataFrame index, not a column."
+        )
+
+    # 2. All columns must be numeric
+    non_numeric = df.select_dtypes(exclude="number").columns.tolist()
+    if non_numeric:
+        raise ValueError(
+            f"DataFrame contains non-numeric column(s): {non_numeric!r}. "
+            "Only numeric feature columns are allowed. Remove or convert "
+            "non-numeric columns before passing to experiment functions."
+        )
+
+    # 3. Index must be unique
+    if not df.index.is_unique:
+        n_dup = df.index.duplicated().sum()
+        raise ValueError(
+            f"DataFrame index contains {n_dup} duplicate value(s). "
+            "Each row must have a unique identifier (sample ID) as its index."
+        )
+
+
+def resolve_data(
+    data: "pd.DataFrame | str | Path",
+) -> "tuple[pd.DataFrame, pd.Series | None]":
+    """
+    Resolve a flexible data input to a pandas DataFrame and optional groups.
+
+    Accepts a DataFrame (returned as-is with ``None`` groups), a file path
+    (loaded via ``pd.read_csv`` / ``pd.read_parquet``), or the name of a
+    bundled dataset.
 
     Parameters
     ----------
     data : pd.DataFrame, str, or Path
         One of:
 
-        - A ``pd.DataFrame`` — returned directly.
-        - A ``str`` or ``Path`` pointing to an existing CSV file (must
-          include an extension such as ``.csv``).
+        - A ``pd.DataFrame`` — returned directly with groups ``None``.
+        - A ``str`` or ``Path`` pointing to an existing CSV or Parquet file
+          (must include an extension such as ``.csv`` or ``.parquet``).
         - A plain name (no extension, no path separators) of a bundled
           dataset, e.g. ``"SKCMPositive_4"``.
 
     Returns
     -------
-    pd.DataFrame
-        The resolved data.
+    tuple[pd.DataFrame, pd.Series | None]
+        ``(features_df, groups_or_none)``.  Groups are a :class:`pd.Series`
+        only when the input is a bundled dataset that ships with a groups
+        sidecar.  For user-provided files and DataFrames, groups are
+        always ``None``.
 
     Raises
     ------
@@ -322,13 +343,13 @@ def resolve_data(data: "pd.DataFrame | str | Path") -> pd.DataFrame:
     Examples
     --------
     >>> from syng_bts.data_utils import resolve_data
-    >>> df = resolve_data("SKCMPositive_4")          # bundled dataset
-    >>> df = resolve_data("./my_data/custom.csv")    # file path
-    >>> df = resolve_data(existing_dataframe)         # pass-through
+    >>> df, groups = resolve_data("SKCMPositive_4")          # bundled
+    >>> df, groups = resolve_data("./my_data/custom.csv")    # file path
+    >>> df, groups = resolve_data(existing_dataframe)         # pass-through
     """
     # 1. DataFrame pass-through
     if isinstance(data, pd.DataFrame):
-        return data
+        return data, None
 
     # 2. Convert to string for inspection
     if isinstance(data, Path):
@@ -346,22 +367,24 @@ def resolve_data(data: "pd.DataFrame | str | Path") -> pd.DataFrame:
     has_separators = "/" in data_str or "\\" in data_str
     if has_separators:
         if path.exists():
-            return pd.read_csv(path, header=0)
+            return _read_user_file(path), None
         raise FileNotFoundError(f"Data file not found: {path}")
 
-    # 4. Treat as a bundled dataset name — strip .csv if the user added it
+    # 4. Treat as a bundled dataset name — strip .csv/.parquet if the user added it
     name = data_str
     if name.lower().endswith(".csv"):
         name = name[: -len(".csv")]
+    elif name.lower().endswith(".parquet"):
+        name = name[: -len(".parquet")]
 
     bundled_info = BUNDLED_DATASETS.get(name)
     if bundled_info is not None:
-        subdir, filename = bundled_info
-        return load_bundled_data(subdir, filename)
+        subdir, filename, groups_filename = bundled_info
+        return load_bundled_data(subdir, filename, groups_filename)
 
     # 5. Last resort: try as a local file (e.g. "myfile.csv" in cwd)
     if path.suffix and path.exists():
-        return pd.read_csv(path, header=0)
+        return _read_user_file(path), None
 
     available = ", ".join(sorted(BUNDLED_DATASETS.keys()))
     raise ValueError(

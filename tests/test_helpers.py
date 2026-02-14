@@ -105,6 +105,99 @@ class TestPreprocessing:
         assert result[0, 0] == 0.0
         assert result[1, 1] == 0.0
 
+    def test_inverse_log2_basic(self):
+        """Test inverse_log2 correctly reverses log2(x+1) transform."""
+        from syng_bts.helper_utils import inverse_log2
+
+        # Create test data in log space
+        original_counts = pd.DataFrame(
+            {
+                "gene1": [0.0, 10.0, 100.0],
+                "gene2": [5.0, 50.0, 500.0],
+                "gene3": [1.0, 20.0, 200.0],
+            }
+        )
+
+        # Apply log2(x+1)
+        log_data = pd.DataFrame(np.log2(original_counts + 1))
+
+        # Apply inverse: 2^x - 1
+        reconstructed = inverse_log2(log_data)
+
+        # Should match original within floating point tolerance
+        pd.testing.assert_frame_equal(reconstructed, original_counts, rtol=1e-5)
+
+    def test_inverse_log2_preserves_column_order(self):
+        """Test inverse_log2 preserves exact column order."""
+        from syng_bts.helper_utils import inverse_log2
+
+        # Create DataFrame with specific column order
+        columns = [f"col_{i:03d}" for i in range(100)]
+        data = pd.DataFrame(np.random.rand(10, 100), columns=columns)
+
+        # Apply inverse transform
+        result = inverse_log2(data)
+
+        # Verify exact column order preservation
+        assert list(result.columns) == columns, (
+            "inverse_log2 did not preserve column order"
+        )
+
+        # Verify order matches input DataFrame
+        assert list(result.columns) == list(data.columns)
+
+    def test_inverse_log2_all_numeric_required(self):
+        """Test inverse_log2 raises error for DataFrames with non-numeric columns."""
+        from syng_bts.helper_utils import inverse_log2
+
+        # Create DataFrame with mixed types (numeric + string)
+        data_with_string = pd.DataFrame(
+            {
+                "numeric1": [1.0, 2.0, 3.0],
+                "string_col": ["a", "b", "c"],
+                "numeric2": [4.0, 5.0, 6.0],
+            }
+        )
+
+        # Should raise ValueError
+        with pytest.raises(ValueError, match="non-numeric columns found"):
+            inverse_log2(data_with_string)
+
+        # Create DataFrame with object dtype (even if values are numeric-like)
+        data_with_object = pd.DataFrame(
+            {
+                "col1": [1.0, 2.0, 3.0],
+                "col2": pd.Series(["1", "2", "3"], dtype=object),
+            }
+        )
+
+        # Should also raise ValueError
+        with pytest.raises(ValueError, match="non-numeric columns found"):
+            inverse_log2(data_with_object)
+
+    def test_inverse_log2_transforms_all_columns(self):
+        """Test inverse_log2 transforms all columns when all are numeric."""
+        from syng_bts.helper_utils import inverse_log2
+
+        # Create DataFrame with all numeric columns
+        data = pd.DataFrame(
+            {
+                "col1": [1.0, 2.0, 3.0],
+                "col2": [4.0, 5.0, 6.0],
+                "col3": [7.0, 8.0, 9.0],
+            }
+        )
+
+        result = inverse_log2(data)
+
+        # All columns should be transformed
+        assert result.shape == data.shape
+        assert list(result.columns) == list(data.columns)
+
+        # Verify transformation was applied to all columns
+        expected = pd.DataFrame(np.power(2, data) - 1)
+        pd.testing.assert_frame_equal(result, expected)
+
 
 # ===========================================================================
 # Seed setting
@@ -231,12 +324,13 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot_data, pilot_labels, pilot_blur = draw_pilot(
+        pilot_data, pilot_labels, pilot_blur, pilot_indices = draw_pilot(
             dataset, labels, blurlabels, n_pilot=20, seednum=42
         )
 
         assert len(pilot_data) == 20
         assert len(pilot_labels) == 20
+        assert len(pilot_indices) == 20
 
     def test_draw_pilot_two_labels(self):
         """Test draw_pilot with two labels draws from both groups."""
@@ -246,11 +340,12 @@ class TestPilotDrawing:
         labels = torch.cat([torch.zeros(50, 1), torch.ones(50, 1)])
         blurlabels = labels.clone()
 
-        pilot_data, pilot_labels, pilot_blur = draw_pilot(
+        pilot_data, pilot_labels, pilot_blur, pilot_indices = draw_pilot(
             dataset, labels, blurlabels, n_pilot=20, seednum=42
         )
 
         assert len(pilot_data) == 40  # 20 per group
+        assert len(pilot_indices) == 40
 
     def test_draw_pilot_reproducible(self):
         """Test draw_pilot is reproducible with same seed."""
@@ -260,10 +355,15 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot1, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
-        pilot2, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
+        pilot1, _, _, idx1 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+        pilot2, _, _, idx2 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
 
         assert torch.allclose(pilot1, pilot2)
+        assert torch.equal(idx1, idx2)
 
     def test_draw_pilot_different_seeds(self):
         """Test draw_pilot gives different results with different seeds."""
@@ -273,10 +373,45 @@ class TestPilotDrawing:
         labels = torch.zeros(100, 1)
         blurlabels = labels.clone()
 
-        pilot1, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=42)
-        pilot2, _, _ = draw_pilot(dataset, labels, blurlabels, n_pilot=20, seednum=99)
+        pilot1, _, _, idx1 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+        pilot2, _, _, idx2 = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=99
+        )
 
         assert not torch.allclose(pilot1, pilot2)
+        assert not torch.equal(idx1, idx2)
+
+    def test_draw_pilot_indices_single_group(self):
+        """draw_pilot always returns selected row indices for provenance."""
+        from syng_bts.helper_utils import draw_pilot
+
+        dataset = torch.randn(100, 50)
+        labels = torch.zeros(100, 1)
+        blurlabels = labels.clone()
+
+        pilot_data, _pilot_labels, _pilot_blur, pilot_indices = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+
+        assert pilot_indices.shape[0] == 20
+        assert torch.allclose(pilot_data, dataset[pilot_indices, :])
+
+    def test_draw_pilot_indices_two_groups(self):
+        """draw_pilot returns global row indices for two-group draws."""
+        from syng_bts.helper_utils import draw_pilot
+
+        dataset = torch.randn(100, 50)
+        labels = torch.cat([torch.zeros(50, 1), torch.ones(50, 1)])
+        blurlabels = labels.clone()
+
+        pilot_data, _pilot_labels, _pilot_blur, pilot_indices = draw_pilot(
+            dataset, labels, blurlabels, n_pilot=20, seednum=42
+        )
+
+        assert pilot_indices.shape[0] == 40
+        assert torch.allclose(pilot_data, dataset[pilot_indices, :])
 
 
 # ===========================================================================

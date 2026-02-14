@@ -65,6 +65,14 @@ def sample_csv_file(temp_dir, sample_data):
 
 
 @pytest.fixture
+def sample_parquet_file(temp_dir, sample_data):
+    """Create a sample Parquet file for testing data loading."""
+    pq_path = temp_dir / "test_data.parquet"
+    sample_data.to_parquet(pq_path, engine="pyarrow")
+    return pq_path
+
+
+@pytest.fixture
 def small_training_config():
     """Return a minimal training configuration for fast testing.
 

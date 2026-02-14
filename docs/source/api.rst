@@ -1,7 +1,7 @@
 API Reference
 =============
 
-This page documents the complete public API of SyNG-BTS v3.0.
+This page documents the complete public API of SyNG-BTS v3.1.
 
 .. contents:: Table of Contents
    :local:

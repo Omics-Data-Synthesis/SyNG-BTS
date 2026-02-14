@@ -67,6 +67,7 @@ class SyngResult:
     generated_data: pd.DataFrame
     loss: pd.DataFrame
     reconstructed_data: pd.DataFrame | None = None
+    original_data: pd.DataFrame | None = None
     model_state: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -129,6 +130,12 @@ class SyngResult:
             recon_path = out / f"{stem}_reconstructed.csv"
             self.reconstructed_data.to_csv(recon_path, index=False)
             paths["reconstructed"] = recon_path
+
+        # Original data
+        if self.original_data is not None:
+            orig_path = out / f"{stem}_original.csv"
+            self.original_data.to_csv(orig_path, index=True)
+            paths["original"] = orig_path
 
         # Model state dict
         if self.model_state is not None:
@@ -284,10 +291,17 @@ class SyngResult:
                     "Reconstructed data is only produced by AE/VAE/CVAE models."
                 )
             df = self.reconstructed_data
+        elif which == "original":
+            if self.original_data is None:
+                raise ValueError(
+                    "No original data available in this result. "
+                    "Pass original_data when constructing the result."
+                )
+            df = self.original_data
         else:
             raise ValueError(
                 f"Unknown value which={which!r}; "
-                f"expected 'generated' or 'reconstructed'."
+                f"expected 'generated', 'reconstructed', or 'original'."
             )
 
         fig, ax = plt.subplots()
@@ -325,6 +339,9 @@ class SyngResult:
         if self.reconstructed_data is not None:
             r, c = self.reconstructed_data.shape
             parts.append(f"Reconstructed data: {r} rows × {c} cols")
+        if self.original_data is not None:
+            r, c = self.original_data.shape
+            parts.append(f"Original data: {r} rows × {c} cols")
         if "seed" in meta:
             parts.append(f"Random seed: {meta['seed']}")
         return " | ".join(parts)
@@ -333,12 +350,14 @@ class SyngResult:
         n_gen, n_feat = self.generated_data.shape
         model = self.metadata.get("model", "?")
         has_recon = self.reconstructed_data is not None
+        has_original = self.original_data is not None
         has_model = self.model_state is not None
         return (
             f"SyngResult(model={model!r}, "
             f"generated={n_gen}×{n_feat}, "
             f"loss_cols={list(self.loss.columns)}, "
             f"has_reconstructed={has_recon}, "
+            f"has_original={has_original}, "
             f"has_model_state={has_model})"
         )
 
@@ -418,6 +437,11 @@ class SyngResult:
         recon_path = d / f"{stem}_reconstructed.csv"
         reconstructed_data = pd.read_csv(recon_path) if recon_path.exists() else None
 
+        orig_path = d / f"{stem}_original.csv"
+        original_data = (
+            pd.read_csv(orig_path, index_col=0) if orig_path.exists() else None
+        )
+
         model_path = d / f"{stem}_model.pt"
         model_state = (
             torch.load(model_path, weights_only=False) if model_path.exists() else None
@@ -436,6 +460,7 @@ class SyngResult:
             generated_data=generated_data,
             loss=loss,
             reconstructed_data=reconstructed_data,
+            original_data=original_data,
             model_state=model_state,
             metadata=metadata,
         )
@@ -450,6 +475,8 @@ class PilotResult:
     runs : dict[tuple[int, int], SyngResult]
         Mapping of ``(pilot_size, draw_index)`` → individual run result.
         ``draw_index`` is 1-based (1 through 5).
+    original_data : pd.DataFrame or None
+        The full original input data (before subsetting).
     metadata : dict
         Shared metadata across all runs (model, data dimensions, etc.).
 
@@ -461,6 +488,7 @@ class PilotResult:
     """
 
     runs: dict[tuple[int, int], SyngResult] = field(default_factory=dict)
+    original_data: pd.DataFrame | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -500,6 +528,20 @@ class PilotResult:
         for (pilot_size, draw), result in sorted(self.runs.items()):
             run_prefix = f"{prefix}_pilot{pilot_size}_draw{draw}"
             all_paths[(pilot_size, draw)] = result.save(out, prefix=run_prefix)
+
+        # Save top-level original data
+        if self.original_data is not None:
+            orig_path = out / f"{prefix}_original.csv"
+            self.original_data.to_csv(orig_path, index=True)
+
+        # Save top-level metadata
+        if self.metadata:
+            meta_path = out / f"{prefix}_pilot_metadata.json"
+            meta_path.write_text(
+                json.dumps(self.metadata, indent=2, default=_json_serializable),
+                encoding="utf-8",
+            )
+
         return all_paths
 
     def plot_loss(
@@ -613,6 +655,10 @@ class PilotResult:
         pilot_sizes = sorted({ps for ps, _ in self.runs})
         lines.append(f"Pilot sizes: {pilot_sizes}")
 
+        if self.original_data is not None:
+            r, c = self.original_data.shape
+            lines.append(f"Original data: {r} rows × {c} cols")
+
         for key in sorted(self.runs):
             r = self.runs[key]
             n_gen = r.generated_data.shape[0]
@@ -630,6 +676,8 @@ class PilotResult:
         n_runs = len(self.runs)
         pilot_sizes = sorted({ps for ps, _ in self.runs})
         model = self.metadata.get("model", "?")
+        has_original = self.original_data is not None
         return (
-            f"PilotResult(model={model!r}, n_runs={n_runs}, pilot_sizes={pilot_sizes})"
+            f"PilotResult(model={model!r}, n_runs={n_runs}, "
+            f"pilot_sizes={pilot_sizes}, has_original={has_original})"
         )

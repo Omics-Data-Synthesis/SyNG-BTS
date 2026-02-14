@@ -359,6 +359,12 @@ class TestSyngResult:
 class TestPilotResult:
     """Test PilotResult container."""
 
+    def test_no_load_method(self):
+        """PilotResult intentionally does not provide a load() method."""
+        from syng_bts import PilotResult
+
+        assert not hasattr(PilotResult, "load")
+
     @pytest.fixture
     def pilot_result(self, sample_generated, sample_loss):
         """Create a PilotResult with 2 pilot sizes × 2 draws."""

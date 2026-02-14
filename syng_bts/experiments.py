@@ -28,6 +28,7 @@ from .helper_utils import (
     Gaussian_aug,
     create_labels,
     draw_pilot,
+    inverse_log2,
     preprocessinglog2,
 )
 from .result import PilotResult, SyngResult
@@ -496,23 +497,31 @@ def generate(
     # --- 10. Assemble SyngResult -----------------------------------------
     gen_np = train_out.generated_data.detach().numpy()
 
-    # For CVAE, add label column name
-    gen_colnames = list(colnames)
+    # For CVAE, strip the appended label column — it is the conditioning
+    # input, not a generated feature.  Store it in metadata instead.
+    gen_labels = None
     if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-        gen_colnames = gen_colnames + ["label"]
+        gen_labels = pd.Series(gen_np[:, -1], name="label")
+        gen_np = gen_np[:, :-1]
 
-    gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
+    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
 
     recon_df = None
+    recon_labels = None
     if train_out.reconstructed_data is not None:
         recon_np = train_out.reconstructed_data.detach().numpy()
 
-        # For CVAE, add label column name
-        recon_colnames = list(colnames)
         if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-            recon_colnames = recon_colnames + ["label"]
+            recon_labels = pd.Series(recon_np[:, -1], name="label")
+            recon_np = recon_np[:, :-1]
 
-        recon_df = pd.DataFrame(recon_np, columns=recon_colnames[: recon_np.shape[1]])
+        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+    # --- 10b. Inverse log transform to count scale -----------------------
+    if apply_log:
+        gen_df = inverse_log2(gen_df)
+        if recon_df is not None:
+            recon_df = inverse_log2(recon_df)
 
     loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -527,12 +536,15 @@ def generate(
         "input_shape": (n_samples, len(colnames)),
         "early_stop": early_stop,
         "early_stop_patience": early_stop_num,
+        "generated_labels": gen_labels,
+        "reconstructed_labels": recon_labels,
     }
 
     result = SyngResult(
         generated_data=gen_df,
         loss=loss_df,
         reconstructed_data=recon_df,
+        original_data=data_pd.copy(),
         model_state=train_out.model_state,
         metadata=metadata,
     )
@@ -625,6 +637,7 @@ def pilot_study(
     _validate_feature_data(df)
     dataname = derive_dataname(data, name)
 
+    # --- 2. Extract numeric data, capture column names -------------------
     data_pd = df
     colnames = list(data_pd.columns)
     oridata = torch.from_numpy(data_pd.to_numpy()).to(torch.float32)
@@ -639,14 +652,16 @@ def pilot_study(
         param_name="groups",
     )
 
+    # --- 3. Labels -------------------------------------------------------
     orilabels, oriblurlabels = create_labels(
         n_samples=n_samples,
         groups=effective_groups,
     )
 
+    # --- 4. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # Epoch / early-stopping
+    # --- 5. Epoch / early-stopping logic ---------------------------------
     num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
         epoch=epoch,
         early_stop_patience=early_stop_patience,
@@ -654,6 +669,7 @@ def pilot_study(
         default_patience=30,
     )
 
+    # --- 6. Pilot loop ---------------------------------------------------
     # new_size = 5× pilot (per group if unbalanced)
     repli = 5
 
@@ -777,28 +793,37 @@ def pilot_study(
             else:
                 raise ValueError(f"Unsupported model: {model!r}")
 
-            # Assemble SyngResult for this run
+            # -- Assemble SyngResult for this run -------------------------
             gen_np = train_out.generated_data.detach().numpy()
 
-            # For CVAE, add label column name
-            gen_colnames = list(colnames)
+            # For CVAE, strip the appended label column — it is the conditioning
+            # input, not a generated feature.  Store it in metadata instead.
+            gen_labels = None
             if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-                gen_colnames = gen_colnames + ["label"]
+                gen_labels = pd.Series(gen_np[:, -1], name="label")
+                gen_np = gen_np[:, :-1]
 
-            gen_df = pd.DataFrame(gen_np, columns=gen_colnames[: gen_np.shape[1]])
+            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
 
             recon_df = None
+            recon_labels = None
             if train_out.reconstructed_data is not None:
                 recon_np = train_out.reconstructed_data.detach().numpy()
 
-                # For CVAE, add label column name
-                recon_colnames = list(colnames)
                 if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-                    recon_colnames = recon_colnames + ["label"]
+                    recon_labels = pd.Series(recon_np[:, -1], name="label")
+                    recon_np = recon_np[:, :-1]
 
-                recon_df = pd.DataFrame(
-                    recon_np, columns=recon_colnames[: recon_np.shape[1]]
-                )
+                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+            # -- Inverse log transform to count scale ---------------------
+            if apply_log:
+                gen_df = inverse_log2(gen_df)
+                if recon_df is not None:
+                    recon_df = inverse_log2(recon_df)
+
+            # Per-draw original data subset
+            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
 
             loss_df = _build_loss_df(train_out.log_dict, modelname)
 
@@ -816,18 +841,23 @@ def pilot_study(
                 "input_shape": (n_samples, len(colnames)),
                 "early_stop": early_stop,
                 "early_stop_patience": early_stop_num,
+                "generated_labels": gen_labels,
+                "reconstructed_labels": recon_labels,
             }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
                 generated_data=gen_df,
                 loss=loss_df,
                 reconstructed_data=recon_df,
+                original_data=pilot_original,
                 model_state=train_out.model_state,
                 metadata=run_metadata,
             )
 
+    # --- 7. Assemble PilotResult -----------------------------------------
     pilot_result = PilotResult(
         runs=runs,
+        original_data=data_pd.copy(),
         metadata={
             "model": model,
             "modelname": modelname,
@@ -950,7 +980,7 @@ def transfer(
         )
         _cleanup_transfer = True
 
-    # --- Phase 1: pre-train on source ------------------------------------
+    # --- 1. pre-train on source ------------------------------------------
     _source_result = generate(
         data=source_data,
         name=fromname,
@@ -972,7 +1002,7 @@ def transfer(
         verbose=verbose,
     )
 
-    # --- Phase 2: fine-tune on target ------------------------------------
+    # --- 2. fine-tune on target ------------------------------------------
     if pilot_size is not None:
         result = pilot_study(
             data=target_data,

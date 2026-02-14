@@ -758,6 +758,35 @@ class TestGenerate:
             df_back, result.generated_data, atol=1e-6, check_dtype=False
         )
 
+    def test_cvae_generated_data_feature_only(self, sample_data):
+        """CVAE generated_data is feature-only; labels in metadata."""
+        groups = pd.Series([0] * 10 + [1] * 10)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=10,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        # generated_data should match original columns (no label)
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+        assert "label" not in result.generated_data.columns
+        # Labels stored in metadata
+        assert result.metadata["generated_labels"] is not None
+        assert len(result.metadata["generated_labels"]) == len(result.generated_data)
+        # Non-CVAE models have None labels
+        result2 = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert result2.metadata["generated_labels"] is None
+
 
 # =========================================================================
 # pilot_study()
@@ -853,7 +882,8 @@ class TestPilotStudy:
         for run in result.runs.values():
             assert list(run.generated_data.columns) == list(sample_data.columns)
 
-    def test_cvae_generated_data_includes_label_column(self, sample_data):
+    def test_cvae_generated_data_excludes_label_column(self, sample_data):
+        """CVAE generated_data is feature-only; labels in metadata."""
         result = pilot_study(
             data=sample_data,
             pilot_size=[10],
@@ -863,7 +893,13 @@ class TestPilotStudy:
             learning_rate=LR,
         )
         for run in result.runs.values():
-            assert run.generated_data.columns[-1] == "label"
+            # generated_data should match original columns (no label)
+            assert list(run.generated_data.columns) == list(sample_data.columns)
+            assert "label" not in run.generated_data.columns
+            # Labels stored in metadata
+            assert "generated_labels" in run.metadata
+            assert run.metadata["generated_labels"] is not None
+            assert len(run.metadata["generated_labels"]) == len(run.generated_data)
 
     def test_pilot_run_metadata_includes_epochs_trained(self, sample_data):
         result = pilot_study(

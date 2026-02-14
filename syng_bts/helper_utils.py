@@ -2,6 +2,7 @@ import os
 import random
 
 import numpy as np
+import pandas as pd
 import torch
 
 
@@ -19,6 +20,27 @@ def preprocessinglog2(dataset: torch.Tensor) -> torch.Tensor:
         Log2-transformed data: log2(dataset + 1).
     """
     return torch.log2(dataset + 1)
+
+
+def inverse_log2(data: pd.DataFrame) -> pd.DataFrame:
+    """Inverse the log2(x+1) transformation back to count scale.
+
+    Applies ``2^x - 1`` to all numeric columns.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Data in log2-transformed scale.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data in count scale (``2^x - 1``).
+    """
+    result = data.copy()
+    numeric_cols = result.select_dtypes(include=[np.number]).columns
+    result[numeric_cols] = np.power(2, result[numeric_cols]) - 1
+    return result
 
 
 def set_all_seeds(seed: int) -> None:

@@ -39,8 +39,6 @@ def heatmap_eval(
         The matplotlib Figure containing the heatmap(s).
     """
     # Select only numeric columns.
-    # Non-numeric columns (e.g. groups) can be present but are ignored for the heatmap.
-    # TODO Remove this once we update the data loading to only return numeric data for evaluation.
     real_data_plot = real_data.select_dtypes(include=["number"])
     generated_data_plot = (
         generated_data.select_dtypes(include=["number"])
@@ -207,8 +205,8 @@ def evaluation(
     group_names : list of str or None, optional
         Human-readable names for binary groups.  Must have exactly two
         elements ``[name_for_0, name_for_1]``.  If ``None``, groups are
-        labelled ``"Group 0"`` and ``"Group 1"`` when a ``"groups"`` column
-        is present, or group information is skipped entirely.
+        labelled ``"Group 0"`` and ``"Group 1"`` when bundled groups are
+        available, or group information is skipped entirely.
     n_samples : int or None, default 200
         Number of samples from each end of the dataset to use for
         visualization (to keep UMAP fast).  If ``None``, all samples are
@@ -228,26 +226,22 @@ def evaluation(
     real_df, bundled_groups_real = resolve_data(real_data)
     gen_df, _bundled_groups_gen = resolve_data(generated_data)
 
+    if group_names is not None and len(group_names) != 2:
+        raise ValueError(
+            f"group_names must have exactly 2 elements, got {len(group_names)}"
+        )
+
     # --- Derive group labels ------------------------------------------------
     groups_real: pd.Series | None = None
     groups_generated: pd.Series | None = None
 
-    # Use bundled groups if available, else fall back to column
-    raw_groups_source = bundled_groups_real
-    if raw_groups_source is None and "groups" in real_df.columns:
-        raw_groups_source = real_df["groups"]
+    # Use bundled groups from resolve_data() only.
+    raw_groups = bundled_groups_real
 
-    has_groups_col = raw_groups_source is not None
-
-    if has_groups_col:
-        raw_groups = raw_groups_source
+    if raw_groups is not None:
         unique_groups = sorted(raw_groups.unique())
 
         if group_names is not None:
-            if len(group_names) != 2:
-                raise ValueError(
-                    f"group_names must have exactly 2 elements, got {len(group_names)}"
-                )
             mapping = {unique_groups[0]: group_names[0]}
             for g in unique_groups[1:]:
                 mapping[g] = group_names[1]
@@ -268,11 +262,15 @@ def evaluation(
 
     # --- Prepare numeric matrices -------------------------------------------
     real_numeric = real_df.select_dtypes(include=[np.number])
-    if apply_log:
-        real_numeric = np.log2(real_numeric + 1)
-
     gen_numeric = gen_df.iloc[:, : real_numeric.shape[1]].copy()
     gen_numeric.columns = real_numeric.columns
+
+    # When apply_log is True, log-transform both real and generated data so
+    # they are compared in the same (log2) scale.  Generated data is now
+    # returned in count scale by the experiment API (Phase 4).
+    if apply_log:
+        real_numeric = np.log2(real_numeric + 1)
+        gen_numeric = np.log2(gen_numeric + 1)
 
     # --- Sub-sample for speed -----------------------------------------------
     if n_samples is not None and n_samples < len(real_numeric):

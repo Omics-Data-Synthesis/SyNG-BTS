@@ -183,7 +183,7 @@ class TestBuildLossDf:
 
 
 # =========================================================================
-# Result schema verification (Phase 13)
+# Result schema verification
 # =========================================================================
 class TestResultSchema:
     """Verify result structure contracts documented in result_structure.md.
@@ -374,7 +374,7 @@ class TestResultSchema:
 
 
 # =========================================================================
-# Early stopping logic (Phase 14)
+# Early stopping logic
 # =========================================================================
 class TestResolveEarlyStoppingConfig:
     """Unit tests for _resolve_early_stopping_config() helper function.

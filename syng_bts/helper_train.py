@@ -66,6 +66,33 @@ def _resolve_verbose(verbose: int | str) -> VerbosityLevel:
     return VerbosityLevel(verbose)
 
 
+def _print_progress(
+    epoch: int,
+    num_epochs: int,
+    metrics: dict[str, float],
+) -> None:
+    """Print a ``\\r``-overwritten single-line progress bar (MINIMAL verbosity).
+
+    The line is of the form::
+
+        Epoch  3/100 |███░░░░░░░░░░░░░░░░░| loss: 0.1234
+
+    It is **not** terminated with a newline so the next call overwrites it.
+    Call ``print()`` once training ends to move past the progress line.
+    """
+    pct = (epoch + 1) / num_epochs
+    bar_len = 20
+    filled = int(bar_len * pct)
+    bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+    metrics_str = ", ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
+    print(
+        f"\rEpoch {epoch + 1:>{len(str(num_epochs))}}/{num_epochs} "
+        f"|{bar}| {metrics_str}",
+        end="",
+        flush=True,
+    )
+
+
 def _print_training_state(
     epoch: int,
     num_epochs: int,
@@ -166,6 +193,7 @@ def train_AE(
     best_loss = float("inf")
     best_epoch = 0
     best_model = model
+    progress_line_active = False
 
     val_features, _ = next(iter(val_loader))
 
@@ -226,7 +254,14 @@ def train_AE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"train_loss": train_loss, "val_loss": val_loss},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -236,6 +271,9 @@ def train_AE(
 
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
+            if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                print()  # newline after progress bar
+                progress_line_active = False
             if verbose >= VerbosityLevel.MINIMAL:
                 print(
                     f"Early stopping at epoch {best_epoch + 1} "
@@ -243,6 +281,8 @@ def train_AE(
                 )
             break
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -300,6 +340,7 @@ def train_VAE(
     best_loss = float("inf")
     best_epoch = 0
     best_model = model
+    progress_line_active = False
 
     val_features, _ = next(iter(val_loader))
 
@@ -390,7 +431,14 @@ def train_VAE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"kl": kl_div.item(), "recons": pixelwise.item(), "val": val_loss},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -401,6 +449,9 @@ def train_VAE(
 
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
+            if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                print()  # newline after progress bar
+                progress_line_active = False
             if verbose >= VerbosityLevel.MINIMAL:
                 print(
                     f"Early stopping at epoch {best_epoch + 1} "
@@ -408,6 +459,8 @@ def train_VAE(
                 )
             break
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -465,6 +518,7 @@ def train_CVAE(
     best_loss = float("inf")
     best_epoch = 0
     best_model = model
+    progress_line_active = False
 
     val_features, val_labels = next(iter(val_loader))
     if val_labels.dim() == 1:
@@ -562,7 +616,14 @@ def train_CVAE(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"kl": kl_div.item(), "recons": pixelwise.item(), "val": val_loss},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -573,6 +634,9 @@ def train_CVAE(
 
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
+            if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                print()  # newline after progress bar
+                progress_line_active = False
             if verbose >= VerbosityLevel.MINIMAL:
                 print(
                     f"Early stopping at epoch {best_epoch + 1} "
@@ -580,6 +644,8 @@ def train_CVAE(
                 )
             break
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -688,7 +754,13 @@ def train_GAN(
             log_dict["train_discriminator_real_acc_per_batch"].append(acc_real.item())
             log_dict["train_discriminator_fake_acc_per_batch"].append(acc_fake.item())
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"gen": gener_loss.item(), "disc": discr_loss.item()},
+            )
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -699,6 +771,8 @@ def train_GAN(
                 elapsed_time=time.time() - start_time,
             )
 
+    if verbose == VerbosityLevel.MINIMAL:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -751,6 +825,7 @@ def train_WGAN(
     best_loss = float("inf")
     best_epoch = 0
     best_model = model
+    progress_line_active = False
     for epoch in range(num_epochs):
         epoch_loss = []
         model.train()
@@ -839,7 +914,14 @@ def train_WGAN(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"gen": gener_loss.item(), "disc": discr_loss.item()},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -852,6 +934,9 @@ def train_WGAN(
 
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
+            if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                print()  # newline after progress bar
+                progress_line_active = False
             if verbose >= VerbosityLevel.MINIMAL:
                 print(
                     f"Early stopping at epoch {best_epoch + 1} "
@@ -859,6 +944,8 @@ def train_WGAN(
                 )
             break
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -914,6 +1001,7 @@ def train_WGANGP(
     best_loss = float("inf")
     best_epoch = 0
     best_model = model
+    progress_line_active = False
     for epoch in range(num_epochs):
         epoch_loss = []
         model.train()
@@ -1041,7 +1129,14 @@ def train_WGANGP(
             best_epoch = epoch
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            _print_progress(
+                epoch,
+                num_epochs,
+                {"gen": gener_loss.item(), "disc": discr_loss.item()},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             _print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -1054,6 +1149,9 @@ def train_WGANGP(
 
         # for early stopping
         if early_stop and (epoch - best_epoch >= early_stop_num):
+            if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                print()  # newline after progress bar
+                progress_line_active = False
             if verbose >= VerbosityLevel.MINIMAL:
                 print(
                     f"Early stopping at epoch {best_epoch + 1} "
@@ -1061,6 +1159,8 @@ def train_WGANGP(
                 )
             break
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")

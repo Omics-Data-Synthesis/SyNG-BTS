@@ -49,6 +49,8 @@ class SyngResult:
         Training loss log (columns depend on the model family).
     reconstructed_data : pd.DataFrame or None
         Reconstructions of the input data (AE/VAE/CVAE only).
+    original_data : pd.DataFrame or None
+        The full original input data.
     model_state : dict or None
         The ``state_dict()`` of the trained model, suitable for
         ``torch.save()`` / ``torch.load()``.
@@ -264,13 +266,19 @@ class SyngResult:
 
         return figures
 
-    def plot_heatmap(self, which: str = "generated") -> plt.Figure:
+    def plot_heatmap(
+        self, which: str = "generated", log_scale: bool = True
+    ) -> plt.Figure:
         """Render a seaborn heatmap of generated or reconstructed data.
 
         Parameters
         ----------
         which : str
-            ``"generated"`` or ``"reconstructed"``.
+            ``"generated"``, ``"reconstructed"``, or ``"original"``.
+        log_scale : bool
+            If ``True`` (default), apply ``log2(x + 1)`` scaling to the
+            data before plotting.  This compresses wide-ranging values
+            and often produces more readable heatmaps.
 
         Returns
         -------
@@ -305,9 +313,16 @@ class SyngResult:
                 f"expected 'generated', 'reconstructed', or 'original'."
             )
 
+        data = df.to_numpy()
+        if log_scale:
+            data = np.log2(data + 1)
+
         fig, ax = plt.subplots()
-        sns.heatmap(df.to_numpy(), cmap="YlGnBu", ax=ax)
-        ax.set_title(f"{which.capitalize()} data")
+        sns.heatmap(data, cmap="YlGnBu", ax=ax)
+        title = f"{which.capitalize()} data"
+        if log_scale:
+            title += " (log2)"
+        ax.set_title(title)
         fig.tight_layout()
         return fig
 

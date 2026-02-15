@@ -412,6 +412,7 @@ def generate(
             rawdata, rawlabels, multiplier=[Gaussian_head_num]
         )
     elif off_aug == "AE_head":
+        # TODO Change hardcoded training config for AE head augmentation to be more flexible
         feed_data, feed_labels = training_iter(
             iter_times=AE_head_num,
             rawdata=rawdata,

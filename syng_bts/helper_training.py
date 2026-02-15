@@ -674,6 +674,16 @@ def training_flows(
     best_train_loss = float("inf")
     best_train_epoch = 0
     best_model = model
+    progress_line_active = False
+
+    if verbose >= VerbosityLevel.MINIMAL:
+        msg = (
+            f"Starting training: {num_epochs} epochs, model={modelname}, "
+            f"num_blocks={num_blocks}, lr={learning_rate}"
+        )
+        if early_stop:
+            msg += f", early_stop={early_stop_num}"
+        print(msg)
 
     start_time = time.time()
 
@@ -687,6 +697,9 @@ def training_flows(
                 or (math.isnan(train_loss))
                 or (math.isinf(train_loss))
             ):
+                if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+                    print()  # newline after progress bar
+                    progress_line_active = False
                 if verbose >= VerbosityLevel.MINIMAL:
                     print(
                         f"Early stopping at epoch {best_train_epoch + 1} "
@@ -703,7 +716,14 @@ def training_flows(
             best_train_loss = train_loss
             best_model = copy.deepcopy(model)
 
-        if verbose == VerbosityLevel.DETAILED:
+        if verbose == VerbosityLevel.MINIMAL:
+            ht._print_progress(
+                epoch,
+                num_epochs,
+                {"neg_loglik": train_loss},
+            )
+            progress_line_active = True
+        elif verbose == VerbosityLevel.DETAILED:
             ht._print_training_state(
                 epoch=epoch,
                 num_epochs=num_epochs,
@@ -711,6 +731,8 @@ def training_flows(
                 elapsed_time=time.time() - start_time,
             )
 
+    if verbose == VerbosityLevel.MINIMAL and progress_line_active:
+        print()  # newline after progress bar
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")

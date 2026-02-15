@@ -101,8 +101,12 @@ def _assert_schema_parity(legacy: SyngResult, v2: SyngResult, has_recon: bool):
     # Loss: same columns
     assert list(legacy.loss.columns) == list(v2.loss.columns)
 
-    # Metadata: same keys
-    assert set(legacy.metadata.keys()) == set(v2.metadata.keys())
+    # Metadata: allows one intentional v2-only key (arch_params)
+    legacy_keys = set(legacy.metadata.keys())
+    v2_keys = set(v2.metadata.keys())
+    assert v2_keys == (legacy_keys | {"arch_params"})
+    assert "arch_params" not in legacy.metadata
+    assert isinstance(v2.metadata.get("arch_params"), dict)
 
 
 def _assert_loss_bounded(legacy: SyngResult, v2: SyngResult, atol: float = 2.0):
@@ -430,3 +434,247 @@ class TestV2SmokeTests:
         assert isinstance(result, SyngResult)
         assert result.generated_data.shape[0] > 0
         assert result.reconstructed_data is not None
+
+
+# =========================================================================
+# Phase 2: Inference dispatcher tests
+# =========================================================================
+
+
+class TestInferenceDispatcher:
+    """Tests for the unified inference module (syng_bts/inference.py)."""
+
+    def test_run_generation_ae(self, sample_data):
+        """run_generation produces samples for AE model."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert result.generated_data.shape[0] > 0
+        assert result.generated_data.shape[1] == NUM_FEATURES
+
+    def test_run_generation_gan(self, sample_data):
+        """run_generation produces samples for GAN model."""
+        result = generate(
+            data=sample_data,
+            model="GAN",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert result.generated_data.shape[0] > 0
+        assert result.reconstructed_data is None
+
+    def test_run_generation_flow(self, sample_data):
+        """run_generation produces samples for flow model."""
+        result = generate(
+            data=sample_data,
+            model="maf",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert result.generated_data.shape[0] > 0
+        assert result.reconstructed_data is None
+
+    def test_run_reconstruction_ae(self, sample_data):
+        """run_reconstruction produces reconstruction for AE model."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert result.reconstructed_data is not None
+        assert result.reconstructed_data.shape[1] == NUM_FEATURES
+
+    def test_run_reconstruction_vae(self, sample_data):
+        """run_reconstruction produces reconstruction for VAE model."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert result.reconstructed_data is not None
+
+    def test_inference_dispatcher_rejects_unknown_family(self):
+        """run_generation raises ValueError for unknown family."""
+        import torch.nn as nn
+
+        from syng_bts.helper_training import TrainedModel
+        from syng_bts.inference import run_generation
+
+        model = nn.Linear(10, 5)
+        trained = TrainedModel(
+            model=model,
+            model_state=model.state_dict(),
+            arch_params={"family": "unknown", "modelname": "X"},
+            log_dict={},
+            epochs_trained=0,
+        )
+        with pytest.raises(ValueError, match="Unknown model family"):
+            run_generation(trained, num_samples=10)
+
+    def test_reconstruction_rejects_non_ae_family(self):
+        """run_reconstruction raises ValueError for non-AE family."""
+        import torch.nn as nn
+
+        from syng_bts.helper_training import TrainedModel
+        from syng_bts.inference import run_reconstruction
+
+        model = nn.Linear(10, 5)
+        trained = TrainedModel(
+            model=model,
+            model_state=model.state_dict(),
+            arch_params={"family": "gan", "modelname": "GAN"},
+            log_dict={},
+            epochs_trained=0,
+        )
+        with pytest.raises(ValueError, match="AE-family"):
+            run_reconstruction(trained, data_loader=[], n_features=10)
+
+
+# =========================================================================
+# Phase 2: Metadata enrichment tests
+# =========================================================================
+
+
+class TestMetadataEnrichment:
+    """Tests that v2 path enriches metadata with arch_params and apply_log."""
+
+    def test_v2_metadata_has_arch_params(self, sample_data):
+        """v2 path includes arch_params in metadata."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        assert "arch_params" in result.metadata
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "ae"
+        assert ap["modelname"] == "VAE"
+        assert "num_features" in ap
+        assert "latent_size" in ap
+
+    def test_v2_metadata_has_apply_log(self, sample_data):
+        """v2 path includes apply_log in metadata."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            apply_log=True,
+            _use_v2=True,
+        )
+        assert "apply_log" in result.metadata
+        assert result.metadata["apply_log"] is True
+
+    def test_v2_metadata_apply_log_false(self, sample_data):
+        """v2 path preserves apply_log=False in metadata."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            apply_log=False,
+            _use_v2=True,
+        )
+        assert result.metadata["apply_log"] is False
+
+    def test_v2_arch_params_excludes_private_keys(self, sample_data):
+        """Private keys (like _train_random_seed) are stripped from arch_params."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        ap = result.metadata["arch_params"]
+        for key in ap:
+            assert not key.startswith("_"), f"Private key {key!r} leaked into metadata"
+
+    def test_v2_gan_metadata_arch_params(self, sample_data):
+        """GAN v2 path includes correct arch_params."""
+        result = generate(
+            data=sample_data,
+            model="GAN",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "gan"
+        assert ap["modelname"] == "GAN"
+        assert "latent_dim" in ap
+
+    def test_v2_flow_metadata_arch_params(self, sample_data):
+        """Flow v2 path includes correct arch_params."""
+        result = generate(
+            data=sample_data,
+            model="maf",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=True,
+        )
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "flow"
+        assert ap["modelname"] == "maf"
+        assert "num_inputs" in ap
+        assert "num_blocks" in ap
+        assert "num_hidden" in ap
+
+    def test_legacy_metadata_no_arch_params(self, sample_data):
+        """Legacy path does NOT include arch_params (added only in v2)."""
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+            _use_v2=False,
+        )
+        assert "arch_params" not in result.metadata

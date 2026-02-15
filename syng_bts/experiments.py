@@ -32,12 +32,11 @@ from .helper_utils import (
     Gaussian_aug,
     create_labels,
     draw_pilot,
-    generate_samples,
     inverse_log2,
     preprocessinglog2,
-    reconstruct_samples,
     set_all_seeds,
 )
+from .inference import run_generation, run_reconstruction
 from .result import PilotResult, SyngResult
 
 # =========================================================================
@@ -213,10 +212,11 @@ def _infer_from_trained(
     batch_size: int,
     cap: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Run generation (and reconstruction for AE family) from a TrainedModel.
+    """Run generation and reconstruction via the unified inference dispatcher.
 
-    This bridges the v2 training boundary back to the same
-    generation/reconstruction logic used in the legacy orchestrators.
+    This delegates to :func:`inference.run_generation` and
+    :func:`inference.run_reconstruction`, keeping post-training
+    inference cleanly separated from training orchestrators.
 
     Returns
     -------
@@ -225,9 +225,7 @@ def _infer_from_trained(
     """
     from torch.utils.data import DataLoader, TensorDataset, random_split
 
-    modelname = trained.arch_params["modelname"]
     family = trained.arch_params["family"]
-    model = trained.model
 
     # --- Determine capping values ---
     if cap:
@@ -237,28 +235,15 @@ def _infer_from_trained(
         col_max = None
         col_sd = None
 
-    # --- Determine latent size ---
-    if family == "ae":
-        latent_size = trained.arch_params["latent_size"]
-    elif family == "gan":
-        latent_size = trained.arch_params["latent_dim"]
-    elif family == "flow":
-        latent_size = trained.arch_params["num_hidden"]
-    else:
-        raise ValueError(f"Unknown family: {family!r}")
-
-    # --- Generation ---
-    gen_modelname = "GANs" if family == "gan" else modelname
-    generated = generate_samples(
-        model=model,
-        modelname=gen_modelname,
-        latent_size=latent_size,
-        num_images=new_size,
+    # --- Generation via unified dispatcher ---
+    generated = run_generation(
+        trained,
+        num_samples=new_size,
         col_max=col_max,
         col_sd=col_sd,
     )
 
-    # --- Reconstruction (AE family only) ---
+    # --- Reconstruction via unified dispatcher (AE family only) ---
     reconstructed = None
     if family == "ae":
         num_features = trained.arch_params["num_features"]
@@ -289,9 +274,8 @@ def _infer_from_trained(
                 drop_last=True,
             )
 
-        reconstructed, _ = reconstruct_samples(
-            model=model,
-            modelname=modelname,
+        reconstructed, _ = run_reconstruction(
+            trained,
             data_loader=recon_loader,
             n_features=num_features,
         )
@@ -798,7 +782,14 @@ def generate(
         "early_stop_patience": early_stop_num,
         "generated_labels": gen_labels,
         "reconstructed_labels": recon_labels,
+        "apply_log": apply_log,
     }
+
+    # Phase 2: enrich metadata with arch_params from v2 training path
+    if _use_v2:
+        metadata["arch_params"] = {
+            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
+        }
 
     result = SyngResult(
         generated_data=gen_df,
@@ -1154,7 +1145,16 @@ def pilot_study(
                 "early_stop_patience": early_stop_num,
                 "generated_labels": gen_labels,
                 "reconstructed_labels": recon_labels,
+                "apply_log": apply_log,
             }
+
+            # Phase 2: enrich metadata with arch_params from v2 training path
+            if _use_v2:
+                run_metadata["arch_params"] = {
+                    k: v
+                    for k, v in trained.arch_params.items()
+                    if not k.startswith("_")
+                }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
                 generated_data=gen_df,
@@ -1208,6 +1208,7 @@ def transfer(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
+    _use_v2: bool = False,
 ) -> SyngResult | PilotResult:
     """Train on source data, then fine-tune and generate on target data.
 
@@ -1311,6 +1312,7 @@ def transfer(
         random_seed=random_seed,
         output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
         verbose=verbose,
+        _use_v2=_use_v2,
     )
 
     # --- 2. fine-tune on target ------------------------------------------
@@ -1333,6 +1335,7 @@ def transfer(
             random_seed=random_seed,
             output_dir=output_dir,
             verbose=verbose,
+            _use_v2=_use_v2,
         )
     else:
         result = generate(
@@ -1353,6 +1356,7 @@ def transfer(
             random_seed=random_seed,
             output_dir=output_dir,
             verbose=verbose,
+            _use_v2=_use_v2,
         )
 
     # Cleanup temp dir if we created one

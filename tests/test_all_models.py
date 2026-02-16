@@ -933,3 +933,201 @@ class TestMetadataSchemaValidation:
             verbose="silent",
         )
         _assert_metadata_schema(result, model_str="glow")
+
+
+# =========================================================================
+# Model factory tests
+# =========================================================================
+
+
+class TestModelFactory:
+    """Tests for syng_bts/model_factory.py rebuild_model()."""
+
+    def test_rebuild_ae(self):
+        """rebuild_model reconstructs an AE model."""
+        from syng_bts.helper_models import AE
+        from syng_bts.model_factory import rebuild_model
+
+        model = AE(NUM_FEATURES)
+        state = model.state_dict()
+        arch = {
+            "family": "ae",
+            "modelname": "AE",
+            "num_features": NUM_FEATURES,
+            "latent_size": 64,
+        }
+        rebuilt = rebuild_model(arch, state)
+        assert isinstance(rebuilt, AE)
+        # Verify eval mode
+        assert not rebuilt.training
+
+    def test_rebuild_vae(self):
+        """rebuild_model reconstructs a VAE model."""
+        from syng_bts.helper_models import VAE
+        from syng_bts.model_factory import rebuild_model
+
+        model = VAE(NUM_FEATURES)
+        state = model.state_dict()
+        arch = {
+            "family": "ae",
+            "modelname": "VAE",
+            "num_features": NUM_FEATURES,
+            "latent_size": 32,
+        }
+        rebuilt = rebuild_model(arch, state)
+        assert isinstance(rebuilt, VAE)
+
+    def test_rebuild_cvae(self):
+        """rebuild_model reconstructs a CVAE model."""
+        from syng_bts.helper_models import CVAE
+        from syng_bts.model_factory import rebuild_model
+
+        model = CVAE(NUM_FEATURES, num_classes=2)
+        state = model.state_dict()
+        arch = {
+            "family": "ae",
+            "modelname": "CVAE",
+            "num_features": NUM_FEATURES,
+            "latent_size": 32,
+            "num_classes": 2,
+        }
+        rebuilt = rebuild_model(arch, state)
+        assert isinstance(rebuilt, CVAE)
+
+    def test_rebuild_gan(self):
+        """rebuild_model reconstructs a GAN model."""
+        from syng_bts.helper_models import GAN
+        from syng_bts.model_factory import rebuild_model
+
+        model = GAN(NUM_FEATURES, latent_dim=32)
+        state = model.state_dict()
+        arch = {
+            "family": "gan",
+            "modelname": "GAN",
+            "num_features": NUM_FEATURES,
+            "latent_dim": 32,
+        }
+        rebuilt = rebuild_model(arch, state)
+        assert isinstance(rebuilt, GAN)
+
+    def test_rebuild_maf(self):
+        """rebuild_model reconstructs a MAF flow model."""
+        from syng_bts.model_factory import rebuild_model
+
+        # Train a tiny flow to get valid state_dict
+        trained = TestModelReconstructionParity._train_test_model(
+            pd.DataFrame(
+                np.random.RandomState(42).rand(NUM_SAMPLES, NUM_FEATURES) * 10,
+                columns=[f"gene_{i}" for i in range(NUM_FEATURES)],
+            ),
+            "maf",
+        )
+        rebuilt = rebuild_model(trained.arch_params, trained.model_state)
+        assert not rebuilt.training
+
+    def test_rebuild_unknown_family_raises(self):
+        """rebuild_model raises ValueError for unknown family."""
+        from syng_bts.model_factory import rebuild_model
+
+        with pytest.raises(ValueError, match="Unknown model family"):
+            rebuild_model({"family": "rnn", "modelname": "X"}, {})
+
+    def test_rebuild_unknown_ae_model_raises(self):
+        """rebuild_model raises ValueError for unknown AE model."""
+        from syng_bts.model_factory import rebuild_model
+
+        with pytest.raises(ValueError, match="Unknown AE-family model"):
+            rebuild_model(
+                {"family": "ae", "modelname": "XVAE", "num_features": 10},
+                {},
+            )
+
+    def test_rebuild_unknown_flow_model_raises(self):
+        """rebuild_model raises ValueError for unknown flow model."""
+        from syng_bts.model_factory import rebuild_model
+
+        with pytest.raises(ValueError, match="Unknown flow model"):
+            rebuild_model(
+                {
+                    "family": "flow",
+                    "modelname": "superflow",
+                    "num_inputs": 10,
+                    "num_blocks": 1,
+                    "num_hidden": 32,
+                },
+                {},
+            )
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model_str", ["AE", "VAE1-10", "GAN", "maf", "realnvp"])
+    def test_factory_vs_cached_model_parity(self, sample_data, model_str):
+        """Factory-rebuilt model produces identical outputs to original."""
+        from syng_bts.inference import run_generation
+        from syng_bts.model_factory import rebuild_model
+
+        trained = TestModelReconstructionParity._train_test_model(
+            sample_data, model_str
+        )
+        rebuilt = rebuild_model(trained.arch_params, trained.model_state)
+        trained_rebuilt = TrainedModel(
+            model=rebuilt,
+            model_state=trained.model_state,
+            arch_params=trained.arch_params,
+            log_dict={},
+            epochs_trained=0,
+        )
+
+        torch.manual_seed(99)
+        gen_original = run_generation(trained, num_samples=50)
+        torch.manual_seed(99)
+        gen_rebuilt = run_generation(trained_rebuilt, num_samples=50)
+
+        assert gen_original.shape == gen_rebuilt.shape
+        assert torch.allclose(gen_original, gen_rebuilt)
+        assert torch.isfinite(gen_original).all()
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model_str", ["AE", "GAN", "maf"])
+    def test_factory_vs_syngresult_resolved_model_parity(self, sample_data, model_str):
+        """Factory output matches SyngResult _resolve_model output under fixed seed."""
+        from syng_bts import generate
+        from syng_bts.helper_training import TrainedModel
+        from syng_bts.inference import run_generation
+        from syng_bts.model_factory import rebuild_model
+
+        result = generate(
+            data=sample_data,
+            model=model_str,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+
+        cached_model = result._resolve_model()
+        arch_params = result.metadata["arch_params"]
+        rebuilt_model = rebuild_model(arch_params, result.model_state)
+
+        trained_cached = TrainedModel(
+            model=cached_model,
+            model_state=result.model_state,
+            arch_params=arch_params,
+            log_dict={},
+            epochs_trained=result.metadata.get("epochs_trained", 0),
+        )
+        trained_rebuilt = TrainedModel(
+            model=rebuilt_model,
+            model_state=result.model_state,
+            arch_params=arch_params,
+            log_dict={},
+            epochs_trained=result.metadata.get("epochs_trained", 0),
+        )
+
+        torch.manual_seed(101)
+        gen_cached = run_generation(trained_cached, num_samples=60)
+        torch.manual_seed(101)
+        gen_rebuilt = run_generation(trained_rebuilt, num_samples=60)
+
+        assert gen_cached.shape == gen_rebuilt.shape
+        assert torch.allclose(gen_cached, gen_rebuilt)

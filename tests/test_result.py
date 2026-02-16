@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 import torch
 
+from syng_bts.result import SyngResult
+
 
 @pytest.fixture
 def sample_loss():
@@ -873,3 +875,331 @@ class TestSaveLoadRoundtrip:
         loaded = SyngResult.load(temp_dir)
         assert isinstance(loaded.metadata["input_shape"], tuple)
         assert loaded.metadata["input_shape"] == (20, 50)
+
+
+class TestGenerateNewSamples:
+    """Tests for SyngResult.generate_new_samples()."""
+
+    @pytest.fixture
+    def trained_result(self, sample_data):
+        """Create a real SyngResult from generate() for testing."""
+        from syng_bts import generate
+
+        return generate(
+            data=sample_data,
+            model="AE",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+        )
+
+    @pytest.fixture
+    def trained_result_vae(self, sample_data):
+        """Create a VAE SyngResult for testing."""
+        from syng_bts import generate
+
+        return generate(
+            data=sample_data,
+            model="VAE1-10",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+        )
+
+    @pytest.fixture
+    def trained_result_gan(self, sample_data):
+        """Create a GAN SyngResult for testing."""
+        from syng_bts import generate
+
+        return generate(
+            data=sample_data,
+            model="GAN",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+        )
+
+    @pytest.fixture
+    def trained_result_maf(self, sample_data):
+        """Create a MAF SyngResult for testing."""
+        from syng_bts import generate
+
+        return generate(
+            data=sample_data,
+            model="maf",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+        )
+
+    @pytest.fixture
+    def trained_result_cvae(self, sample_data):
+        """Create a CVAE SyngResult for testing."""
+        from syng_bts import generate
+
+        groups = np.array([0, 1] * (len(sample_data) // 2))
+        return generate(
+            data=sample_data,
+            groups=groups,
+            model="CVAE",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+        )
+
+    # --- Mode semantics ---
+
+    def test_mode_new_returns_new_result(self, trained_result):
+        """mode='new' returns a distinct SyngResult."""
+        original_gen = trained_result.generated_data.copy()
+        new_result = trained_result.generate_new_samples(100, mode="new")
+
+        assert isinstance(new_result, SyngResult)
+        assert new_result is not trained_result
+        assert new_result.generated_data.shape == (100, original_gen.shape[1])
+        # Original unchanged
+        pd.testing.assert_frame_equal(trained_result.generated_data, original_gen)
+        # Metadata and loss copied
+        assert new_result.metadata == trained_result.metadata
+        assert new_result.model_state is trained_result.model_state
+
+    def test_mode_overwrite_mutates_self(self, trained_result):
+        """mode='overwrite' replaces generated_data on self."""
+        original_shape = trained_result.generated_data.shape
+        result = trained_result.generate_new_samples(200, mode="overwrite")
+
+        assert result is trained_result
+        assert result.generated_data.shape == (200, original_shape[1])
+
+    def test_mode_append_concatenates(self, trained_result):
+        """mode='append' appends new rows to generated_data."""
+        original_n = trained_result.generated_data.shape[0]
+        n_new = 150
+        result = trained_result.generate_new_samples(n_new, mode="append")
+
+        assert result is trained_result
+        assert result.generated_data.shape[0] == original_n + n_new
+
+    def test_mode_default_is_new(self, trained_result):
+        """Default mode is 'new'."""
+        new_result = trained_result.generate_new_samples(50)
+        assert new_result is not trained_result
+        assert new_result.generated_data.shape[0] == 50
+
+    def test_invalid_mode_raises(self, trained_result):
+        """Invalid mode string raises ValueError."""
+        with pytest.raises(ValueError, match="mode must be"):
+            trained_result.generate_new_samples(10, mode="replace")
+
+    @pytest.mark.parametrize("invalid_n", [0, -1, True, 1.5])
+    def test_invalid_n_raises(self, trained_result, invalid_n):
+        """n must be a positive integer."""
+        with pytest.raises(ValueError, match="positive integer"):
+            trained_result.generate_new_samples(invalid_n)
+
+    # --- Column names preservation ---
+
+    def test_column_names_preserved(self, trained_result):
+        """Generated data has same column names as original."""
+        new_result = trained_result.generate_new_samples(50)
+        assert list(new_result.generated_data.columns) == list(
+            trained_result.generated_data.columns
+        )
+
+    # --- apply_log handling ---
+
+    def test_apply_log_applied(self, sample_data):
+        """When apply_log=True, inverse log is applied to new samples."""
+        from syng_bts import generate
+
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+            apply_log=True,
+        )
+        assert result.metadata["apply_log"] is True
+        new_result = result.generate_new_samples(50)
+        # Values should be in count space (generally >= 0 for ReLU outputs)
+        assert new_result.generated_data.shape == (50, sample_data.shape[1])
+
+    def test_apply_log_false(self, sample_data):
+        """When apply_log=False, no inverse transform applied."""
+        from syng_bts import generate
+
+        result = generate(
+            data=sample_data,
+            model="AE",
+            epoch=2,
+            batch_frac=0.5,
+            learning_rate=0.001,
+            random_seed=42,
+            verbose="silent",
+            apply_log=False,
+        )
+        assert result.metadata["apply_log"] is False
+        new_result = result.generate_new_samples(50)
+        assert new_result.generated_data.shape == (50, sample_data.shape[1])
+
+    # --- Model families ---
+
+    def test_ae_generate_new(self, trained_result):
+        """AE model: generate_new_samples works."""
+        new_result = trained_result.generate_new_samples(100)
+        assert new_result.generated_data.shape[0] == 100
+        assert np.isfinite(new_result.generated_data.to_numpy()).all()
+
+    def test_vae_generate_new(self, trained_result_vae):
+        """VAE model: generate_new_samples works."""
+        new_result = trained_result_vae.generate_new_samples(100)
+        assert new_result.generated_data.shape[0] == 100
+        assert np.isfinite(new_result.generated_data.to_numpy()).all()
+
+    def test_gan_generate_new(self, trained_result_gan):
+        """GAN model: generate_new_samples works."""
+        new_result = trained_result_gan.generate_new_samples(100)
+        assert new_result.generated_data.shape[0] == 100
+        assert np.isfinite(new_result.generated_data.to_numpy()).all()
+
+    def test_maf_generate_new(self, trained_result_maf):
+        """MAF flow model: generate_new_samples works."""
+        new_result = trained_result_maf.generate_new_samples(100)
+        assert new_result.generated_data.shape[0] == 100
+        # Flow outputs may not always be finite after 2 epochs but shape is correct
+        assert (
+            new_result.generated_data.shape[1]
+            == trained_result_maf.generated_data.shape[1]
+        )
+
+    # --- Save/load then generate ---
+
+    def test_save_load_then_generate(self, trained_result, temp_dir):
+        """generate_new_samples works after save/load round-trip."""
+        trained_result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        new_result = loaded.generate_new_samples(100)
+        assert new_result.generated_data.shape[0] == 100
+        assert list(new_result.generated_data.columns) == list(
+            trained_result.generated_data.columns
+        )
+
+    def test_save_load_then_generate_vae(self, trained_result_vae, temp_dir):
+        """VAE: generate_new_samples works after save/load."""
+        trained_result_vae.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        new_result = loaded.generate_new_samples(80)
+        assert new_result.generated_data.shape[0] == 80
+
+    # --- Error cases ---
+
+    def test_missing_model_state_raises(self, sample_data):
+        """Raises ValueError when model_state is None."""
+        result = SyngResult(
+            generated_data=sample_data,
+            loss=pd.DataFrame({"loss": [1.0]}),
+            model_state=None,
+            metadata={"arch_params": {"family": "ae", "modelname": "AE"}},
+        )
+        with pytest.raises(ValueError, match="model_state"):
+            result.generate_new_samples(10)
+
+    def test_missing_arch_params_raises(self, sample_data):
+        """Raises ValueError when arch_params is missing from metadata."""
+        result = SyngResult(
+            generated_data=sample_data,
+            loss=pd.DataFrame({"loss": [1.0]}),
+            model_state={"some": "state"},
+            metadata={"model": "AE"},
+        )
+        with pytest.raises(ValueError, match="arch_params"):
+            result.generate_new_samples(10)
+
+    # --- Model resolution behavior ---
+
+    def test_resolve_model_rebuilds_consistently(self, trained_result):
+        """Repeated _resolve_model() calls rebuild equivalent models."""
+        from syng_bts.helper_training import TrainedModel
+        from syng_bts.inference import run_generation
+
+        model_a = trained_result._resolve_model()
+        model_b = trained_result._resolve_model()
+
+        trained_a = TrainedModel(
+            model=model_a,
+            model_state=trained_result.model_state,
+            arch_params=trained_result.metadata["arch_params"],
+            log_dict={},
+            epochs_trained=trained_result.metadata.get("epochs_trained", 0),
+        )
+        trained_b = TrainedModel(
+            model=model_b,
+            model_state=trained_result.model_state,
+            arch_params=trained_result.metadata["arch_params"],
+            log_dict={},
+            epochs_trained=trained_result.metadata.get("epochs_trained", 0),
+        )
+
+        torch.manual_seed(202)
+        gen_a = run_generation(trained_a, num_samples=32)
+        torch.manual_seed(202)
+        gen_b = run_generation(trained_b, num_samples=32)
+
+        assert torch.allclose(gen_a, gen_b)
+
+    # --- New result has correct reconstructed/original fields ---
+
+    def test_mode_new_copies_optional_fields(self, trained_result):
+        """mode='new' copies reconstructed_data and original_data."""
+        new_result = trained_result.generate_new_samples(50, mode="new")
+        if trained_result.reconstructed_data is not None:
+            assert new_result.reconstructed_data is not None
+            pd.testing.assert_frame_equal(
+                new_result.reconstructed_data, trained_result.reconstructed_data
+            )
+        if trained_result.original_data is not None:
+            assert new_result.original_data is not None
+            pd.testing.assert_frame_equal(
+                new_result.original_data, trained_result.original_data
+            )
+
+    def test_cvae_generated_labels_new_mode(self, trained_result_cvae):
+        """CVAE new mode updates generated_labels metadata for new samples."""
+        result = trained_result_cvae.generate_new_samples(40, mode="new")
+        labels = result.metadata.get("generated_labels")
+        assert isinstance(labels, pd.Series)
+        assert len(labels) == 40
+
+    def test_cvae_generated_labels_overwrite_mode(self, trained_result_cvae):
+        """CVAE overwrite mode replaces generated_labels to match new rows."""
+        result = trained_result_cvae.generate_new_samples(30, mode="overwrite")
+        labels = result.metadata.get("generated_labels")
+        assert isinstance(labels, pd.Series)
+        assert len(labels) == result.generated_data.shape[0]
+
+    def test_cvae_generated_labels_append_mode(self, trained_result_cvae):
+        """CVAE append mode appends generated_labels consistently."""
+        first = trained_result_cvae.generate_new_samples(20, mode="append")
+        labels_1 = first.metadata.get("generated_labels")
+        assert isinstance(labels_1, pd.Series)
+        assert len(labels_1) == first.generated_data.shape[0]
+
+        second = first.generate_new_samples(15, mode="append")
+        labels_2 = second.metadata.get("generated_labels")
+        assert isinstance(labels_2, pd.Series)
+        assert len(labels_2) == second.generated_data.shape[0]

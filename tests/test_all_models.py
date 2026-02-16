@@ -682,7 +682,6 @@ class TestModelReconstructionParity:
             early_stop=False,
             early_stop_num=30,
             pre_model=None,
-            save_model=None,
             cap=False,
             loss_fn="MSE",
             use_scheduler=False,
@@ -1088,8 +1087,8 @@ class TestModelFactory:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model_str", ["AE", "GAN", "maf"])
-    def test_factory_vs_syngresult_resolved_model_parity(self, sample_data, model_str):
-        """Factory output matches SyngResult _resolve_model output under fixed seed."""
+    def test_factory_vs_syngresult_cached_model_parity(self, sample_data, model_str):
+        """Factory output matches SyngResult cached-model output under fixed seed."""
         from syng_bts import generate
         from syng_bts.helper_training import TrainedModel
         from syng_bts.inference import run_generation

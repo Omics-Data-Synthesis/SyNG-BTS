@@ -122,7 +122,6 @@ def _train_model(
     early_stop: bool = True,
     early_stop_num: int = 30,
     pre_model: str | None = None,
-    save_model: str | None = None,
     cap: bool = False,
     loss_fn: str = "MSE",
     use_scheduler: bool = False,
@@ -150,7 +149,6 @@ def _train_model(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             pre_model=pre_model,
-            save_model=save_model,
             verbose=verbose,
         )
     elif "AE" in modelname:
@@ -167,7 +165,6 @@ def _train_model(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             pre_model=pre_model,
-            save_model=save_model,
             cap=cap,
             loss_fn=loss_fn,
             use_scheduler=use_scheduler,
@@ -193,7 +190,6 @@ def _train_model(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             pre_model=pre_model,
-            save_model=save_model,
             verbose=verbose,
         )
     else:
@@ -421,7 +417,7 @@ def _resolve_effective_groups(
 
 
 # =========================================================================
-# New public API
+# Public API
 # =========================================================================
 
 
@@ -442,7 +438,6 @@ def generate(
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
     pre_model: str | None = None,
-    save_model: str | None = None,
     use_scheduler: bool = False,
     step_size: int = 10,
     gamma: float = 0.5,
@@ -506,8 +501,6 @@ def generate(
         Fold multiplier for Gaussian-head augmentation.
     pre_model : str or None
         Path to a pre-trained model for transfer learning.
-    save_model : str or None
-        Path to save the trained model state.
     use_scheduler : bool
         Enable learning-rate scheduler (AE family).
     step_size : int
@@ -629,7 +622,6 @@ def generate(
         early_stop=early_stop,
         early_stop_num=early_stop_num,
         pre_model=pre_model,
-        save_model=save_model,
         cap=cap,
         loss_fn="MSE",
         use_scheduler=use_scheduler,
@@ -914,7 +906,6 @@ def pilot_study(
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
                 pre_model=pre_model,
-                save_model=None,
                 batch_frac=batch_frac,
                 verbose=verbose_level,
             )
@@ -1148,11 +1139,15 @@ def transfer(
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
         pre_model=None,
-        save_model=save_model_path,
         random_seed=random_seed,
         output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
         verbose=verbose,
     )
+
+    # Persist source model state to disk for the target phase to load
+    # via pre_model (will be replaced with in-memory handoff in a future
+    # refactor phase).
+    torch.save(_source_result.model_state, save_model_path)
 
     # --- 2. fine-tune on target ------------------------------------------
     if pilot_size is not None:

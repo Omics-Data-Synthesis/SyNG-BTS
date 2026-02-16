@@ -10,6 +10,8 @@ Tests cover:
 - Legacy names are removed
 """
 
+import inspect
+
 import pandas as pd
 import pytest
 import torch
@@ -83,6 +85,10 @@ class TestExperimentImports:
         from syng_bts import helper_models
 
         assert helper_models is not None
+
+    def test_generate_signature_removes_save_model(self):
+        sig = inspect.signature(generate)
+        assert "save_model" not in sig.parameters
 
 
 # =========================================================================

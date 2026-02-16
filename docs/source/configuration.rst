@@ -169,9 +169,6 @@ Advanced Parameters (``generate`` only)
    * - ``pre_model``
      - str or None
      - Path to a pre-trained model for transfer learning.
-   * - ``save_model``
-     - str or None
-     - Path to save the trained model state.
 
 ``generate()`` Parameters
 -------------------------
@@ -194,7 +191,6 @@ Advanced Parameters (``generate`` only)
        AE_head_num=2,               # AE-head folds
        Gaussian_head_num=9,         # Gaussian-head folds
        pre_model=None,              # Pre-trained model path
-       save_model=None,             # Save model path
        use_scheduler=False,         # LR scheduler
        cap=False,                   # Cap generated values
        random_seed=123,             # Random seed

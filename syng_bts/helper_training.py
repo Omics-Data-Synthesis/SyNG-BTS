@@ -208,7 +208,6 @@ def training_iter(
                 early_stop_num=early_stop_num,
                 skip_epoch_stats=True,
                 logging_interval=50,
-                save_model=None,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -269,7 +268,6 @@ def training_iter(
                 reconstruction_term_weight=1,
                 kl_weight=kl_weight,
                 logging_interval=50,
-                save_model=None,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -327,7 +325,6 @@ def training_AEs(
     learning_rate,
     val_ratio=0.2,
     pre_model=None,
-    save_model=None,
     kl_weight=1,
     early_stop=True,
     early_stop_num=30,
@@ -400,7 +397,6 @@ def training_AEs(
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
             logging_interval=50,
-            save_model=save_model,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -418,7 +414,6 @@ def training_AEs(
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
             logging_interval=50,
-            save_model=save_model,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -434,7 +429,6 @@ def training_AEs(
             early_stop_num=early_stop_num,
             skip_epoch_stats=True,
             logging_interval=50,
-            save_model=save_model,
             verbose=verbose,
         )
 
@@ -475,7 +469,6 @@ def training_GANs(
     num_epochs,
     learning_rate,
     pre_model=None,
-    save_model=None,
     early_stop=True,
     early_stop_num=30,
     verbose=VerbosityLevel.MINIMAL,
@@ -519,7 +512,6 @@ def training_GANs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             logging_interval=100,
-            save_model=save_model,
             verbose=verbose,
         )
     elif modelname == "WGAN":
@@ -533,7 +525,6 @@ def training_GANs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             logging_interval=100,
-            save_model=save_model,
             verbose=verbose,
         )
     elif modelname == "WGANGP":
@@ -550,7 +541,6 @@ def training_GANs(
             logging_interval=100,
             gradient_penalty=True,
             gradient_penalty_weight=10,
-            save_model=save_model,
             verbose=verbose,
         )
     else:
@@ -594,7 +584,6 @@ def training_flows(
     early_stop,
     early_stop_num,
     pre_model,
-    save_model=None,
     tensorboard_dir: str | None = None,
     verbose=VerbosityLevel.MINIMAL,
 ) -> TrainedModel:
@@ -825,9 +814,6 @@ def training_flows(
 
     if writer is not None:
         writer.close()
-
-    if save_model is not None:
-        torch.save(best_model.state_dict(), save_model)
 
     best_model.eval()
 

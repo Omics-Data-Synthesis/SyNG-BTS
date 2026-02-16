@@ -166,7 +166,6 @@ def train_AE(
     loss_fn="MSE",
     logging_interval=100,
     skip_epoch_stats=False,
-    save_model=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -286,8 +285,6 @@ def train_AE(
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
-    if save_model is not None:
-        torch.save(best_model.state_dict(), save_model)
 
     return log_dict, best_model
 
@@ -308,7 +305,6 @@ def train_VAE(
     skip_epoch_stats=False,
     reconstruction_term_weight=1,
     kl_weight=1,
-    save_model=None,
     scheduler=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
@@ -464,8 +460,6 @@ def train_VAE(
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
-    if save_model is not None:
-        torch.save(best_model.state_dict(), save_model)
 
     return log_dict, best_model
 
@@ -486,7 +480,6 @@ def train_CVAE(
     skip_epoch_stats=False,
     reconstruction_term_weight=1,
     kl_weight=1,
-    save_model=None,
     scheduler=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
@@ -650,9 +643,6 @@ def train_CVAE(
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
 
-    if save_model is not None:
-        torch.save(best_model.state_dict(), save_model)
-
     return log_dict, best_model
 
 
@@ -667,7 +657,6 @@ def train_GAN(
     early_stop=None,
     early_stop_num=None,  # loss for GAN are not meaningful, so early stopping rule is not applied.
     logging_interval=100,
-    save_model=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -777,9 +766,6 @@ def train_GAN(
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
 
-    if save_model is not None:
-        torch.save(model.state_dict(), save_model)
-
     return log_dict, best_model
 
 
@@ -794,7 +780,6 @@ def train_WGAN(
     early_stop,
     early_stop_num,
     logging_interval=100,
-    save_model=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -950,9 +935,6 @@ def train_WGAN(
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
 
-    if save_model is not None:
-        torch.save(model.state_dict(), save_model)
-
     return log_dict, best_model
 
 
@@ -969,7 +951,6 @@ def train_WGANGP(
     logging_interval=100,
     gradient_penalty=True,
     gradient_penalty_weight=10,
-    save_model=None,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -1164,9 +1145,6 @@ def train_WGANGP(
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
-
-    if save_model is not None:
-        torch.save(model.state_dict(), save_model)
 
     return log_dict, best_model
 

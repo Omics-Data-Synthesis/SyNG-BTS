@@ -285,7 +285,7 @@ def evaluation(
 
     # When apply_log is True, log-transform both real and generated data so
     # they are compared in the same (log2) scale.  Generated data is now
-    # returned in count scale by the experiment API (Phase 4).
+    # returned in count scale by the experiment API.
     if apply_log:
         real_numeric = np.log2(real_numeric + 1)
         gen_numeric = np.log2(gen_numeric + 1)

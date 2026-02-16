@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+import torch.nn as nn
 
 
 def _json_serializable(obj: Any) -> Any:
@@ -72,6 +73,214 @@ class SyngResult:
     original_data: pd.DataFrame | None = None
     model_state: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # Non-serialized lazy model cache (excluded from dataclass init)
+    _cached_model: nn.Module | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    # ------------------------------------------------------------------
+    # Lazy model resolver
+    # ------------------------------------------------------------------
+
+    def _resolve_model(self) -> nn.Module:
+        """Return the cached model, rebuilding from state if needed.
+
+        Uses ``model_state`` and ``metadata["arch_params"]`` to rebuild
+        the model via :func:`model_factory.rebuild_model`.  The rebuilt
+        model is cached for subsequent calls.
+
+        Returns
+        -------
+        nn.Module
+            The trained model in ``eval()`` mode.
+
+        Raises
+        ------
+        ValueError
+            If ``model_state`` or ``metadata["arch_params"]`` is missing.
+        """
+        if self._cached_model is not None:
+            return self._cached_model
+
+        if self.model_state is None:
+            raise ValueError(
+                "Cannot resolve model: 'model_state' is None. "
+                "Ensure the SyngResult was created with a model_state, "
+                "or loaded from a directory that contains a .pt file."
+            )
+
+        arch_params = self.metadata.get("arch_params")
+        if arch_params is None:
+            raise ValueError(
+                "Cannot resolve model: 'arch_params' is missing from metadata. "
+                "Ensure the SyngResult was created by generate() v3.1+ or "
+                "loaded from a directory with the metadata JSON."
+            )
+
+        from .model_factory import rebuild_model
+
+        self._cached_model = rebuild_model(arch_params, self.model_state)
+        return self._cached_model
+
+    # ------------------------------------------------------------------
+    # Post-training generation
+    # ------------------------------------------------------------------
+
+    def generate_new_samples(
+        self,
+        n: int,
+        *,
+        mode: str = "new",
+    ) -> SyngResult:
+        """Generate new synthetic samples from the trained model.
+
+        This method reuses the same generation and post-processing path
+        as :func:`generate`, applying the same inverse-log transform
+        and column naming.
+
+        Parameters
+        ----------
+        n : int
+            Number of new samples to generate.
+        mode : str
+            How to incorporate the new samples:
+
+            - ``"new"`` (default): return a **new** ``SyngResult`` whose
+              ``generated_data`` contains only the newly generated samples.
+              All other fields (loss, metadata, model_state, etc.) are
+              copied from ``self``.
+            - ``"overwrite"``: **replace** ``self.generated_data`` with the
+              new samples and return ``self``.
+            - ``"append"``: **append** the new samples to
+              ``self.generated_data`` and return ``self``.
+
+        Returns
+        -------
+        SyngResult
+            The result containing the new samples (see *mode*).
+
+        Raises
+        ------
+        ValueError
+            If ``model_state`` is ``None``, ``arch_params`` is missing
+            from metadata, or *mode* is not one of the accepted values.
+
+        Examples
+        --------
+        >>> result = generate(data="SKCMPositive_4", model="VAE1-10", epoch=5)
+        >>> new_result = result.generate_new_samples(200)
+        >>> new_result.generated_data.shape[0]
+        200
+
+        >>> # After save/load round-trip:
+        >>> loaded = SyngResult.load("output/")
+        >>> more = loaded.generate_new_samples(100, mode="append")
+        >>> more.generated_data.shape[0]  # original + 100
+        """
+        if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            raise ValueError(f"n must be a positive integer, got {n!r}")
+
+        if mode not in ("new", "overwrite", "append"):
+            raise ValueError(
+                f"mode must be 'new', 'overwrite', or 'append', got {mode!r}"
+            )
+
+        from .helper_training import TrainedModel
+        from .inference import run_generation
+
+        # Resolve the trained model (lazy rebuild from state_dict)
+        model = self._resolve_model()
+        arch_params = self.metadata["arch_params"]
+
+        trained = TrainedModel(
+            model=model,
+            model_state=self.model_state,
+            arch_params=arch_params,
+            log_dict={},
+            epochs_trained=self.metadata.get("epochs_trained", 0),
+        )
+
+        # Generate raw samples via the unified inference dispatcher
+        gen_tensor = run_generation(trained, num_samples=n)
+
+        # Post-processing: same as generate() in experiments.py
+        gen_np = gen_tensor.detach().numpy()
+        colnames = list(self.generated_data.columns)
+        modelname = arch_params.get("modelname", "")
+        gen_labels: pd.Series | None = None
+
+        # CVAE: strip the appended label column
+        if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+            gen_labels = pd.Series(gen_np[:, -1], name="label")
+            gen_np = gen_np[:, :-1]
+
+        gen_df = pd.DataFrame(gen_np, columns=colnames)
+
+        if gen_df.columns.tolist() != colnames:
+            raise RuntimeError(
+                "Column order mismatch in generated_data. "
+                "This is an internal error; please report it."
+            )
+
+        # Inverse log transform if the original run used apply_log
+        apply_log = self.metadata.get("apply_log", False)
+        if apply_log:
+            from .helper_utils import inverse_log2
+
+            gen_df = inverse_log2(gen_df)
+
+        def _as_series_or_none(value: Any) -> pd.Series | None:
+            if value is None:
+                return None
+            if isinstance(value, pd.Series):
+                return value.reset_index(drop=True)
+            if isinstance(value, np.ndarray):
+                return pd.Series(value, name="label")
+            if isinstance(value, list):
+                return pd.Series(value, name="label")
+            return None
+
+        # Apply mode
+        if mode == "new":
+            new_metadata = self.metadata.copy()
+            new_metadata["generated_labels"] = gen_labels
+            return SyngResult(
+                generated_data=gen_df,
+                loss=self.loss.copy(),
+                reconstructed_data=(
+                    self.reconstructed_data.copy()
+                    if self.reconstructed_data is not None
+                    else None
+                ),
+                original_data=(
+                    self.original_data.copy()
+                    if self.original_data is not None
+                    else None
+                ),
+                model_state=self.model_state,
+                metadata=new_metadata,
+            )
+        elif mode == "overwrite":
+            self.generated_data = gen_df
+            self.metadata["generated_labels"] = gen_labels
+            return self
+        else:  # append
+            self.generated_data = pd.concat(
+                [self.generated_data, gen_df], ignore_index=True
+            )
+
+            if gen_labels is None:
+                self.metadata["generated_labels"] = None
+            else:
+                old_labels = _as_series_or_none(self.metadata.get("generated_labels"))
+                if old_labels is None:
+                    self.metadata["generated_labels"] = gen_labels
+                else:
+                    self.metadata["generated_labels"] = pd.concat(
+                        [old_labels, gen_labels], ignore_index=True
+                    )
+            return self
 
     # ------------------------------------------------------------------
     # Convenience methods

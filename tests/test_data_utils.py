@@ -429,7 +429,7 @@ class TestDeriveDataname:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: tuple-return contract and strict validation
+# tuple-return contract and strict validation
 # ---------------------------------------------------------------------------
 class TestResolveDataTupleReturn:
     """Verify resolve_data() returns (DataFrame, Series | None) tuples."""

@@ -19,6 +19,7 @@ import torch
 from .data_utils import _validate_feature_data, derive_dataname, resolve_data
 from .helper_train import _resolve_verbose
 from .helper_training import (
+    TrainedModel,
     training_AEs,
     training_flows,
     training_GANs,
@@ -30,7 +31,9 @@ from .helper_utils import (
     draw_pilot,
     inverse_log2,
     preprocessinglog2,
+    set_all_seeds,
 )
+from .inference import run_generation, run_reconstruction
 from .result import PilotResult, SyngResult
 
 # =========================================================================
@@ -58,7 +61,7 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
     Parameters
     ----------
     log_dict : dict
-        Raw loss series as returned by ``TrainOutput.log_dict``.
+        Raw loss series as returned by ``TrainedModel.log_dict``.
     modelname : str
         The short model name (``"AE"``, ``"VAE"``, ``"CVAE"``, ``"GAN"``,
         ``"WGAN"``, ``"WGANGP"``, ``"maf"``, ``"glow"``, ``"realnvp"``, etc.).
@@ -97,6 +100,184 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
         )
     # Flows — per-epoch loss
     return pd.DataFrame({"train_loss": log_dict["train_loss_per_epoch"]})
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Training dispatch
+# ---------------------------------------------------------------------------
+
+
+def _train_model(
+    rawdata: torch.Tensor,
+    rawlabels: torch.Tensor,
+    *,
+    modelname: str,
+    batch_size: int,
+    random_seed: int,
+    num_epochs: int,
+    learning_rate: float,
+    kl_weight: int = 1,
+    val_ratio: float = 0.2,
+    early_stop: bool = True,
+    early_stop_num: int = 30,
+    pre_model: str | None = None,
+    save_model: str | None = None,
+    cap: bool = False,
+    loss_fn: str = "MSE",
+    use_scheduler: bool = False,
+    step_size: int = 10,
+    gamma: float = 0.5,
+    batch_frac: float = 0.1,
+    verbose=1,
+) -> TrainedModel:
+    """Dispatch to the appropriate training wrapper.
+
+    Returns
+    -------
+    TrainedModel
+        Training-only output (no generation/reconstruction).
+    """
+    if "GAN" in modelname:
+        return training_GANs(
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            verbose=verbose,
+        )
+    elif "AE" in modelname:
+        trained = training_AEs(
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            val_ratio=val_ratio,
+            kl_weight=kl_weight,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            cap=cap,
+            loss_fn=loss_fn,
+            use_scheduler=use_scheduler,
+            step_size=step_size,
+            gamma=gamma,
+            verbose=verbose,
+        )
+        # Persist split controls for reconstruction path
+        trained.arch_params["_train_random_seed"] = random_seed
+        trained.arch_params["_train_val_ratio"] = val_ratio
+        return trained
+    elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
+        return training_flows(
+            rawdata=rawdata,
+            batch_frac=batch_frac,
+            valid_batch_frac=0.3,
+            random_seed=random_seed,
+            modelname=modelname,
+            num_blocks=5,
+            num_epochs=num_epochs,
+            learning_rate=learning_rate,
+            num_hidden=226,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            pre_model=pre_model,
+            save_model=save_model,
+            verbose=verbose,
+        )
+    else:
+        raise ValueError(f"Unsupported model: {modelname!r}")
+
+
+def _infer_from_trained(
+    trained: TrainedModel,
+    *,
+    new_size: int | list[int],
+    rawdata: torch.Tensor,
+    rawlabels: torch.Tensor,
+    batch_size: int,
+    cap: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Run generation and reconstruction via the unified inference dispatcher.
+
+    This delegates to :func:`inference.run_generation` and
+    :func:`inference.run_reconstruction`, keeping post-training
+    inference cleanly separated from training orchestrators.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor | None]
+        ``(generated_data, reconstructed_data)``
+    """
+    from torch.utils.data import DataLoader, TensorDataset, random_split
+
+    family = trained.arch_params["family"]
+
+    # --- Determine capping values ---
+    if cap:
+        col_max, _ = torch.max(rawdata, dim=0)
+        col_sd = torch.std(rawdata, dim=0, unbiased=True)
+    else:
+        col_max = None
+        col_sd = None
+
+    # --- Generation via unified dispatcher ---
+    generated = run_generation(
+        trained,
+        num_samples=new_size,
+        col_max=col_max,
+        col_sd=col_sd,
+    )
+
+    # --- Reconstruction via unified dispatcher (AE family only) ---
+    reconstructed = None
+    if family == "ae":
+        num_features = trained.arch_params["num_features"]
+        data = TensorDataset(rawdata, rawlabels)
+
+        # Reproduce legacy reconstruction path as closely as possible:
+        # training_AEs reconstructs over the train split DataLoader
+        # (shuffle=True, drop_last=True).
+        split_seed = trained.arch_params.get("_train_random_seed")
+        split_val_ratio = trained.arch_params.get("_train_val_ratio")
+
+        if (split_seed is not None) and (split_val_ratio is not None):
+            set_all_seeds(int(split_seed))
+            val_size = int(len(data) * float(split_val_ratio))
+            train_size = len(data) - val_size
+            train_dataset, _val_dataset = random_split(data, [train_size, val_size])
+            recon_loader = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=True,
+            )
+        else:
+            recon_loader = DataLoader(
+                data,
+                batch_size=batch_size,
+                shuffle=True,
+                drop_last=True,
+            )
+
+        reconstructed, _ = run_reconstruction(
+            trained,
+            data_loader=recon_loader,
+            n_features=num_features,
+        )
+
+    return generated, reconstructed
 
 
 def _compute_new_size(
@@ -435,68 +616,39 @@ def generate(
     # --- 9. Train --------------------------------------------------------
     batch_size = max(1, round(rawdata.shape[0] * batch_frac))
 
-    if "GAN" in modelname:
-        train_out = training_GANs(
-            rawdata=rawdata,
-            rawlabels=rawlabels,
-            batch_size=batch_size,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_epochs=num_epochs,
-            learning_rate=learning_rate,
-            new_size=effective_new_size,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
-            verbose=verbose_level,
-        )
-    elif "AE" in modelname:
-        train_out = training_AEs(
-            rawdata=rawdata,
-            rawlabels=rawlabels,
-            batch_size=batch_size,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_epochs=num_epochs,
-            learning_rate=learning_rate,
-            val_ratio=val_ratio,
-            kl_weight=kl_weight,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
-            cap=cap,
-            loss_fn="MSE",
-            new_size=effective_new_size,
-            use_scheduler=use_scheduler,
-            step_size=step_size,
-            gamma=gamma,
-            verbose=verbose_level,
-        )
-    elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
-        train_out = training_flows(
-            rawdata=rawdata,
-            batch_frac=batch_frac,
-            valid_batch_frac=0.3,
-            random_seed=random_seed,
-            modelname=modelname,
-            num_blocks=5,
-            num_epochs=num_epochs,
-            learning_rate=learning_rate,
-            new_size=effective_new_size,
-            num_hidden=226,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
-            verbose=verbose_level,
-        )
-    else:
-        raise ValueError(f"Unsupported model: {model!r}")
+    trained = _train_model(
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        modelname=modelname,
+        batch_size=batch_size,
+        random_seed=random_seed,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        kl_weight=kl_weight,
+        val_ratio=val_ratio,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        pre_model=pre_model,
+        save_model=save_model,
+        cap=cap,
+        loss_fn="MSE",
+        use_scheduler=use_scheduler,
+        step_size=step_size,
+        gamma=gamma,
+        batch_frac=batch_frac,
+        verbose=verbose_level,
+    )
+    gen_data, recon_data = _infer_from_trained(
+        trained,
+        new_size=effective_new_size,
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        batch_size=batch_size,
+        cap=cap,
+    )
 
     # --- 10. Assemble SyngResult -----------------------------------------
-    gen_np = train_out.generated_data.detach().numpy()
+    gen_np = gen_data.detach().numpy()
 
     # For CVAE, strip the appended label column — it is the conditioning
     # input, not a generated feature.  Store it in metadata instead.
@@ -509,8 +661,8 @@ def generate(
 
     recon_df = None
     recon_labels = None
-    if train_out.reconstructed_data is not None:
-        recon_np = train_out.reconstructed_data.detach().numpy()
+    if recon_data is not None:
+        recon_np = recon_data.detach().numpy()
 
         if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
             recon_labels = pd.Series(recon_np[:, -1], name="label")
@@ -537,14 +689,14 @@ def generate(
             "This is an internal error; please report it."
         )
 
-    loss_df = _build_loss_df(train_out.log_dict, modelname)
+    loss_df = _build_loss_df(trained.log_dict, modelname)
 
     metadata = {
         "model": model,
         "modelname": modelname,
         "dataname": dataname,
         "num_epochs": num_epochs,
-        "epochs_trained": train_out.epochs_trained,
+        "epochs_trained": trained.epochs_trained,
         "seed": random_seed,
         "kl_weight": kl_weight,
         "input_shape": (n_samples, len(colnames)),
@@ -552,6 +704,10 @@ def generate(
         "early_stop_patience": early_stop_num,
         "generated_labels": gen_labels,
         "reconstructed_labels": recon_labels,
+        "apply_log": apply_log,
+        "arch_params": {
+            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
+        },
     }
 
     result = SyngResult(
@@ -559,7 +715,7 @@ def generate(
         loss=loss_df,
         reconstructed_data=recon_df,
         original_data=data_pd.copy(),
-        model_state=train_out.model_state,
+        model_state=trained.model_state,
         metadata=metadata,
     )
 
@@ -745,70 +901,33 @@ def pilot_study(
 
             batch_size = max(1, round(rawdata.shape[0] * batch_frac))
 
-            # Train
-            if "GAN" in modelname:
-                train_out = training_GANs(
-                    rawdata=rawdata,
-                    rawlabels=rawlabels,
-                    batch_size=batch_size,
-                    random_seed=random_seed,
-                    modelname=modelname,
-                    num_epochs=num_epochs,
-                    learning_rate=learning_rate,
-                    new_size=effective_new_size,
-                    early_stop=early_stop,
-                    early_stop_num=early_stop_num,
-                    pre_model=pre_model,
-                    save_model=None,
-                    verbose=verbose_level,
-                )
-            elif "AE" in modelname:
-                train_out = training_AEs(
-                    rawdata=rawdata,
-                    rawlabels=rawlabels,
-                    batch_size=batch_size,
-                    random_seed=random_seed,
-                    modelname=modelname,
-                    num_epochs=num_epochs,
-                    learning_rate=learning_rate,
-                    kl_weight=kl_weight,
-                    early_stop=early_stop,
-                    early_stop_num=early_stop_num,
-                    pre_model=pre_model,
-                    save_model=None,
-                    loss_fn="MSE",
-                    new_size=effective_new_size,
-                    verbose=verbose_level,
-                )
-            elif modelname in (
-                "maf",
-                "realnvp",
-                "glow",
-                "maf-split",
-                "maf-split-glow",
-            ):
-                train_out = training_flows(
-                    rawdata=rawdata,
-                    batch_frac=batch_frac,
-                    valid_batch_frac=0.3,
-                    random_seed=random_seed,
-                    modelname=modelname,
-                    num_blocks=5,
-                    num_epochs=num_epochs,
-                    learning_rate=learning_rate,
-                    new_size=effective_new_size,
-                    num_hidden=226,
-                    early_stop=early_stop,
-                    early_stop_num=early_stop_num,
-                    pre_model=pre_model,
-                    save_model=None,
-                    verbose=verbose_level,
-                )
-            else:
-                raise ValueError(f"Unsupported model: {model!r}")
+            # Train and infer
+            trained = _train_model(
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                modelname=modelname,
+                batch_size=batch_size,
+                random_seed=random_seed,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                kl_weight=kl_weight,
+                early_stop=early_stop,
+                early_stop_num=early_stop_num,
+                pre_model=pre_model,
+                save_model=None,
+                batch_frac=batch_frac,
+                verbose=verbose_level,
+            )
+            gen_data, recon_data = _infer_from_trained(
+                trained,
+                new_size=effective_new_size,
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                batch_size=batch_size,
+            )
 
             # -- Assemble SyngResult for this run -------------------------
-            gen_np = train_out.generated_data.detach().numpy()
+            gen_np = gen_data.detach().numpy()
 
             # For CVAE, strip the appended label column — it is the conditioning
             # input, not a generated feature.  Store it in metadata instead.
@@ -821,8 +940,8 @@ def pilot_study(
 
             recon_df = None
             recon_labels = None
-            if train_out.reconstructed_data is not None:
-                recon_np = train_out.reconstructed_data.detach().numpy()
+            if recon_data is not None:
+                recon_np = recon_data.detach().numpy()
 
                 if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
                     recon_labels = pd.Series(recon_np[:, -1], name="label")
@@ -852,14 +971,14 @@ def pilot_study(
             # Per-draw original data subset
             pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
 
-            loss_df = _build_loss_df(train_out.log_dict, modelname)
+            loss_df = _build_loss_df(trained.log_dict, modelname)
 
             run_metadata = {
                 "model": model,
                 "modelname": modelname,
                 "dataname": dataname,
                 "num_epochs": num_epochs,
-                "epochs_trained": train_out.epochs_trained,
+                "epochs_trained": trained.epochs_trained,
                 "seed": random_seed,
                 "kl_weight": kl_weight,
                 "pilot_size": n_pilot,
@@ -870,6 +989,12 @@ def pilot_study(
                 "early_stop_patience": early_stop_num,
                 "generated_labels": gen_labels,
                 "reconstructed_labels": recon_labels,
+                "apply_log": apply_log,
+                "arch_params": {
+                    k: v
+                    for k, v in trained.arch_params.items()
+                    if not k.startswith("_")
+                },
             }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
@@ -877,7 +1002,7 @@ def pilot_study(
                 loss=loss_df,
                 reconstructed_data=recon_df,
                 original_data=pilot_original,
-                model_state=train_out.model_state,
+                model_state=trained.model_state,
                 metadata=run_metadata,
             )
 

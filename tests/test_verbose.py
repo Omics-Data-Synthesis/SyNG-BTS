@@ -1,5 +1,5 @@
 """
-Tests for structured logging (verbose parameter) — Phase 15.
+Tests for structured logging (verbose parameter).
 
 Covers:
 - _resolve_verbose normalization and error handling
@@ -10,7 +10,6 @@ Covers:
 - Text-form verbose strings ("silent", "minimal", "detailed")
 - tqdm is no longer imported anywhere in the package
 """
-
 
 import pytest
 

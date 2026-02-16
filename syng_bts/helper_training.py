@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 import math
 import time
-from typing import NamedTuple
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -18,325 +19,144 @@ from . import helper_train as ht
 from .helper_models import AE, CVAE, GAN, VAE
 from .helper_train import VerbosityLevel
 from .helper_utils import (
-    generate_samples,
     reconstruct_samples,
     set_all_seeds,
 )
 
 # ---------------------------------------------------------------------------
-# Return type for training orchestrators
+# Training-only return type (no generation/reconstruction)
 # ---------------------------------------------------------------------------
 
 
-class TrainOutput(NamedTuple):
-    """Structured return value from training orchestrators.
+@dataclass
+class TrainedModel:
+    """Training-only output from training orchestrators.
+
+    This is the clean training→inference boundary contract.  It carries
+    everything needed to reconstruct and use the model without coupling
+    training to generation/reconstruction.
 
     Attributes
     ----------
-    log_dict : dict
+    model : nn.Module
+        The trained model in ``eval()`` mode.
+    model_state : dict[str, Any]
+        The ``state_dict()`` snapshot of the trained model.
+    arch_params : dict[str, Any]
+        Architecture parameters sufficient to rebuild the model from
+        scratch.  Schema varies by family — see ``_build_arch_params_*``.
+    log_dict : dict[str, list]
         Raw loss series (keys depend on model family).
-    generated_data : torch.Tensor
-        Synthetic samples produced by the trained model.
-    reconstructed_data : torch.Tensor | None
-        Reconstructions (AE/VAE/CVAE only); ``None`` for GANs and flows.
-    model_state : dict
-        ``state_dict()`` of the best (or final) trained model.
     epochs_trained : int
         Actual number of epochs executed (may be < configured maximum
         when early stopping triggers).
     """
 
-    log_dict: dict
-    generated_data: torch.Tensor
-    reconstructed_data: torch.Tensor | None
-    model_state: dict
+    model: nn.Module
+    model_state: dict[str, Any]
+    arch_params: dict[str, Any]
+    log_dict: dict[str, list]
     epochs_trained: int
 
 
-# %%
-def training_AEs(
-    rawdata,  # raw data tensor with samples in row, features in column
-    rawlabels,  # labels for each sample, n_samples * 1
-    batch_size,  # batch size
-    random_seed,
-    modelname,  # choose from "AE","VAE","CVAE"
-    num_epochs,  # maximum number of training epochs if early stopping is not triggered
-    learning_rate,  # learning rate
-    val_ratio=0.2,  # validation ratio
-    pre_model=None,  # load pre-trained model from transfer learning
-    save_model=None,  # save model for transfer learning
-    kl_weight=1,  # specify for VAE and CVAE
-    early_stop=True,  # whether or not using early stopping rule
-    early_stop_num=30,  # stop training if loss does not improve for early_stop_num epochs
-    cap=False,  # whether capping the new samples
-    loss_fn="MSE",  # choose from MSE or WMSE
-    new_size=None,  # how many new samples to generate
-    use_scheduler=False,  # scheduler parameters
-    step_size=10,
-    gamma=0.5,
-    verbose=VerbosityLevel.MINIMAL,
-) -> TrainOutput:
-    """Train an AE, VAE, or CVAE and return generated/reconstructed data.
+# ---------------------------------------------------------------------------
+# arch_params builders
+# ---------------------------------------------------------------------------
+
+
+def _build_arch_params_ae(
+    modelname: str,
+    num_features: int,
+    num_classes: int | None = None,
+) -> dict[str, Any]:
+    """Build ``arch_params`` for AE / VAE / CVAE.
+
+    Parameters
+    ----------
+    modelname : str
+        ``"AE"``, ``"VAE"``, or ``"CVAE"``.
+    num_features : int
+        Number of input features.
+    num_classes : int or None
+        Number of classes (required for CVAE, ignored otherwise).
 
     Returns
     -------
-    TrainOutput
-        Named tuple with ``log_dict``, ``generated_data``,
-        ``reconstructed_data``, and ``model_state``.
+    dict[str, Any]
     """
-    set_all_seeds(random_seed)
-    num_features = rawdata.shape[1]
-    labels_squeezed = rawlabels.squeeze(1).long()  # shape: (n,)
-    num_classes = len(torch.unique(labels_squeezed))
-    data = TensorDataset(rawdata, rawlabels)
-    if cap:
-        col_max, _ = torch.max(rawdata, dim=0)
-        col_sd = torch.std(rawdata, dim=0, unbiased=True)
-    else:
-        col_max = None
-        col_sd = None
-
-    if modelname == "CVAE":
-        model = CVAE(num_features, num_classes)
-    elif modelname == "VAE":
-        model = VAE(num_features)
-    elif modelname == "AE":
-        model = AE(num_features)
-    else:
-        raise ValueError("modelname is not supported by training_AEs function.")
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    if use_scheduler:
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-    else:
-        scheduler = None
-    val_size = int(len(data) * val_ratio)
-    train_size = len(data) - val_size
-
-    train_dataset, val_dataset = random_split(data, [train_size, val_size])
-
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=len(val_dataset), shuffle=False, drop_last=False
-    )
-
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
-
-    if new_size is None:
-        new_size = rawdata.shape[0]
-
-    # Train the model
-    if modelname == "CVAE":
-        log_dict, best_model = ht.train_CVAE(
-            num_epochs=num_epochs,
-            model=model,
-            loss_fn=loss_fn,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            skip_epoch_stats=True,
-            reconstruction_term_weight=1,
-            kl_weight=kl_weight,
-            logging_interval=50,
-            save_model=save_model,
-            scheduler=scheduler,
-            verbose=verbose,
-        )
-    elif modelname == "VAE":
-        log_dict, best_model = ht.train_VAE(
-            num_epochs=num_epochs,
-            model=model,
-            loss_fn=loss_fn,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            skip_epoch_stats=True,
-            reconstruction_term_weight=1,
-            kl_weight=kl_weight,
-            logging_interval=50,
-            save_model=save_model,
-            scheduler=scheduler,
-            verbose=verbose,
-        )
-    else:
-        log_dict, best_model = ht.train_AE(
-            num_epochs=num_epochs,
-            model=model,
-            loss_fn=loss_fn,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            skip_epoch_stats=True,
-            logging_interval=50,
-            save_model=save_model,
-            verbose=verbose,
-        )
-
-    final_model = best_model if early_stop else model
-    final_model.eval()
-
-    if modelname == "AE":
-        epoch_log_key = "train_loss_per_batch"
-    else:
-        epoch_log_key = "train_combined_loss_per_batch"
-    batches_per_epoch = len(train_loader)
-    if batches_per_epoch > 0:
-        epochs_trained = len(log_dict.get(epoch_log_key, [])) // batches_per_epoch
-    else:
-        epochs_trained = 0
-
-    # Determine latent size based on model architecture
     latent_size = 64 if modelname == "AE" else 32
-
-    # Reconstruct (AE/VAE/CVAE all support reconstruction)
-    recons_data, _ = reconstruct_samples(
-        model=final_model,
-        modelname=modelname,
-        data_loader=train_loader,
-        n_features=num_features,
-    )
-
-    # Generate new samples
-    new_data = generate_samples(
-        model=final_model,
-        modelname=modelname,
-        latent_size=latent_size,
-        num_images=new_size,
-        col_max=col_max,
-        col_sd=col_sd,
-    )
-
-    return TrainOutput(
-        log_dict=log_dict,
-        generated_data=new_data,
-        reconstructed_data=recons_data,
-        model_state=final_model.state_dict(),
-        epochs_trained=epochs_trained,
-    )
+    params: dict[str, Any] = {
+        "family": "ae",
+        "modelname": modelname,
+        "num_features": num_features,
+        "latent_size": latent_size,
+    }
+    if modelname == "CVAE":
+        if num_classes is None:
+            raise ValueError("num_classes is required for CVAE arch_params")
+        params["num_classes"] = num_classes
+    return params
 
 
-def training_GANs(
-    rawdata,  # raw data matrix with samples in row, features in column
-    rawlabels,  # labels for each sample, n_samples * 1
-    batch_size,  # batch size
-    random_seed,
-    modelname,  # choose from "GAN","WGAN","WGANGP"
-    num_epochs,  # maximum number of training epochs if early stopping is not triggered
-    learning_rate,
-    new_size,  # how many new samples to generate
-    pre_model=None,  # load pre-trained model from transfer learning
-    save_model=None,  # save model for transfer learning
-    early_stop=True,  # whether or not using early stopping rule
-    early_stop_num=30,  # stop training if loss does not improve for early_stop_num epochs
-    verbose=VerbosityLevel.MINIMAL,
-) -> TrainOutput:
-    """Train a GAN/WGAN/WGANGP and return generated data.
+def _build_arch_params_gan(
+    modelname: str,
+    num_features: int,
+    latent_dim: int = 32,
+) -> dict[str, Any]:
+    """Build ``arch_params`` for GAN / WGAN / WGANGP.
+
+    Parameters
+    ----------
+    modelname : str
+        ``"GAN"``, ``"WGAN"``, or ``"WGANGP"``.
+    num_features : int
+        Number of input features.
+    latent_dim : int
+        Latent dimension size.
 
     Returns
     -------
-    TrainOutput
-        Named tuple with ``log_dict``, ``generated_data``,
-        ``reconstructed_data`` (always ``None``), and ``model_state``.
+    dict[str, Any]
     """
-    set_all_seeds(random_seed)
-    num_features = rawdata.shape[1]
-    data = TensorDataset(rawdata, rawlabels)
-    train_loader = DataLoader(data, batch_size=batch_size, shuffle=True, drop_last=True)
-    latent_dim = 32
+    return {
+        "family": "gan",
+        "modelname": modelname,
+        "num_features": num_features,
+        "latent_dim": latent_dim,
+    }
 
-    model = GAN(num_features=num_features, latent_dim=latent_dim)
 
-    optim_gen = torch.optim.Adam(
-        model.generator.parameters(), betas=(0.5, 0.999), lr=learning_rate
-    )
-    optim_discr = torch.optim.Adam(
-        model.discriminator.parameters(), betas=(0.5, 0.999), lr=learning_rate
-    )
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+def _build_arch_params_flow(
+    modelname: str,
+    num_inputs: int,
+    num_blocks: int,
+    num_hidden: int,
+) -> dict[str, Any]:
+    """Build ``arch_params`` for normalizing flow models.
 
-    if modelname == "GAN":
-        log_dict, best_model = ht.train_GAN(
-            num_epochs=num_epochs,
-            model=model,
-            optimizer_gen=optim_gen,
-            optimizer_discr=optim_discr,
-            latent_dim=latent_dim,
-            train_loader=train_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            logging_interval=100,
-            save_model=save_model,
-            verbose=verbose,
-        )
-    elif modelname == "WGAN":
-        log_dict, best_model = ht.train_WGAN(
-            num_epochs=num_epochs,
-            model=model,
-            optimizer_gen=optim_gen,
-            optimizer_discr=optim_discr,
-            latent_dim=latent_dim,
-            train_loader=train_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            logging_interval=100,
-            save_model=save_model,
-            verbose=verbose,
-        )
-    elif modelname == "WGANGP":
-        log_dict, best_model = ht.train_WGANGP(
-            num_epochs=num_epochs,
-            model=model,
-            optimizer_gen=optim_gen,
-            optimizer_discr=optim_discr,
-            latent_dim=latent_dim,
-            train_loader=train_loader,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            discr_iter_per_generator_iter=5,
-            logging_interval=100,
-            gradient_penalty=True,
-            gradient_penalty_weight=10,
-            save_model=save_model,
-            verbose=verbose,
-        )
-    else:
-        raise ValueError(f"modelname '{modelname}' not supported by training_GANs.")
+    Parameters
+    ----------
+    modelname : str
+        ``"maf"``, ``"realnvp"``, ``"glow"``, ``"maf-split"``, or
+        ``"maf-split-glow"``.
+    num_inputs : int
+        Number of input features.
+    num_blocks : int
+        Number of flow blocks.
+    num_hidden : int
+        Hidden dimension size per block.
 
-    final_model = best_model if early_stop else model
-    final_model.eval()
-    batches_per_epoch = len(train_loader)
-    if batches_per_epoch > 0:
-        epochs_trained = (
-            len(log_dict.get("train_generator_loss_per_batch", [])) // batches_per_epoch
-        )
-    else:
-        epochs_trained = 0
-    new_data = generate_samples(
-        model=final_model,
-        modelname="GANs",
-        latent_size=latent_dim,
-        num_images=new_size,
-    )
-
-    return TrainOutput(
-        log_dict=log_dict,
-        generated_data=new_data,
-        reconstructed_data=None,
-        model_state=final_model.state_dict(),
-        epochs_trained=epochs_trained,
-    )
+    Returns
+    -------
+    dict[str, Any]
+    """
+    return {
+        "family": "flow",
+        "modelname": modelname,
+        "num_inputs": num_inputs,
+        "num_blocks": num_blocks,
+        "num_hidden": num_hidden,
+    }
 
 
 def training_iter(
@@ -492,6 +312,275 @@ def training_iter(
     return feed_data, feed_labels
 
 
+# =========================================================================
+# Training wrappers — training only, no generation/reconstruction
+# =========================================================================
+
+
+def training_AEs(
+    rawdata,
+    rawlabels,
+    batch_size,
+    random_seed,
+    modelname,
+    num_epochs,
+    learning_rate,
+    val_ratio=0.2,
+    pre_model=None,
+    save_model=None,
+    kl_weight=1,
+    early_stop=True,
+    early_stop_num=30,
+    cap=False,
+    loss_fn="MSE",
+    use_scheduler=False,
+    step_size=10,
+    gamma=0.5,
+    verbose=VerbosityLevel.MINIMAL,
+) -> TrainedModel:
+    """Train an AE, VAE, or CVAE and return training artifacts only.
+
+    Does **not** perform generation or reconstruction — those are
+    deferred to the inference dispatcher.
+
+    Returns
+    -------
+    TrainedModel
+        Training-only output with model, state_dict, arch_params,
+        log_dict, and epochs_trained.
+    """
+    set_all_seeds(random_seed)
+    num_features = rawdata.shape[1]
+    labels_squeezed = rawlabels.squeeze(1).long()
+    num_classes = len(torch.unique(labels_squeezed))
+    data = TensorDataset(rawdata, rawlabels)
+
+    if modelname == "CVAE":
+        model = CVAE(num_features, num_classes)
+    elif modelname == "VAE":
+        model = VAE(num_features)
+    elif modelname == "AE":
+        model = AE(num_features)
+    else:
+        raise ValueError("modelname is not supported by training_AEs function.")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    if use_scheduler:
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    else:
+        scheduler = None
+    val_size = int(len(data) * val_ratio)
+    train_size = len(data) - val_size
+
+    train_dataset, val_dataset = random_split(data, [train_size, val_size])
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=len(val_dataset), shuffle=False, drop_last=False
+    )
+
+    # transfer learning
+    if pre_model is not None:
+        model.load_state_dict(torch.load(pre_model))
+
+    # Train the model
+    if modelname == "CVAE":
+        log_dict, best_model = ht.train_CVAE(
+            num_epochs=num_epochs,
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            skip_epoch_stats=True,
+            reconstruction_term_weight=1,
+            kl_weight=kl_weight,
+            logging_interval=50,
+            save_model=save_model,
+            scheduler=scheduler,
+            verbose=verbose,
+        )
+    elif modelname == "VAE":
+        log_dict, best_model = ht.train_VAE(
+            num_epochs=num_epochs,
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            skip_epoch_stats=True,
+            reconstruction_term_weight=1,
+            kl_weight=kl_weight,
+            logging_interval=50,
+            save_model=save_model,
+            scheduler=scheduler,
+            verbose=verbose,
+        )
+    else:
+        log_dict, best_model = ht.train_AE(
+            num_epochs=num_epochs,
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            skip_epoch_stats=True,
+            logging_interval=50,
+            save_model=save_model,
+            verbose=verbose,
+        )
+
+    final_model = best_model if early_stop else model
+    final_model.eval()
+
+    if modelname == "AE":
+        epoch_log_key = "train_loss_per_batch"
+    else:
+        epoch_log_key = "train_combined_loss_per_batch"
+    batches_per_epoch = len(train_loader)
+    if batches_per_epoch > 0:
+        epochs_trained = len(log_dict.get(epoch_log_key, [])) // batches_per_epoch
+    else:
+        epochs_trained = 0
+
+    arch_params = _build_arch_params_ae(
+        modelname=modelname,
+        num_features=num_features,
+        num_classes=num_classes if modelname == "CVAE" else None,
+    )
+
+    return TrainedModel(
+        model=final_model,
+        model_state=final_model.state_dict(),
+        arch_params=arch_params,
+        log_dict=log_dict,
+        epochs_trained=epochs_trained,
+    )
+
+
+def training_GANs(
+    rawdata,
+    rawlabels,
+    batch_size,
+    random_seed,
+    modelname,
+    num_epochs,
+    learning_rate,
+    pre_model=None,
+    save_model=None,
+    early_stop=True,
+    early_stop_num=30,
+    verbose=VerbosityLevel.MINIMAL,
+) -> TrainedModel:
+    """Train a GAN/WGAN/WGANGP and return training artifacts only.
+
+    Does **not** perform sample generation.
+
+    Returns
+    -------
+    TrainedModel
+        Training-only output with model, state_dict, arch_params,
+        log_dict, and epochs_trained.
+    """
+    set_all_seeds(random_seed)
+    num_features = rawdata.shape[1]
+    data = TensorDataset(rawdata, rawlabels)
+    train_loader = DataLoader(data, batch_size=batch_size, shuffle=True, drop_last=True)
+    latent_dim = 32
+
+    model = GAN(num_features=num_features, latent_dim=latent_dim)
+
+    optim_gen = torch.optim.Adam(
+        model.generator.parameters(), betas=(0.5, 0.999), lr=learning_rate
+    )
+    optim_discr = torch.optim.Adam(
+        model.discriminator.parameters(), betas=(0.5, 0.999), lr=learning_rate
+    )
+    # transfer learning
+    if pre_model is not None:
+        model.load_state_dict(torch.load(pre_model))
+
+    if modelname == "GAN":
+        log_dict, best_model = ht.train_GAN(
+            num_epochs=num_epochs,
+            model=model,
+            optimizer_gen=optim_gen,
+            optimizer_discr=optim_discr,
+            latent_dim=latent_dim,
+            train_loader=train_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            logging_interval=100,
+            save_model=save_model,
+            verbose=verbose,
+        )
+    elif modelname == "WGAN":
+        log_dict, best_model = ht.train_WGAN(
+            num_epochs=num_epochs,
+            model=model,
+            optimizer_gen=optim_gen,
+            optimizer_discr=optim_discr,
+            latent_dim=latent_dim,
+            train_loader=train_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            logging_interval=100,
+            save_model=save_model,
+            verbose=verbose,
+        )
+    elif modelname == "WGANGP":
+        log_dict, best_model = ht.train_WGANGP(
+            num_epochs=num_epochs,
+            model=model,
+            optimizer_gen=optim_gen,
+            optimizer_discr=optim_discr,
+            latent_dim=latent_dim,
+            train_loader=train_loader,
+            early_stop=early_stop,
+            early_stop_num=early_stop_num,
+            discr_iter_per_generator_iter=5,
+            logging_interval=100,
+            gradient_penalty=True,
+            gradient_penalty_weight=10,
+            save_model=save_model,
+            verbose=verbose,
+        )
+    else:
+        raise ValueError(f"modelname '{modelname}' not supported by training_GANs.")
+
+    final_model = best_model if early_stop else model
+    final_model.eval()
+    batches_per_epoch = len(train_loader)
+    if batches_per_epoch > 0:
+        epochs_trained = (
+            len(log_dict.get("train_generator_loss_per_batch", [])) // batches_per_epoch
+        )
+    else:
+        epochs_trained = 0
+
+    arch_params = _build_arch_params_gan(
+        modelname=modelname,
+        num_features=num_features,
+        latent_dim=latent_dim,
+    )
+
+    return TrainedModel(
+        model=final_model,
+        model_state=final_model.state_dict(),
+        arch_params=arch_params,
+        log_dict=log_dict,
+        epochs_trained=epochs_trained,
+    )
+
+
 def training_flows(
     rawdata,
     batch_frac,
@@ -501,17 +590,17 @@ def training_flows(
     num_blocks,
     num_epochs,
     learning_rate,
-    new_size,
     num_hidden,
-    early_stop,  # whether to use early stopping rule
+    early_stop,
     early_stop_num,
-    # stop training if loss does not improve for early_stop_num epochs
-    pre_model,  # load pre-trained model from transfer learning
+    pre_model,
     save_model=None,
     tensorboard_dir: str | None = None,
     verbose=VerbosityLevel.MINIMAL,
-) -> TrainOutput:
-    """Train a normalizing flow model and return generated data.
+) -> TrainedModel:
+    """Train a normalizing flow model and return training artifacts only.
+
+    Does **not** perform sample generation.
 
     Parameters
     ----------
@@ -521,16 +610,15 @@ def training_flows(
 
     Returns
     -------
-    TrainOutput
-        Named tuple with ``log_dict``, ``generated_data``,
-        ``reconstructed_data`` (always ``None``), and ``model_state``.
+    TrainedModel
+        Training-only output with model, state_dict, arch_params,
+        log_dict, and epochs_trained.
     """
     set_all_seeds(random_seed)
     device = torch.device("cpu")
     num_inputs = rawdata.shape[1]
     num_samples = rawdata.shape[0]
 
-    ## Without validation
     train_dataset = TensorDataset(rawdata)
     train_batch_size = round(batch_frac * num_samples)
     train_loader = DataLoader(
@@ -543,7 +631,6 @@ def training_flows(
     if modelname == "glow":
         mask = torch.arange(0, num_inputs) % 2
         mask = mask.to(device).float()
-
         for _ in range(num_blocks):
             modules += [
                 ht.BatchNormFlow(num_inputs),
@@ -561,7 +648,6 @@ def training_flows(
     elif modelname == "realnvp":
         mask = torch.arange(0, num_inputs) % 2
         mask = mask.to(device).float()
-
         for _ in range(num_blocks):
             modules += [
                 ht.CouplingLayer(
@@ -698,7 +784,7 @@ def training_flows(
                 or (math.isinf(train_loss))
             ):
                 if verbose == VerbosityLevel.MINIMAL and progress_line_active:
-                    print()  # newline after progress bar
+                    print()
                     progress_line_active = False
                 if verbose >= VerbosityLevel.MINIMAL:
                     print(
@@ -732,7 +818,7 @@ def training_flows(
             )
 
     if verbose == VerbosityLevel.MINIMAL and progress_line_active:
-        print()  # newline after progress bar
+        print()
     total_time = (time.time() - start_time) / 60
     if verbose >= VerbosityLevel.MINIMAL:
         print(f"Training complete: {total_time:.2f}min")
@@ -743,22 +829,22 @@ def training_flows(
     if save_model is not None:
         torch.save(best_model.state_dict(), save_model)
 
-    # Generate new samples
     best_model.eval()
-    new_data = generate_samples(
-        model=best_model,
-        modelname=modelname,
-        latent_size=num_hidden,
-        num_images=new_size,
-    )
 
     log_dict = {"train_loss_per_epoch": train_loss_per_epoch}
     epochs_trained = len(train_loss_per_epoch)
 
-    return TrainOutput(
-        log_dict=log_dict,
-        generated_data=new_data,
-        reconstructed_data=None,
+    arch_params = _build_arch_params_flow(
+        modelname=modelname,
+        num_inputs=num_inputs,
+        num_blocks=num_blocks,
+        num_hidden=num_hidden,
+    )
+
+    return TrainedModel(
+        model=best_model,
         model_state=best_model.state_dict(),
+        arch_params=arch_params,
+        log_dict=log_dict,
         epochs_trained=epochs_trained,
     )

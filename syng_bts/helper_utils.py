@@ -393,7 +393,8 @@ def generate_samples(
         Trained generative model (AE, VAE, CVAE, GAN, or flow).
     modelname : str
         Model type identifier (``"AE"``, ``"VAE"``, ``"CVAE"``,
-        ``"GANs"``, ``"glow"``, ``"realnvp"``, ``"maf"``).
+        ``"GANs"``, ``"glow"``, ``"realnvp"``, ``"maf"``,
+        ``"maf-split"``, ``"maf-split-glow"``).
     latent_size : int
         Dimensionality of the latent space.
     num_images : int or list[int]
@@ -437,8 +438,16 @@ def generate_samples(
                 new_images = model.decoder(rand_features)
             elif modelname == "GANs":
                 new_images = model.generator(rand_features)
-            elif modelname in ("glow", "realnvp", "maf"):
+            elif modelname in (
+                "glow",
+                "realnvp",
+                "maf",
+                "maf-split",
+                "maf-split-glow",
+            ):
                 new_images = model.sample(num_images)
+            else:
+                raise ValueError(f"Unsupported modelname for generation: {modelname!r}")
         else:
             # Multi-group: num_images = [n_for_0, ..., n_for_(K-1), replicate]
             counts = num_images[:-1]
@@ -463,8 +472,16 @@ def generate_samples(
                 new_images = model.decoder(rand_features)
             elif modelname == "GANs":
                 new_images = model.generator(rand_features)
-            elif modelname in ("glow", "realnvp", "maf"):
+            elif modelname in (
+                "glow",
+                "realnvp",
+                "maf",
+                "maf-split",
+                "maf-split-glow",
+            ):
                 new_images = model.sample(total)
+            else:
+                raise ValueError(f"Unsupported modelname for generation: {modelname!r}")
 
         # Cap: threshold outliers to col_max + noise
         if (col_max is not None) and (col_sd is not None):

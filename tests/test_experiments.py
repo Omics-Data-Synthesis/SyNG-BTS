@@ -1107,8 +1107,9 @@ class TestTransfer:
             learning_rate=LR,
             output_dir=str(temp_dir),
         )
-        # Should have Transfer subdir and output files
-        assert (temp_dir / "Transfer").exists()
+        # Saves target-phase outputs directly to output_dir
+        assert any(temp_dir.iterdir())
+        assert not (temp_dir / "Transfer").exists()
 
     def test_transfer_with_bundled_data(self):
         """transfer() works with bundled dataset names."""
@@ -1131,9 +1132,9 @@ class TestTransfer:
         observed: dict[str, object] = {}
         source_calls: list[dict[str, object]] = []
 
-        def fake_transfer_target_generate(**kwargs):
+        def fake_run_generate(**kwargs):
             source_calls.append(kwargs)
-            observed["source_groups"] = kwargs.get("target_groups")
+            observed["source_groups"] = kwargs.get("groups")
             return SyngResult(
                 generated_data=pd.DataFrame([[0.0]]),
                 loss=pd.DataFrame({"train_loss": [1.0]}),
@@ -1141,15 +1142,13 @@ class TestTransfer:
                 model_state={"fake": True},
             )
 
-        def fake_transfer_target_pilot(**kwargs):
-            observed["target_groups_pilot"] = kwargs.get("target_groups")
+        def fake_run_pilot(**kwargs):
+            observed["target_groups_pilot"] = kwargs.get("groups")
             observed["pilot_apply_log"] = kwargs.get("apply_log")
             return PilotResult(runs={})
 
-        monkeypatch.setattr(
-            exp, "_transfer_target_generate", fake_transfer_target_generate
-        )
-        monkeypatch.setattr(exp, "_transfer_target_pilot", fake_transfer_target_pilot)
+        monkeypatch.setattr(exp, "_run_generate", fake_run_generate)
+        monkeypatch.setattr(exp, "_run_pilot", fake_run_pilot)
 
         source_groups = pd.Series(["S0"] * len(sample_data))
         target_groups = pd.Series(["T0"] * len(sample_data))
@@ -1183,7 +1182,7 @@ class TestTransfer:
         def fail_pilot_study(*args, **kwargs):
             raise AssertionError("transfer() should not call public pilot_study()")
 
-        def fake_transfer_target_generate(**kwargs):
+        def fake_run_generate(**kwargs):
             return SyngResult(
                 generated_data=pd.DataFrame([[0.0]]),
                 loss=pd.DataFrame({"train_loss": [1.0]}),
@@ -1193,9 +1192,7 @@ class TestTransfer:
 
         monkeypatch.setattr(exp, "generate", fail_generate)
         monkeypatch.setattr(exp, "pilot_study", fail_pilot_study)
-        monkeypatch.setattr(
-            exp, "_transfer_target_generate", fake_transfer_target_generate
-        )
+        monkeypatch.setattr(exp, "_run_generate", fake_run_generate)
 
         result = transfer(
             source_data=sample_data,

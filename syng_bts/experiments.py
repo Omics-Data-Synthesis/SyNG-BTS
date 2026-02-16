@@ -1010,15 +1010,15 @@ def pilot_study(
 
 
 # =========================================================================
-# Internal transfer target-phase helpers
+# Internal orchestration helpers
 # =========================================================================
 
 
-def _transfer_target_generate(
+def _run_generate(
     *,
-    target_data: pd.DataFrame | str | Path,
-    target_name: str,
-    target_groups: pd.Series | np.ndarray | None,
+    data: pd.DataFrame | str | Path,
+    name: str,
+    groups: pd.Series | np.ndarray | None,
     new_size: int | list[int],
     model: str,
     apply_log: bool,
@@ -1034,17 +1034,19 @@ def _transfer_target_generate(
     output_dir: str | Path | None,
     verbose: int | str,
 ) -> SyngResult:
-    """Run the target-phase generate path for transfer learning.
+    """Internal single-run train → infer → assemble helper.
 
-    Mirrors the logic of :func:`generate` but accepts a pre-trained
-    ``model_state`` dict for in-memory transfer, avoiding the need for
-    file-based model handoff.
+    Contains the full orchestration logic shared by :func:`generate`
+    (via ``model_state=None``) and the transfer target phase (via a
+    pre-trained ``model_state`` dict).  This avoids routing transfer
+    orchestration through public API functions while keeping the
+    training/inference pipeline in one place.
     """
     verbose_level = _resolve_verbose(verbose)
 
-    df, bundled_groups = resolve_data(target_data)
+    df, bundled_groups = resolve_data(data)
     _validate_feature_data(df)
-    dataname = target_name
+    dataname = name
 
     data_pd = df
     colnames = list(data_pd.columns)
@@ -1054,10 +1056,10 @@ def _transfer_target_generate(
 
     n_samples = oridata.shape[0]
     effective_groups = _resolve_effective_groups(
-        target_groups,
+        groups,
         bundled_groups,
         n_samples=n_samples,
-        param_name="target_groups",
+        param_name="groups",
     )
 
     orilabels, oriblurlabels = create_labels(
@@ -1198,11 +1200,11 @@ def _transfer_target_generate(
     return result
 
 
-def _transfer_target_pilot(
+def _run_pilot(
     *,
-    target_data: pd.DataFrame | str | Path,
-    target_name: str,
-    target_groups: pd.Series | np.ndarray | None,
+    data: pd.DataFrame | str | Path,
+    name: str,
+    groups: pd.Series | np.ndarray | None,
     pilot_size: list[int],
     model: str,
     apply_log: bool,
@@ -1218,17 +1220,17 @@ def _transfer_target_pilot(
     output_dir: str | Path | None,
     verbose: int | str,
 ) -> PilotResult:
-    """Run the target-phase pilot-study path for transfer learning.
+    """Internal pilot-study train → infer → assemble helper.
 
-    Mirrors the logic of :func:`pilot_study` but accepts a pre-trained
-    ``model_state`` dict for in-memory transfer, avoiding the need for
-    file-based model handoff.
+    Contains the full pilot-loop orchestration logic shared by
+    :func:`pilot_study` and the transfer target phase.  Accepts a
+    pre-trained ``model_state`` dict for in-memory transfer handoff.
     """
     verbose_level = _resolve_verbose(verbose)
 
-    df, bundled_groups = resolve_data(target_data)
+    df, bundled_groups = resolve_data(data)
     _validate_feature_data(df)
-    dataname = target_name
+    dataname = name
 
     data_pd = df
     colnames = list(data_pd.columns)
@@ -1238,10 +1240,10 @@ def _transfer_target_pilot(
     n_samples = oridata.shape[0]
 
     effective_groups = _resolve_effective_groups(
-        target_groups,
+        groups,
         bundled_groups,
         n_samples=n_samples,
-        param_name="target_groups",
+        param_name="groups",
     )
 
     orilabels, oriblurlabels = create_labels(
@@ -1514,10 +1516,10 @@ def transfer(
     toname = derive_dataname(target_data, target_name)
 
     # --- 1. Pre-train on source ------------------------------------------
-    _source_result = _transfer_target_generate(
-        target_data=source_data,
-        target_name=fromname,
-        target_groups=source_groups,
+    _source_result = _run_generate(
+        data=source_data,
+        name=fromname,
+        groups=source_groups,
         new_size=[source_size],
         model=model,
         apply_log=apply_log,
@@ -1530,28 +1532,19 @@ def transfer(
         Gaussian_head_num=Gaussian_head_num,
         random_seed=random_seed,
         model_state=None,
-        output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
+        output_dir=None,
         verbose=verbose,
     )
 
     # Capture source model state in-memory for target-phase fine-tuning
     source_model_state = _source_result.model_state
 
-    # Optionally persist source model state to Transfer subdir
-    if output_dir is not None:
-        transfer_dir = Path(output_dir) / "Transfer"
-        transfer_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            source_model_state,
-            str(transfer_dir / f"{toname}_from{fromname}_{model}.pt"),
-        )
-
     # --- 2. Fine-tune on target ------------------------------------------
     if pilot_size is not None:
-        result = _transfer_target_pilot(
-            target_data=target_data,
-            target_name=toname,
-            target_groups=target_groups,
+        result = _run_pilot(
+            data=target_data,
+            name=toname,
+            groups=target_groups,
             pilot_size=pilot_size,
             model=model,
             apply_log=apply_log,
@@ -1568,10 +1561,10 @@ def transfer(
             verbose=verbose,
         )
     else:
-        result = _transfer_target_generate(
-            target_data=target_data,
-            target_name=toname,
-            target_groups=target_groups,
+        result = _run_generate(
+            data=target_data,
+            name=toname,
+            groups=target_groups,
             new_size=new_size,
             model=model,
             apply_log=apply_log,

@@ -119,6 +119,11 @@ Generation Parameters
    * - ``pilot_size``
      - list[int]
      - Sample sizes to evaluate (only for ``pilot_study()``).
+   * - ``n_draws``
+     - int
+     - Number of replicated random draws per pilot size (default: 5).
+       Used in ``pilot_study()`` and ``transfer()`` when ``pilot_size``
+       is set.
 
 Augmentation Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -204,6 +209,7 @@ Advanced Parameters (``generate`` only)
        data="SKCMPositive_4",       # Data input (required)
        pilot_size=[50, 100],        # Pilot sizes (required)
        name=None,                   # Output name (auto-derived)
+       n_draws=5,                   # Draws per pilot size
        model="VAE1-10",             # Model specification
        batch_frac=0.1,              # Batch fraction
        learning_rate=0.0005,        # Learning rate
@@ -229,6 +235,7 @@ Advanced Parameters (``generate`` only)
        source_name=None,            # Source name (auto-derived)
        target_name=None,            # Target name (auto-derived)
        pilot_size=None,             # Pilot sizes (None=use generate)
+       n_draws=5,                   # Draws per pilot size
        source_size=500,             # Source generation size
        new_size=500,                # Target generation size
        model="maf",                 # Model specification

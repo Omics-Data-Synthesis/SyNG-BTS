@@ -1,5 +1,5 @@
 """
-Tests for experiment functions including integration training tests.
+Tests for core experiment functions including integration training tests.
 
 Tests cover:
 - generate() returns SyngResult with correct structure
@@ -17,13 +17,13 @@ import pytest
 import torch
 
 from syng_bts import generate, pilot_study, transfer
-from syng_bts.data_utils import resolve_data
-from syng_bts.experiments import (
+from syng_bts.core import (
     _build_loss_df,
     _compute_new_size,
     _parse_model_spec,
     _resolve_early_stopping_config,
 )
+from syng_bts.data_utils import resolve_data
 from syng_bts.helper_training import TrainedModel
 from syng_bts.result import PilotResult, SyngResult
 
@@ -655,7 +655,7 @@ class TestGenerate:
     def test_epochs_trained_uses_training_output_value(self, sample_data, monkeypatch):
         import torch.nn as nn
 
-        import syng_bts.experiments as exp
+        import syng_bts.core as exp
 
         fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
 
@@ -1062,6 +1062,79 @@ class TestPilotStudy:
                 learning_rate=LR,
             )
 
+    def test_n_draws_default_produces_5_runs(self, sample_data):
+        """Default n_draws=5 produces 5 runs per pilot size."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 5
+        for key in result.runs:
+            assert key[1] in range(1, 6)
+
+    def test_n_draws_custom_value(self, sample_data):
+        """Custom n_draws changes number of runs per pilot size."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            n_draws=3,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 3
+        for key in result.runs:
+            assert key[0] == 10
+            assert key[1] in range(1, 4)
+
+    def test_n_draws_multiple_pilot_sizes(self, sample_data):
+        """Custom n_draws with multiple pilot sizes."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[8, 12],
+            n_draws=2,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 4  # 2 pilots × 2 draws
+        expected_keys = {(8, 1), (8, 2), (12, 1), (12, 2)}
+        assert set(result.runs.keys()) == expected_keys
+
+    def test_n_draws_one(self, sample_data):
+        """n_draws=1 produces exactly 1 run per pilot size."""
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            n_draws=1,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.runs) == 1
+        assert (10, 1) in result.runs
+
+    @pytest.mark.parametrize("n_draws", [0, -1, 1.5, True])
+    def test_n_draws_invalid_raises(self, sample_data, n_draws):
+        """pilot_study() validates n_draws as a positive integer."""
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            pilot_study(
+                data=sample_data,
+                pilot_size=[10],
+                n_draws=n_draws,
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
+
 
 # =========================================================================
 # transfer()
@@ -1096,6 +1169,22 @@ class TestTransfer:
             learning_rate=LR,
         )
         assert isinstance(result, PilotResult)
+
+    @pytest.mark.parametrize("n_draws", [0, -1, 1.5, True])
+    def test_transfer_invalid_n_draws_raises(self, sample_data, n_draws):
+        """transfer() validates n_draws when pilot mode is enabled."""
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            transfer(
+                source_data=sample_data,
+                target_data=sample_data,
+                pilot_size=[10],
+                n_draws=n_draws,
+                source_size=10,
+                model="VAE1-10",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
 
     def test_transfer_without_output_dir_returns_result(self, sample_data):
         """transfer() without output_dir still returns a valid result."""
@@ -1143,7 +1232,7 @@ class TestTransfer:
 
     def test_transfer_forwards_groups_and_apply_log(self, sample_data, monkeypatch):
         """transfer() forwards new group and apply_log args to downstream calls."""
-        import syng_bts.experiments as exp
+        import syng_bts.core as exp
 
         observed: dict[str, object] = {}
         source_calls: list[dict[str, object]] = []
@@ -1190,7 +1279,7 @@ class TestTransfer:
         self, sample_data, monkeypatch
     ):
         """transfer() uses internal orchestration helpers, not public APIs."""
-        import syng_bts.experiments as exp
+        import syng_bts.core as exp
 
         def fail_generate(*args, **kwargs):
             raise AssertionError("transfer() should not call public generate()")

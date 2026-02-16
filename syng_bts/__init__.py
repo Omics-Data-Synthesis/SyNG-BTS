@@ -49,6 +49,11 @@ __license__ = "AGPL-3.0"
 # Import main experiment functions
 # Import evaluation functions
 # Import data utilities
+from .core import (
+    generate,
+    pilot_study,
+    transfer,
+)
 from .data_utils import (
     derive_dataname,
     get_output_dir,
@@ -60,11 +65,6 @@ from .evaluations import (
     UMAP_eval,
     evaluation,
     heatmap_eval,
-)
-from .experiments import (
-    generate,
-    pilot_study,
-    transfer,
 )
 
 # Import models (for advanced users who want to use models directly)

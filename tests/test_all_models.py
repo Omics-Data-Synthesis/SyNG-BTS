@@ -653,7 +653,7 @@ class TestModelReconstructionParity:
     @staticmethod
     def _train_test_model(sample_data, model: str, *, groups=None) -> TrainedModel:
         """Train a model and return TrainedModel for direct parity checks."""
-        from syng_bts.experiments import _parse_model_spec, _train_model
+        from syng_bts.core import _parse_model_spec, _train_model
         from syng_bts.helper_utils import create_labels, preprocessinglog2
 
         oridata = torch.from_numpy(sample_data.to_numpy().copy()).to(torch.float32)

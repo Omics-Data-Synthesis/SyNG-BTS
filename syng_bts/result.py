@@ -204,7 +204,7 @@ class SyngResult:
         # Generate raw samples via the unified inference dispatcher
         gen_tensor = run_generation(trained, num_samples=n)
 
-        # Post-processing: same as generate() in experiments.py
+        # Post-processing: same as generate() in core.py
         gen_np = gen_tensor.detach().numpy()
         colnames = list(self.generated_data.columns)
         modelname = arch_params.get("modelname", "")

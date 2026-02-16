@@ -1,4 +1,4 @@
-"""Experiment functions for SyNG-BTS.
+"""Core experiment functions for SyNG-BTS.
 
 Public API
 ----------
@@ -499,6 +499,26 @@ def _resolve_early_stopping_config(
         return default_max_epochs, True, default_patience
 
 
+def _validate_n_draws(n_draws: int, *, param_name: str = "n_draws") -> int:
+    """Validate replicated draw count parameters.
+
+    Parameters
+    ----------
+    n_draws : int
+        Number of replicated random draws.
+    param_name : str
+        Parameter name used in error messages.
+
+    Returns
+    -------
+    int
+        Validated draw count.
+    """
+    if isinstance(n_draws, bool) or not isinstance(n_draws, int) or n_draws <= 0:
+        raise ValueError(f"'{param_name}' must be a positive integer, got {n_draws!r}")
+    return n_draws
+
+
 def _coerce_groups_array(
     groups: pd.Series | np.ndarray,
     *,
@@ -811,6 +831,7 @@ def pilot_study(
     *,
     name: str | None = None,
     groups: pd.Series | np.ndarray | None = None,
+    n_draws: int = 5,
     model: str = "VAE1-10",
     apply_log: bool = True,
     batch_frac: float = 0.1,
@@ -826,9 +847,10 @@ def pilot_study(
 ) -> PilotResult:
     """Sweep over pilot sizes with replicated random draws.
 
-    For each pilot size, five random sub-samples are drawn from the
-    original data.  A model is trained on each sub-sample and synthetic
-    data equal to five times the sub-sample size is generated.
+    For each pilot size, *n_draws* random sub-samples are drawn from
+    the original data.  A model is trained on each sub-sample and
+    synthetic data equal to *n_draws* times the sub-sample size is
+    generated.
 
     This replaces the legacy ``PilotExperiment`` function.
 
@@ -843,6 +865,9 @@ def pilot_study(
     groups : pd.Series, np.ndarray, or None
         Optional binary group labels. When provided, these labels take
         precedence over bundled dataset groups.
+    n_draws : int
+        Number of replicated random draws per pilot size (default: 5).
+        Must be a positive integer.
     model : str
         Model specification (e.g. ``"VAE1-10"``).
     apply_log : bool
@@ -876,6 +901,8 @@ def pilot_study(
     PilotResult
         Wrapper containing one ``SyngResult`` per (pilot_size, draw).
     """
+    n_draws = _validate_n_draws(n_draws, param_name="n_draws")
+
     # --- 0. Resolve verbose level ----------------------------------------
     verbose_level = _resolve_verbose(verbose)
 
@@ -917,13 +944,13 @@ def pilot_study(
     )
 
     # --- 6. Pilot loop ---------------------------------------------------
-    # new_size = 5× pilot (per group if unbalanced)
-    repli = 5
+    # new_size = n_draws × pilot (per group if unbalanced)
+    repli = n_draws
 
     runs: dict[tuple[int, int], SyngResult] = {}
 
     for n_pilot in pilot_size:
-        for rand_pilot in range(1, 6):
+        for rand_pilot in range(1, n_draws + 1):
             # Draw pilot sub-sample
             rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
                 dataset=oridata,
@@ -1193,6 +1220,7 @@ def _run_pilot(
     name: str,
     groups: pd.Series | np.ndarray | None,
     pilot_size: list[int],
+    n_draws: int = 5,
     model: str,
     apply_log: bool,
     batch_frac: float,
@@ -1213,6 +1241,7 @@ def _run_pilot(
     :func:`pilot_study` and the transfer target phase.  Accepts a
     pre-trained ``model_state`` dict for in-memory transfer handoff.
     """
+    n_draws = _validate_n_draws(n_draws, param_name="n_draws")
     verbose_level = _resolve_verbose(verbose)
 
     df, bundled_groups = resolve_data(data)
@@ -1247,11 +1276,11 @@ def _run_pilot(
         default_patience=30,
     )
 
-    repli = 5
+    repli = n_draws
     runs: dict[tuple[int, int], SyngResult] = {}
 
     for n_pilot in pilot_size:
-        for rand_pilot in range(1, 6):
+        for rand_pilot in range(1, n_draws + 1):
             rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
                 dataset=oridata,
                 labels=orilabels,
@@ -1370,6 +1399,7 @@ def transfer(
     source_groups: pd.Series | np.ndarray | None = None,
     target_groups: pd.Series | np.ndarray | None = None,
     pilot_size: list[int] | None = None,
+    n_draws: int = 5,
     source_size: int = 500,
     new_size: int = 500,
     model: str = "VAE1-10",
@@ -1411,6 +1441,10 @@ def transfer(
         If set, target fine-tuning follows the internal pilot-study path.
         Otherwise, target fine-tuning follows the internal single-run
         generation path.
+    n_draws : int
+        Number of replicated random draws per pilot size (default: 5).
+        Only used when *pilot_size* is not ``None``. Must be a positive
+        integer.
     source_size : int
         Number of samples to generate during pre-training.
     new_size : int
@@ -1478,11 +1512,13 @@ def transfer(
 
     # --- 2. Fine-tune on target ------------------------------------------
     if pilot_size is not None:
+        n_draws = _validate_n_draws(n_draws, param_name="n_draws")
         result = _run_pilot(
             data=target_data,
             name=toname,
             groups=target_groups,
             pilot_size=pilot_size,
+            n_draws=n_draws,
             model=model,
             apply_log=apply_log,
             batch_frac=batch_frac,

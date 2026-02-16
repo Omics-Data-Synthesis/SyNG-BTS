@@ -11,7 +11,7 @@ tests/
 ├── conftest.py            # Shared pytest fixtures
 ├── test_imports.py        # Package import and public API tests
 ├── test_data_utils.py     # Data loading, bundled datasets, path utilities
-├── test_experiments.py    # Main experiment functions (generate, pilot_study, transfer)
+├── test_core.py           # Main experiment functions (generate, pilot_study, transfer)
 ├── test_evaluations.py    # Visualization functions (heatmap_eval, UMAP_eval, evaluation)
 ├── test_helpers.py        # Internal helper utilities and preprocessing
 ├── test_models.py         # Forward-pass tests for model architectures
@@ -37,13 +37,13 @@ pytest tests/ -m slow
 pytest tests/ --cov=syng_bts --cov-report=html
 
 # Run specific test file
-pytest tests/test_experiments.py -v
+pytest tests/test_core.py -v
 
 # Run specific test class
-pytest tests/test_experiments.py::TestGenerate -v
+pytest tests/test_core.py::TestGenerate -v
 
 # Run specific test
-pytest tests/test_experiments.py::TestGenerate::test_returns_syng_result -v
+pytest tests/test_core.py::TestGenerate::test_returns_syng_result -v
 ```
 
 ### Debug Options
@@ -67,7 +67,7 @@ pytest tests/ --cov=syng_bts --cov-report=html
 
 - **Import Tests** (`test_imports.py`): Verifies the public API (package imports, exported functions `generate`, `pilot_study`, `transfer`), result objects, and that legacy names raise `ImportError`.
 - **Data Utils Tests** (`test_data_utils.py`): Data loading and path utilities, bundled dataset operations, `resolve_data()` edge cases, and output-directory behavior.
-- **Experiment Tests** (`test_experiments.py`): Main public API (`generate`, `pilot_study`, `transfer`) across input types and parameters; includes internal helper checks (`_parse_model_spec`, `_build_loss_df`, `_compute_new_size`) and slow integration tests.
+- **Experiment Tests** (`test_core.py`): Main public API (`generate`, `pilot_study`, `transfer`) across input types and parameters; includes internal helper checks (`_parse_model_spec`, `_build_loss_df`, `_compute_new_size`) and slow integration tests.
 - **Evaluation Tests** (`test_evaluations.py`): Visualization functions (`heatmap_eval`, `UMAP_eval`, `evaluation`) - should return figures (no `plt.show()`) and handle parameters correctly.
 - **Helper Tests** (`test_helpers.py`): Internal utilities (preprocessing, seed management, label creation, augmentation) and pure functions (`generate_samples`, `reconstruct_samples`).
 - **Model Tests** (`test_models.py`): Forward-pass checks for architectures (AE, VAE, CVAE, GAN) to validate tensor shapes and encoding behavior.
@@ -93,7 +93,7 @@ Common fixtures available in all test modules (defined in `conftest.py`):
 
 ### Guidelines
 
-1. **File organization**: Group tests by module/feature. For example, new functionality in `experiments.py` should go in `test_experiments.py`.
+1. **File organization**: Group tests by module/feature. For example, new functionality in `core.py` should go in `test_core.py`.
    
 2. **Naming conventions**:
    - File: `test_*.py`

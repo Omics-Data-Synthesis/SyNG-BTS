@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "syng-bts"
-version = "3.1.1"
+version = "3.1.2"
 description = "Synthesis of Next Generation Bulk Transcriptomic Sequencing - A data augmentation tool for transcriptomics data using deep generative models"
 readme = "README.md"
 license = "AGPL-3.0-only"

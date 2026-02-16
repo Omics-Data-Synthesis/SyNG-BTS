@@ -90,6 +90,16 @@ class TestExperimentImports:
         sig = inspect.signature(generate)
         assert "save_model" not in sig.parameters
 
+    def test_generate_signature_removes_pre_model(self):
+        """generate() no longer exposes a pre_model parameter (Phase 2)."""
+        sig = inspect.signature(generate)
+        assert "pre_model" not in sig.parameters
+
+    def test_pilot_study_signature_removes_pre_model(self):
+        """pilot_study() no longer exposes a pre_model parameter (Phase 2)."""
+        sig = inspect.signature(pilot_study)
+        assert "pre_model" not in sig.parameters
+
 
 # =========================================================================
 # _parse_model_spec
@@ -1071,8 +1081,8 @@ class TestTransfer:
         )
         assert isinstance(result, PilotResult)
 
-    def test_cleans_up_temp_dir(self, sample_data):
-        """transfer() without output_dir should not leave temp files."""
+    def test_transfer_without_output_dir_returns_result(self, sample_data):
+        """transfer() without output_dir still returns a valid result."""
         result = transfer(
             source_data=sample_data,
             target_data=sample_data,
@@ -1119,25 +1129,27 @@ class TestTransfer:
         import syng_bts.experiments as exp
 
         observed: dict[str, object] = {}
+        source_calls: list[dict[str, object]] = []
 
-        def fake_generate(*args, **kwargs):
-            if kwargs.get("pre_model") is None:
-                observed["source_groups"] = kwargs.get("groups")
-            else:
-                observed["target_groups_generate"] = kwargs.get("groups")
+        def fake_transfer_target_generate(**kwargs):
+            source_calls.append(kwargs)
+            observed["source_groups"] = kwargs.get("target_groups")
             return SyngResult(
                 generated_data=pd.DataFrame([[0.0]]),
                 loss=pd.DataFrame({"train_loss": [1.0]}),
                 metadata={"model": "AE", "dataname": "x", "seed": 1},
+                model_state={"fake": True},
             )
 
-        def fake_pilot_study(*args, **kwargs):
-            observed["target_groups_pilot"] = kwargs.get("groups")
+        def fake_transfer_target_pilot(**kwargs):
+            observed["target_groups_pilot"] = kwargs.get("target_groups")
             observed["pilot_apply_log"] = kwargs.get("apply_log")
             return PilotResult(runs={})
 
-        monkeypatch.setattr(exp, "generate", fake_generate)
-        monkeypatch.setattr(exp, "pilot_study", fake_pilot_study)
+        monkeypatch.setattr(
+            exp, "_transfer_target_generate", fake_transfer_target_generate
+        )
+        monkeypatch.setattr(exp, "_transfer_target_pilot", fake_transfer_target_pilot)
 
         source_groups = pd.Series(["S0"] * len(sample_data))
         target_groups = pd.Series(["T0"] * len(sample_data))
@@ -1157,6 +1169,44 @@ class TestTransfer:
         assert observed["source_groups"] is source_groups
         assert observed["target_groups_pilot"] is target_groups
         assert observed["pilot_apply_log"] is False
+        assert len(source_calls) == 1
+
+    def test_transfer_does_not_call_public_generate_or_pilot_study(
+        self, sample_data, monkeypatch
+    ):
+        """transfer() uses internal orchestration helpers, not public APIs."""
+        import syng_bts.experiments as exp
+
+        def fail_generate(*args, **kwargs):
+            raise AssertionError("transfer() should not call public generate()")
+
+        def fail_pilot_study(*args, **kwargs):
+            raise AssertionError("transfer() should not call public pilot_study()")
+
+        def fake_transfer_target_generate(**kwargs):
+            return SyngResult(
+                generated_data=pd.DataFrame([[0.0]]),
+                loss=pd.DataFrame({"train_loss": [1.0]}),
+                metadata={"model": "AE", "dataname": "x", "seed": 1},
+                model_state={"fake": True},
+            )
+
+        monkeypatch.setattr(exp, "generate", fail_generate)
+        monkeypatch.setattr(exp, "pilot_study", fail_pilot_study)
+        monkeypatch.setattr(
+            exp, "_transfer_target_generate", fake_transfer_target_generate
+        )
+
+        result = transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            model="AE",
+            source_size=5,
+            new_size=5,
+            epoch=1,
+        )
+
+        assert isinstance(result, SyngResult)
 
 
 # =========================================================================

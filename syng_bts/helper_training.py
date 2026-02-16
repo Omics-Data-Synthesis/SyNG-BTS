@@ -324,7 +324,7 @@ def training_AEs(
     num_epochs,
     learning_rate,
     val_ratio=0.2,
-    pre_model=None,
+    model_state: dict | None = None,
     kl_weight=1,
     early_stop=True,
     early_stop_num=30,
@@ -378,9 +378,9 @@ def training_AEs(
         val_dataset, batch_size=len(val_dataset), shuffle=False, drop_last=False
     )
 
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
 
     # Train the model
     if modelname == "CVAE":
@@ -468,7 +468,7 @@ def training_GANs(
     modelname,
     num_epochs,
     learning_rate,
-    pre_model=None,
+    model_state: dict | None = None,
     early_stop=True,
     early_stop_num=30,
     verbose=VerbosityLevel.MINIMAL,
@@ -497,9 +497,9 @@ def training_GANs(
     optim_discr = torch.optim.Adam(
         model.discriminator.parameters(), betas=(0.5, 0.999), lr=learning_rate
     )
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
 
     if modelname == "GAN":
         log_dict, best_model = ht.train_GAN(
@@ -583,7 +583,7 @@ def training_flows(
     num_hidden,
     early_stop,
     early_stop_num,
-    pre_model,
+    model_state: dict | None = None,
     tensorboard_dir: str | None = None,
     verbose=VerbosityLevel.MINIMAL,
 ) -> TrainedModel:
@@ -692,9 +692,9 @@ def training_flows(
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.data.fill_(0)
 
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
     model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-6)

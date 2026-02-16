@@ -166,9 +166,6 @@ Advanced Parameters (``generate`` only)
    * - ``cap``
      - bool
      - Cap generated values to observed range (default: ``False``).
-   * - ``pre_model``
-     - str or None
-     - Path to a pre-trained model for transfer learning.
 
 ``generate()`` Parameters
 -------------------------
@@ -190,7 +187,6 @@ Advanced Parameters (``generate`` only)
        off_aug=None,                # Offline augmentation
        AE_head_num=2,               # AE-head folds
        Gaussian_head_num=9,         # Gaussian-head folds
-       pre_model=None,              # Pre-trained model path
        use_scheduler=False,         # LR scheduler
        cap=False,                   # Cap generated values
        random_seed=123,             # Random seed
@@ -216,7 +212,6 @@ Advanced Parameters (``generate`` only)
        off_aug=None,                # Offline augmentation
        AE_head_num=2,               # AE-head folds
        Gaussian_head_num=9,         # Gaussian-head folds
-       pre_model=None,              # Pre-trained model path
        random_seed=123,             # Random seed
        output_dir=None,             # Output directory
    )

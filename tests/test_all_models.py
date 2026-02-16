@@ -681,7 +681,6 @@ class TestModelReconstructionParity:
             val_ratio=0.2,
             early_stop=False,
             early_stop_num=30,
-            pre_model=None,
             cap=False,
             loss_fn="MSE",
             use_scheduler=False,

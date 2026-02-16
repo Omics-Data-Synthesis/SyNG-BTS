@@ -1130,37 +1130,15 @@ class TestGenerateNewSamples:
         with pytest.raises(ValueError, match="arch_params"):
             result.generate_new_samples(10)
 
-    # --- Model resolution behavior ---
+    # --- Cached model reuse ---
 
-    def test_resolve_model_rebuilds_consistently(self, trained_result):
-        """Repeated _resolve_model() calls rebuild equivalent models."""
-        from syng_bts.helper_training import TrainedModel
-        from syng_bts.inference import run_generation
-
-        model_a = trained_result._resolve_model()
-        model_b = trained_result._resolve_model()
-
-        trained_a = TrainedModel(
-            model=model_a,
-            model_state=trained_result.model_state,
-            arch_params=trained_result.metadata["arch_params"],
-            log_dict={},
-            epochs_trained=trained_result.metadata.get("epochs_trained", 0),
-        )
-        trained_b = TrainedModel(
-            model=model_b,
-            model_state=trained_result.model_state,
-            arch_params=trained_result.metadata["arch_params"],
-            log_dict={},
-            epochs_trained=trained_result.metadata.get("epochs_trained", 0),
-        )
-
-        torch.manual_seed(202)
-        gen_a = run_generation(trained_a, num_samples=32)
-        torch.manual_seed(202)
-        gen_b = run_generation(trained_b, num_samples=32)
-
-        assert torch.allclose(gen_a, gen_b)
+    def test_cached_model_reused(self, trained_result):
+        """Second call reuses the lazy-cached model."""
+        _ = trained_result.generate_new_samples(10)
+        assert trained_result._cached_model is not None
+        cached = trained_result._cached_model
+        _ = trained_result.generate_new_samples(10)
+        assert trained_result._cached_model is cached
 
     # --- New result has correct reconstructed/original fields ---
 

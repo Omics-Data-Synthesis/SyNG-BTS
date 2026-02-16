@@ -121,7 +121,7 @@ def _train_model(
     val_ratio: float = 0.2,
     early_stop: bool = True,
     early_stop_num: int = 30,
-    pre_model: str | None = None,
+    model_state: dict | None = None,
     cap: bool = False,
     loss_fn: str = "MSE",
     use_scheduler: bool = False,
@@ -148,7 +148,7 @@ def _train_model(
             learning_rate=learning_rate,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
+            model_state=model_state,
             verbose=verbose,
         )
     elif "AE" in modelname:
@@ -164,7 +164,7 @@ def _train_model(
             kl_weight=kl_weight,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
+            model_state=model_state,
             cap=cap,
             loss_fn=loss_fn,
             use_scheduler=use_scheduler,
@@ -189,7 +189,7 @@ def _train_model(
             num_hidden=226,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
+            model_state=model_state,
             verbose=verbose,
         )
     else:
@@ -437,7 +437,6 @@ def generate(
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
     use_scheduler: bool = False,
     step_size: int = 10,
     gamma: float = 0.5,
@@ -499,8 +498,6 @@ def generate(
         Fold multiplier for AE-head augmentation.
     Gaussian_head_num : int
         Fold multiplier for Gaussian-head augmentation.
-    pre_model : str or None
-        Path to a pre-trained model for transfer learning.
     use_scheduler : bool
         Enable learning-rate scheduler (AE family).
     step_size : int
@@ -621,7 +618,6 @@ def generate(
         val_ratio=val_ratio,
         early_stop=early_stop,
         early_stop_num=early_stop_num,
-        pre_model=pre_model,
         cap=cap,
         loss_fn="MSE",
         use_scheduler=use_scheduler,
@@ -732,7 +728,6 @@ def pilot_study(
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
@@ -777,8 +772,6 @@ def pilot_study(
         Fold multiplier for AE-head augmentation.
     Gaussian_head_num : int
         Fold multiplier for Gaussian-head augmentation.
-    pre_model : str or None
-        Path to a pre-trained model for transfer learning.
     random_seed : int
         Base random seed for reproducibility.
     output_dir : str, Path, or None
@@ -905,7 +898,6 @@ def pilot_study(
                 kl_weight=kl_weight,
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
-                pre_model=pre_model,
                 batch_frac=batch_frac,
                 verbose=verbose_level,
             )
@@ -1017,6 +1009,419 @@ def pilot_study(
     return pilot_result
 
 
+# =========================================================================
+# Internal transfer target-phase helpers
+# =========================================================================
+
+
+def _transfer_target_generate(
+    *,
+    target_data: pd.DataFrame | str | Path,
+    target_name: str,
+    target_groups: pd.Series | np.ndarray | None,
+    new_size: int | list[int],
+    model: str,
+    apply_log: bool,
+    batch_frac: float,
+    learning_rate: float,
+    epoch: int | None,
+    early_stop_patience: int | None,
+    off_aug: str | None,
+    AE_head_num: int,
+    Gaussian_head_num: int,
+    random_seed: int,
+    model_state: dict | None,
+    output_dir: str | Path | None,
+    verbose: int | str,
+) -> SyngResult:
+    """Run the target-phase generate path for transfer learning.
+
+    Mirrors the logic of :func:`generate` but accepts a pre-trained
+    ``model_state`` dict for in-memory transfer, avoiding the need for
+    file-based model handoff.
+    """
+    verbose_level = _resolve_verbose(verbose)
+
+    df, bundled_groups = resolve_data(target_data)
+    _validate_feature_data(df)
+    dataname = target_name
+
+    data_pd = df
+    colnames = list(data_pd.columns)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
+
+    n_samples = oridata.shape[0]
+    effective_groups = _resolve_effective_groups(
+        target_groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="target_groups",
+    )
+
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
+
+    modelname, kl_weight = _parse_model_spec(model)
+
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
+
+    rawdata = oridata
+    rawlabels = orilabels
+    if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
+        rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
+
+    effective_new_size = _compute_new_size(orilabels, n_samples, new_size)
+
+    if off_aug == "Gaussian_head":
+        rawdata, rawlabels = Gaussian_aug(
+            rawdata, rawlabels, multiplier=[Gaussian_head_num]
+        )
+    elif off_aug == "AE_head":
+        feed_data, feed_labels = training_iter(
+            iter_times=AE_head_num,
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            random_seed=random_seed,
+            modelname="AE",
+            num_epochs=1000,
+            batch_size=round(rawdata.shape[0] * 0.1),
+            learning_rate=0.0005,
+            early_stop=False,
+            early_stop_num=30,
+            kl_weight=1,
+            loss_fn="MSE",
+            replace=True,
+            verbose=verbose_level,
+        )
+        rawdata = feed_data
+        rawlabels = feed_labels
+
+    batch_size = max(1, round(rawdata.shape[0] * batch_frac))
+
+    trained = _train_model(
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        modelname=modelname,
+        batch_size=batch_size,
+        random_seed=random_seed,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        kl_weight=kl_weight,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        model_state=model_state,
+        batch_frac=batch_frac,
+        verbose=verbose_level,
+    )
+    gen_data, recon_data = _infer_from_trained(
+        trained,
+        new_size=effective_new_size,
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        batch_size=batch_size,
+    )
+
+    gen_np = gen_data.detach().numpy()
+    gen_labels = None
+    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        gen_labels = pd.Series(gen_np[:, -1], name="label")
+        gen_np = gen_np[:, :-1]
+    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
+
+    recon_df = None
+    recon_labels = None
+    if recon_data is not None:
+        recon_np = recon_data.detach().numpy()
+        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+            recon_labels = pd.Series(recon_np[:, -1], name="label")
+            recon_np = recon_np[:, :-1]
+        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+    if apply_log:
+        gen_df = inverse_log2(gen_df)
+        if recon_df is not None:
+            recon_df = inverse_log2(recon_df)
+
+    if not gen_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in generated_data. "
+            "This is an internal error; please report it."
+        )
+    if recon_df is not None and not recon_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in reconstructed_data. "
+            "This is an internal error; please report it."
+        )
+
+    loss_df = _build_loss_df(trained.log_dict, modelname)
+
+    metadata = {
+        "model": model,
+        "modelname": modelname,
+        "dataname": dataname,
+        "num_epochs": num_epochs,
+        "epochs_trained": trained.epochs_trained,
+        "seed": random_seed,
+        "kl_weight": kl_weight,
+        "input_shape": (n_samples, len(colnames)),
+        "early_stop": early_stop,
+        "early_stop_patience": early_stop_num,
+        "generated_labels": gen_labels,
+        "reconstructed_labels": recon_labels,
+        "apply_log": apply_log,
+        "arch_params": {
+            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
+        },
+    }
+
+    result = SyngResult(
+        generated_data=gen_df,
+        loss=loss_df,
+        reconstructed_data=recon_df,
+        original_data=data_pd.copy(),
+        model_state=trained.model_state,
+        metadata=metadata,
+    )
+
+    if output_dir is not None:
+        result.save(output_dir)
+
+    return result
+
+
+def _transfer_target_pilot(
+    *,
+    target_data: pd.DataFrame | str | Path,
+    target_name: str,
+    target_groups: pd.Series | np.ndarray | None,
+    pilot_size: list[int],
+    model: str,
+    apply_log: bool,
+    batch_frac: float,
+    learning_rate: float,
+    epoch: int | None,
+    early_stop_patience: int | None,
+    off_aug: str | None,
+    AE_head_num: int,
+    Gaussian_head_num: int,
+    random_seed: int,
+    model_state: dict,
+    output_dir: str | Path | None,
+    verbose: int | str,
+) -> PilotResult:
+    """Run the target-phase pilot-study path for transfer learning.
+
+    Mirrors the logic of :func:`pilot_study` but accepts a pre-trained
+    ``model_state`` dict for in-memory transfer, avoiding the need for
+    file-based model handoff.
+    """
+    verbose_level = _resolve_verbose(verbose)
+
+    df, bundled_groups = resolve_data(target_data)
+    _validate_feature_data(df)
+    dataname = target_name
+
+    data_pd = df
+    colnames = list(data_pd.columns)
+    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
+    n_samples = oridata.shape[0]
+
+    effective_groups = _resolve_effective_groups(
+        target_groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="target_groups",
+    )
+
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
+
+    modelname, kl_weight = _parse_model_spec(model)
+
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
+
+    repli = 5
+    runs: dict[tuple[int, int], SyngResult] = {}
+
+    for n_pilot in pilot_size:
+        for rand_pilot in range(1, 6):
+            rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
+                dataset=oridata,
+                labels=orilabels,
+                blurlabels=oriblurlabels,
+                n_pilot=n_pilot,
+                seednum=rand_pilot,
+            )
+
+            if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
+                rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
+
+            if (len(torch.unique(orilabels)) > 1) and (
+                int(sum(orilabels == 0)) != int(sum(orilabels == 1))
+            ):
+                effective_new_size: int | list[int] = [
+                    int(sum(orilabels == 0)),
+                    int(sum(orilabels == 1)),
+                    repli,
+                ]
+            else:
+                effective_new_size = repli * n_pilot
+
+            if off_aug == "Gaussian_head":
+                rawdata, rawlabels = Gaussian_aug(
+                    rawdata, rawlabels, multiplier=[Gaussian_head_num]
+                )
+
+            if off_aug == "AE_head":
+                feed_data, feed_labels = training_iter(
+                    iter_times=AE_head_num,
+                    rawdata=rawdata,
+                    rawlabels=rawlabels,
+                    random_seed=random_seed,
+                    modelname="AE",
+                    num_epochs=1000,
+                    batch_size=round(rawdata.shape[0] * 0.1),
+                    learning_rate=0.0005,
+                    early_stop=False,
+                    early_stop_num=30,
+                    kl_weight=1,
+                    loss_fn="MSE",
+                    replace=True,
+                    verbose=verbose_level,
+                )
+                rawdata = feed_data
+                rawlabels = feed_labels
+
+            batch_size = max(1, round(rawdata.shape[0] * batch_frac))
+
+            trained = _train_model(
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                modelname=modelname,
+                batch_size=batch_size,
+                random_seed=random_seed,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                kl_weight=kl_weight,
+                early_stop=early_stop,
+                early_stop_num=early_stop_num,
+                model_state=model_state,
+                batch_frac=batch_frac,
+                verbose=verbose_level,
+            )
+            gen_data, recon_data = _infer_from_trained(
+                trained,
+                new_size=effective_new_size,
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                batch_size=batch_size,
+            )
+
+            gen_np = gen_data.detach().numpy()
+            gen_labels = None
+            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+                gen_labels = pd.Series(gen_np[:, -1], name="label")
+                gen_np = gen_np[:, :-1]
+            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
+
+            recon_df = None
+            recon_labels = None
+            if recon_data is not None:
+                recon_np = recon_data.detach().numpy()
+                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+                    recon_labels = pd.Series(recon_np[:, -1], name="label")
+                    recon_np = recon_np[:, :-1]
+                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+            if apply_log:
+                gen_df = inverse_log2(gen_df)
+                if recon_df is not None:
+                    recon_df = inverse_log2(recon_df)
+
+            if not gen_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in generated_data. "
+                    "This is an internal error; please report it."
+                )
+            if recon_df is not None and not recon_df.columns.tolist() == colnames:
+                raise RuntimeError(
+                    "Column order mismatch in reconstructed_data. "
+                    "This is an internal error; please report it."
+                )
+
+            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
+            loss_df = _build_loss_df(trained.log_dict, modelname)
+
+            run_metadata = {
+                "model": model,
+                "modelname": modelname,
+                "dataname": dataname,
+                "num_epochs": num_epochs,
+                "epochs_trained": trained.epochs_trained,
+                "seed": random_seed,
+                "kl_weight": kl_weight,
+                "pilot_size": n_pilot,
+                "draw": rand_pilot,
+                "pilot_indices": pilot_indices.tolist(),
+                "input_shape": (n_samples, len(colnames)),
+                "early_stop": early_stop,
+                "early_stop_patience": early_stop_num,
+                "generated_labels": gen_labels,
+                "reconstructed_labels": recon_labels,
+                "apply_log": apply_log,
+                "arch_params": {
+                    k: v
+                    for k, v in trained.arch_params.items()
+                    if not k.startswith("_")
+                },
+            }
+
+            runs[(n_pilot, rand_pilot)] = SyngResult(
+                generated_data=gen_df,
+                loss=loss_df,
+                reconstructed_data=recon_df,
+                original_data=pilot_original,
+                model_state=trained.model_state,
+                metadata=run_metadata,
+            )
+
+    pilot_result = PilotResult(
+        runs=runs,
+        original_data=data_pd.copy(),
+        metadata={
+            "model": model,
+            "modelname": modelname,
+            "dataname": dataname,
+            "pilot_sizes": pilot_size,
+            "num_epochs": num_epochs,
+            "seed": random_seed,
+        },
+    )
+
+    if output_dir is not None:
+        pilot_result.save(output_dir)
+
+    return pilot_result
+
+
 def transfer(
     source_data: pd.DataFrame | str | Path,
     target_data: pd.DataFrame | str | Path,
@@ -1043,9 +1448,9 @@ def transfer(
 ) -> SyngResult | PilotResult:
     """Train on source data, then fine-tune and generate on target data.
 
-    The model is first trained on *source_data* and its state is saved.
-    Then the saved state is loaded as a pre-trained model and fine-tuned
-    on *target_data*.
+    The model is first trained on *source_data* and its state is kept
+    in-memory, then fine-tuned on *target_data* using internal
+    orchestration helpers (no file-based handoff).
 
     This replaces the legacy ``TransferExperiment`` function.
 
@@ -1064,8 +1469,9 @@ def transfer(
     target_groups : pd.Series, np.ndarray, or None
         Optional binary groups for the target dataset.
     pilot_size : list[int] or None
-        If set, uses ``pilot_study`` for the target phase.  Otherwise
-        uses ``generate``.
+        If set, target fine-tuning follows the internal pilot-study path.
+        Otherwise, target fine-tuning follows the internal single-run
+        generation path.
     source_size : int
         Number of samples to generate during pre-training.
     new_size : int
@@ -1104,30 +1510,14 @@ def transfer(
         ``SyngResult`` when ``pilot_size`` is ``None``, otherwise
         ``PilotResult``.
     """
-    import tempfile
-
     fromname = derive_dataname(source_data, source_name)
     toname = derive_dataname(target_data, target_name)
 
-    # We need a temp file to pass the model state between the two phases.
-    # If output_dir is set, use a Transfer subdir; otherwise use a temp dir.
-    if output_dir is not None:
-        transfer_dir = Path(output_dir) / "Transfer"
-        transfer_dir.mkdir(parents=True, exist_ok=True)
-        save_model_path = str(transfer_dir / f"{toname}_from{fromname}_{model}.pt")
-        _cleanup_transfer = False
-    else:
-        _transfer_tmpdir = tempfile.mkdtemp()
-        save_model_path = str(
-            Path(_transfer_tmpdir) / f"{toname}_from{fromname}_{model}.pt"
-        )
-        _cleanup_transfer = True
-
-    # --- 1. pre-train on source ------------------------------------------
-    _source_result = generate(
-        data=source_data,
-        name=fromname,
-        groups=source_groups,
+    # --- 1. Pre-train on source ------------------------------------------
+    _source_result = _transfer_target_generate(
+        target_data=source_data,
+        target_name=fromname,
+        target_groups=source_groups,
         new_size=[source_size],
         model=model,
         apply_log=apply_log,
@@ -1138,24 +1528,31 @@ def transfer(
         off_aug=off_aug,
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
-        pre_model=None,
         random_seed=random_seed,
+        model_state=None,
         output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
         verbose=verbose,
     )
 
-    # Persist source model state to disk for the target phase to load
-    # via pre_model (will be replaced with in-memory handoff in a future
-    # refactor phase).
-    torch.save(_source_result.model_state, save_model_path)
+    # Capture source model state in-memory for target-phase fine-tuning
+    source_model_state = _source_result.model_state
 
-    # --- 2. fine-tune on target ------------------------------------------
+    # Optionally persist source model state to Transfer subdir
+    if output_dir is not None:
+        transfer_dir = Path(output_dir) / "Transfer"
+        transfer_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            source_model_state,
+            str(transfer_dir / f"{toname}_from{fromname}_{model}.pt"),
+        )
+
+    # --- 2. Fine-tune on target ------------------------------------------
     if pilot_size is not None:
-        result = pilot_study(
-            data=target_data,
+        result = _transfer_target_pilot(
+            target_data=target_data,
+            target_name=toname,
+            target_groups=target_groups,
             pilot_size=pilot_size,
-            name=toname,
-            groups=target_groups,
             model=model,
             apply_log=apply_log,
             batch_frac=batch_frac,
@@ -1165,16 +1562,16 @@ def transfer(
             off_aug=off_aug,
             AE_head_num=AE_head_num,
             Gaussian_head_num=Gaussian_head_num,
-            pre_model=save_model_path,
             random_seed=random_seed,
+            model_state=source_model_state,
             output_dir=output_dir,
             verbose=verbose,
         )
     else:
-        result = generate(
-            data=target_data,
-            name=toname,
-            groups=target_groups,
+        result = _transfer_target_generate(
+            target_data=target_data,
+            target_name=toname,
+            target_groups=target_groups,
             new_size=new_size,
             model=model,
             apply_log=apply_log,
@@ -1185,16 +1582,10 @@ def transfer(
             off_aug=off_aug,
             AE_head_num=AE_head_num,
             Gaussian_head_num=Gaussian_head_num,
-            pre_model=save_model_path,
             random_seed=random_seed,
+            model_state=source_model_state,
             output_dir=output_dir,
             verbose=verbose,
         )
-
-    # Cleanup temp dir if we created one
-    if _cleanup_transfer:
-        import shutil
-
-        shutil.rmtree(_transfer_tmpdir, ignore_errors=True)
 
     return result

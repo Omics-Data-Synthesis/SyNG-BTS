@@ -34,7 +34,7 @@ def run_generation(
     Parameters
     ----------
     trained : TrainedModel
-        Training-only output from a v2 training wrapper.
+        Output from a training wrapper.
     num_samples : int or list[int]
         Number of samples to generate.  For CVAE with multiple groups,
         pass ``[n_group_0, n_group_1, ..., replicate_factor]``.
@@ -94,7 +94,7 @@ def run_reconstruction(
     Parameters
     ----------
     trained : TrainedModel
-        Training-only output from a v2 AE training wrapper.
+        Output from a trained AE-family wrapper.
     data_loader : DataLoader
         DataLoader yielding ``(features, labels)`` tuples.
     n_features : int

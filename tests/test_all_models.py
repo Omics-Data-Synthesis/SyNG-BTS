@@ -1,22 +1,22 @@
 """
-Phase 1 parity tests: legacy vs v2 training path comparison.
+Validation tests for all model families.
 
-These tests verify that the v2 training wrappers (training-only, with
-separate inference via ``_infer_from_trained``) produce structurally
-equivalent outputs to the legacy ``training_AEs``, ``training_GANs``,
-and ``training_flows`` orchestrators.
+These tests verify that the training wrappers (training-only, with
+separate inference via the unified dispatcher) produce correct
+results for all model families and variants.
 
-Parity criteria (tolerant, not strict numerical equality):
-- Schema parity: same columns, shapes, presence/absence of reconstruction.
-- Bounded loss deltas: absolute/relative thresholds on loss values.
-- Bounded summary-stat deltas for generated data (means/stds).
-
-All tests use very few epochs (2) for speed.
+Coverage:
+  - Smoke tests for each model family.
+  - Inference dispatcher and metadata enrichment tests.
+  - Model reconstruction parity: reloading ``state_dict`` into a
+    freshly constructed model yields equivalent inference outputs.
+  - Metadata schema and required-key assertions.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from syng_bts import generate
 from syng_bts.helper_training import (
@@ -37,6 +37,22 @@ SEED = 42
 NUM_FEATURES = 50
 NUM_SAMPLES = 20
 
+# All model specs to validate in comprehensive sweeps
+ALL_MODEL_SPECS = [
+    # (model_string, has_reconstruction, needs_groups)
+    ("AE", True, False),
+    ("VAE1-10", True, False),
+    ("CVAE", True, True),
+    ("GAN", False, False),
+    ("WGAN", False, False),
+    ("WGANGP", False, False),
+    ("maf", False, False),
+    ("realnvp", False, False),
+    ("glow", False, False),
+    ("maf-split", False, False),
+    ("maf-split-glow", False, False),
+]
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -54,89 +70,53 @@ def sample_data():
 
 
 # ---------------------------------------------------------------------------
-# Helper: run generate with both paths & compare
+# Helper: assert metadata schema
 # ---------------------------------------------------------------------------
 
 
-def _run_both_paths(
-    sample_data: pd.DataFrame,
-    model: str,
-    **extra_kwargs,
-) -> tuple[SyngResult, SyngResult]:
-    """Run generate() with legacy and v2 paths, return both results."""
-    common = {
-        "data": sample_data,
-        "model": model,
-        "epoch": FAST_EPOCHS,
-        "batch_frac": BATCH_FRAC,
-        "learning_rate": LR,
-        "random_seed": SEED,
-        "verbose": "silent",
-        "apply_log": True,
-    }
-    common.update(extra_kwargs)
+def _assert_metadata_schema(result: SyngResult, *, model_str: str):
+    """Assert metadata has all required keys and correct types.
 
-    legacy = generate(**common, _use_v2=False)
-    v2 = generate(**common, _use_v2=True)
-    return legacy, v2
-
-
-def _assert_schema_parity(legacy: SyngResult, v2: SyngResult, has_recon: bool):
-    """Assert structural equivalence between legacy and v2 results."""
-    # Generated data: same columns and number of rows
-    assert list(legacy.generated_data.columns) == list(v2.generated_data.columns)
-    assert legacy.generated_data.shape[0] == v2.generated_data.shape[0]
-
-    # Reconstruction presence
-    if has_recon:
-        assert legacy.reconstructed_data is not None
-        assert v2.reconstructed_data is not None
-        assert list(legacy.reconstructed_data.columns) == list(
-            v2.reconstructed_data.columns
-        )
-    else:
-        assert legacy.reconstructed_data is None
-        assert v2.reconstructed_data is None
-
-    # Loss: same columns
-    assert list(legacy.loss.columns) == list(v2.loss.columns)
-
-    # Metadata: allows one intentional v2-only key (arch_params)
-    legacy_keys = set(legacy.metadata.keys())
-    v2_keys = set(v2.metadata.keys())
-    assert v2_keys == (legacy_keys | {"arch_params"})
-    assert "arch_params" not in legacy.metadata
-    assert isinstance(v2.metadata.get("arch_params"), dict)
-
-
-def _assert_loss_bounded(legacy: SyngResult, v2: SyngResult, atol: float = 2.0):
-    """Assert that loss values are within a tolerance.
-
-    Because training paths use independent seeds/RNG state within the
-    v2 path (separate model init, random_split, etc.), we only check
-    that loss magnitudes are in the same ballpark.
+    Parameters
+    ----------
+    result : SyngResult
+    model_str : str
+        The model specification string (for validation).
     """
-    for col in legacy.loss.columns:
-        leg_mean = legacy.loss[col].mean()
-        v2_mean = v2.loss[col].mean()
-        # Both should be finite
-        assert np.isfinite(leg_mean), f"Legacy loss '{col}' is not finite"
-        assert np.isfinite(v2_mean), f"V2 loss '{col}' is not finite"
+    meta = result.metadata
+    required_keys = {
+        "model",
+        "modelname",
+        "dataname",
+        "num_epochs",
+        "epochs_trained",
+        "seed",
+        "kl_weight",
+        "input_shape",
+        "early_stop",
+        "early_stop_patience",
+        "apply_log",
+        "arch_params",
+    }
+    for key in required_keys:
+        assert key in meta, f"Missing required metadata key: {key!r}"
 
+    assert meta["model"] == model_str
+    assert isinstance(meta["epochs_trained"], int)
+    assert meta["epochs_trained"] > 0
+    assert isinstance(meta["input_shape"], (tuple, list))
+    assert len(meta["input_shape"]) == 2
+    assert isinstance(meta["apply_log"], bool)
 
-def _assert_generated_stats_bounded(
-    legacy: SyngResult,
-    v2: SyngResult,
-    mean_atol: float = 5.0,
-    std_atol: float = 5.0,
-):
-    """Assert generated data summary statistics are in the same ballpark."""
-    leg_means = legacy.generated_data.mean()
-    v2_means = v2.generated_data.mean()
-
-    # Mean of means should be similar (both finite)
-    assert np.isfinite(leg_means.mean()), "Legacy generated means not finite"
-    assert np.isfinite(v2_means.mean()), "V2 generated means not finite"
+    ap = meta["arch_params"]
+    assert isinstance(ap, dict)
+    assert "family" in ap
+    assert "modelname" in ap
+    # No private keys in public metadata
+    for key in ap:
+        assert not key.startswith("_"), (
+            f"Private key {key!r} leaked into metadata arch_params"
+        )
 
 
 # =========================================================================
@@ -217,121 +197,15 @@ class TestTrainedModel:
 
 
 # =========================================================================
-# AE family parity tests
+# Smoke tests — validate each model family produces valid results
 # =========================================================================
 
 
-class TestAEParity:
-    """Legacy vs v2 parity for AE family models."""
+class TestSmokeTests:
+    """Quick smoke tests that generate() produces valid results."""
 
-    @pytest.mark.slow
-    def test_ae_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="AE")
-        _assert_schema_parity(legacy, v2, has_recon=True)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_vae_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="VAE1-10")
-        _assert_schema_parity(legacy, v2, has_recon=True)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_cvae_parity(self, sample_data):
-        # CVAE needs groups — create 2 groups
-        groups = np.array([0] * 10 + [1] * 10)
-        legacy, v2 = _run_both_paths(sample_data, model="CVAE", groups=groups)
-        _assert_schema_parity(legacy, v2, has_recon=True)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-
-# =========================================================================
-# GAN family parity tests
-# =========================================================================
-
-
-class TestGANParity:
-    """Legacy vs v2 parity for GAN family models."""
-
-    @pytest.mark.slow
-    def test_gan_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="GAN")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_wgan_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="WGAN")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_wgangp_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="WGANGP")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-
-# =========================================================================
-# Flow family parity tests
-# =========================================================================
-
-
-class TestFlowParity:
-    """Legacy vs v2 parity for normalizing flow models."""
-
-    @pytest.mark.slow
-    def test_maf_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="maf")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_realnvp_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="realnvp")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_glow_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="glow")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_maf_split_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="maf-split")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-    @pytest.mark.slow
-    def test_maf_split_glow_parity(self, sample_data):
-        legacy, v2 = _run_both_paths(sample_data, model="maf-split-glow")
-        _assert_schema_parity(legacy, v2, has_recon=False)
-        _assert_loss_bounded(legacy, v2)
-        _assert_generated_stats_bounded(legacy, v2)
-
-
-# =========================================================================
-# v2-only smoke tests (fast, no legacy comparison needed)
-# =========================================================================
-
-
-class TestV2SmokeTests:
-    """Quick smoke tests that the v2 path produces valid results."""
-
-    def test_generate_v2_ae(self, sample_data):
-        """v2 path produces a valid SyngResult for AE."""
+    def test_generate_ae(self, sample_data):
+        """Produces a valid SyngResult for AE."""
         result = generate(
             data=sample_data,
             model="AE",
@@ -340,7 +214,6 @@ class TestV2SmokeTests:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert isinstance(result, SyngResult)
         assert result.generated_data.shape[0] > 0
@@ -350,8 +223,8 @@ class TestV2SmokeTests:
         assert result.model_state is not None
         assert result.metadata["epochs_trained"] > 0
 
-    def test_generate_v2_vae(self, sample_data):
-        """v2 path produces a valid SyngResult for VAE."""
+    def test_generate_vae(self, sample_data):
+        """Produces a valid SyngResult for VAE."""
         result = generate(
             data=sample_data,
             model="VAE1-10",
@@ -360,7 +233,6 @@ class TestV2SmokeTests:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert isinstance(result, SyngResult)
         assert result.generated_data.shape[1] == NUM_FEATURES
@@ -368,8 +240,8 @@ class TestV2SmokeTests:
         assert "kl" in result.loss.columns
         assert "recons" in result.loss.columns
 
-    def test_generate_v2_gan(self, sample_data):
-        """v2 path produces a valid SyngResult for GAN."""
+    def test_generate_gan(self, sample_data):
+        """Produces a valid SyngResult for GAN."""
         result = generate(
             data=sample_data,
             model="GAN",
@@ -378,7 +250,6 @@ class TestV2SmokeTests:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert isinstance(result, SyngResult)
         assert result.generated_data.shape[1] == NUM_FEATURES
@@ -386,8 +257,8 @@ class TestV2SmokeTests:
         assert "discriminator" in result.loss.columns
         assert "generator" in result.loss.columns
 
-    def test_generate_v2_maf(self, sample_data):
-        """v2 path produces a valid SyngResult for MAF flow."""
+    def test_generate_maf(self, sample_data):
+        """Produces a valid SyngResult for MAF flow."""
         result = generate(
             data=sample_data,
             model="maf",
@@ -396,15 +267,14 @@ class TestV2SmokeTests:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert isinstance(result, SyngResult)
         assert result.generated_data.shape[1] == NUM_FEATURES
         assert result.reconstructed_data is None
         assert "train_loss" in result.loss.columns
 
-    def test_generate_v2_metadata_has_arch_info(self, sample_data):
-        """v2 path captures model/epoch/seed metadata correctly."""
+    def test_generate_metadata_has_arch_info(self, sample_data):
+        """Captures model/epoch/seed metadata correctly."""
         result = generate(
             data=sample_data,
             model="VAE1-10",
@@ -413,31 +283,15 @@ class TestV2SmokeTests:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.metadata["model"] == "VAE1-10"
         assert result.metadata["modelname"] == "VAE"
         assert result.metadata["seed"] == SEED
         assert result.metadata["num_epochs"] == FAST_EPOCHS
 
-    def test_legacy_path_unchanged(self, sample_data):
-        """Default (legacy) path still works identically."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[0] > 0
-        assert result.reconstructed_data is not None
-
 
 # =========================================================================
-# Phase 2: Inference dispatcher tests
+# Inference dispatcher tests
 # =========================================================================
 
 
@@ -454,7 +308,6 @@ class TestInferenceDispatcher:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.generated_data.shape[0] > 0
         assert result.generated_data.shape[1] == NUM_FEATURES
@@ -469,7 +322,6 @@ class TestInferenceDispatcher:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.generated_data.shape[0] > 0
         assert result.reconstructed_data is None
@@ -484,7 +336,6 @@ class TestInferenceDispatcher:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.generated_data.shape[0] > 0
         assert result.reconstructed_data is None
@@ -499,7 +350,6 @@ class TestInferenceDispatcher:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.reconstructed_data is not None
         assert result.reconstructed_data.shape[1] == NUM_FEATURES
@@ -514,7 +364,6 @@ class TestInferenceDispatcher:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert result.reconstructed_data is not None
 
@@ -556,15 +405,15 @@ class TestInferenceDispatcher:
 
 
 # =========================================================================
-# Phase 2: Metadata enrichment tests
+# Metadata enrichment tests
 # =========================================================================
 
 
 class TestMetadataEnrichment:
-    """Tests that v2 path enriches metadata with arch_params and apply_log."""
+    """Tests that metadata includes arch_params and apply_log."""
 
-    def test_v2_metadata_has_arch_params(self, sample_data):
-        """v2 path includes arch_params in metadata."""
+    def test_metadata_has_arch_params(self, sample_data):
+        """Metadata includes arch_params."""
         result = generate(
             data=sample_data,
             model="VAE1-10",
@@ -573,7 +422,6 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         assert "arch_params" in result.metadata
         ap = result.metadata["arch_params"]
@@ -582,8 +430,8 @@ class TestMetadataEnrichment:
         assert "num_features" in ap
         assert "latent_size" in ap
 
-    def test_v2_metadata_has_apply_log(self, sample_data):
-        """v2 path includes apply_log in metadata."""
+    def test_metadata_has_apply_log(self, sample_data):
+        """Metadata includes apply_log."""
         result = generate(
             data=sample_data,
             model="AE",
@@ -593,13 +441,12 @@ class TestMetadataEnrichment:
             random_seed=SEED,
             verbose="silent",
             apply_log=True,
-            _use_v2=True,
         )
         assert "apply_log" in result.metadata
         assert result.metadata["apply_log"] is True
 
-    def test_v2_metadata_apply_log_false(self, sample_data):
-        """v2 path preserves apply_log=False in metadata."""
+    def test_metadata_apply_log_false(self, sample_data):
+        """Metadata preserves apply_log=False."""
         result = generate(
             data=sample_data,
             model="AE",
@@ -609,11 +456,10 @@ class TestMetadataEnrichment:
             random_seed=SEED,
             verbose="silent",
             apply_log=False,
-            _use_v2=True,
         )
         assert result.metadata["apply_log"] is False
 
-    def test_v2_arch_params_excludes_private_keys(self, sample_data):
+    def test_arch_params_excludes_private_keys(self, sample_data):
         """Private keys (like _train_random_seed) are stripped from arch_params."""
         result = generate(
             data=sample_data,
@@ -623,14 +469,13 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         ap = result.metadata["arch_params"]
         for key in ap:
             assert not key.startswith("_"), f"Private key {key!r} leaked into metadata"
 
-    def test_v2_gan_metadata_arch_params(self, sample_data):
-        """GAN v2 path includes correct arch_params."""
+    def test_gan_metadata_arch_params(self, sample_data):
+        """GAN metadata includes correct arch_params."""
         result = generate(
             data=sample_data,
             model="GAN",
@@ -639,15 +484,14 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         ap = result.metadata["arch_params"]
         assert ap["family"] == "gan"
         assert ap["modelname"] == "GAN"
         assert "latent_dim" in ap
 
-    def test_v2_flow_metadata_arch_params(self, sample_data):
-        """Flow v2 path includes correct arch_params."""
+    def test_flow_metadata_arch_params(self, sample_data):
+        """Flow metadata includes correct arch_params."""
         result = generate(
             data=sample_data,
             model="maf",
@@ -656,7 +500,6 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=True,
         )
         ap = result.metadata["arch_params"]
         assert ap["family"] == "flow"
@@ -665,8 +508,339 @@ class TestMetadataEnrichment:
         assert "num_blocks" in ap
         assert "num_hidden" in ap
 
-    def test_legacy_metadata_no_arch_params(self, sample_data):
-        """Legacy path does NOT include arch_params (added only in v2)."""
+
+# =========================================================================
+# Model reconstruction parity (state_dict reload)
+# =========================================================================
+
+
+class TestModelReconstructionParity:
+    """Verify original trained model vs rebuilt-model inference parity.
+
+    These tests validate that a model rebuilt from ``arch_params`` and
+    ``model_state`` produces parity-equivalent outputs to the originally
+    trained model object from ``TrainedModel.model``.
+    """
+
+    @staticmethod
+    def _rebuild_ae_model(arch_params, model_state):
+        """Rebuild an AE/VAE/CVAE model from arch_params + state_dict."""
+        from syng_bts.helper_models import AE, CVAE, VAE
+
+        modelname = arch_params["modelname"]
+        num_features = arch_params["num_features"]
+        if modelname == "CVAE":
+            num_classes = arch_params["num_classes"]
+            model = CVAE(num_features, num_classes)
+        elif modelname == "VAE":
+            model = VAE(num_features)
+        elif modelname == "AE":
+            model = AE(num_features)
+        else:
+            raise ValueError(f"Unknown AE model: {modelname}")
+        model.load_state_dict(model_state)
+        model.eval()
+        return model
+
+    @staticmethod
+    def _rebuild_gan_model(arch_params, model_state):
+        """Rebuild a GAN model from arch_params + state_dict."""
+        from syng_bts.helper_models import GAN
+
+        num_features = arch_params["num_features"]
+        latent_dim = arch_params["latent_dim"]
+        model = GAN(num_features=num_features, latent_dim=latent_dim)
+        model.load_state_dict(model_state)
+        model.eval()
+        return model
+
+    @staticmethod
+    def _rebuild_flow_model(arch_params, model_state):
+        """Rebuild a flow model from arch_params + state_dict."""
+        import torch.nn as nn
+
+        from syng_bts import helper_train as ht
+
+        modelname = arch_params["modelname"]
+        num_inputs = arch_params["num_inputs"]
+        num_blocks = arch_params["num_blocks"]
+        num_hidden = arch_params["num_hidden"]
+        device = torch.device("cpu")
+
+        act = "tanh"
+        modules = []
+        if modelname == "glow":
+            mask = torch.arange(0, num_inputs) % 2
+            mask = mask.to(device).float()
+            for _ in range(num_blocks):
+                modules += [
+                    ht.BatchNormFlow(num_inputs),
+                    ht.LUInvertibleMM(num_inputs),
+                    ht.CouplingLayer(
+                        num_inputs,
+                        num_hidden,
+                        mask,
+                        num_cond_inputs=None,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                ]
+                mask = 1 - mask
+        elif modelname == "realnvp":
+            mask = torch.arange(0, num_inputs) % 2
+            mask = mask.to(device).float()
+            for _ in range(num_blocks):
+                modules += [
+                    ht.CouplingLayer(
+                        num_inputs,
+                        num_hidden,
+                        mask,
+                        num_cond_inputs=None,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                    ht.BatchNormFlow(num_inputs),
+                ]
+                mask = 1 - mask
+        elif modelname == "maf":
+            for _ in range(num_blocks):
+                modules += [
+                    ht.MADE(num_inputs, num_hidden, num_cond_inputs=None, act=act),
+                    ht.BatchNormFlow(num_inputs),
+                    ht.Reverse(num_inputs),
+                ]
+        elif modelname == "maf-split":
+            for _ in range(num_blocks):
+                modules += [
+                    ht.MADESplit(
+                        num_inputs,
+                        num_hidden,
+                        num_cond_inputs=None,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                    ht.BatchNormFlow(num_inputs),
+                    ht.Reverse(num_inputs),
+                ]
+        elif modelname == "maf-split-glow":
+            for _ in range(num_blocks):
+                modules += [
+                    ht.MADESplit(
+                        num_inputs,
+                        num_hidden,
+                        num_cond_inputs=None,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                    ht.BatchNormFlow(num_inputs),
+                    ht.InvertibleMM(num_inputs),
+                ]
+        else:
+            raise ValueError(f"Unknown flow model: {modelname}")
+
+        model = ht.FlowSequential(*modules)
+        for module in model.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.orthogonal_(module.weight)
+                if hasattr(module, "bias") and module.bias is not None:
+                    module.bias.data.fill_(0)
+
+        model.load_state_dict(model_state)
+        model.num_inputs = num_inputs
+        model.eval()
+        return model
+
+    @staticmethod
+    def _train_test_model(sample_data, model: str, *, groups=None) -> TrainedModel:
+        """Train a model and return TrainedModel for direct parity checks."""
+        from syng_bts.experiments import _parse_model_spec, _train_model
+        from syng_bts.helper_utils import create_labels, preprocessinglog2
+
+        oridata = torch.from_numpy(sample_data.to_numpy().copy()).to(torch.float32)
+        oridata = preprocessinglog2(oridata)
+        n_samples = oridata.shape[0]
+
+        orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
+        modelname, kl_weight = _parse_model_spec(model)
+
+        rawdata = oridata
+        rawlabels = orilabels
+        if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
+            rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
+
+        batch_size = max(1, round(rawdata.shape[0] * BATCH_FRAC))
+        return _train_model(
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            modelname=modelname,
+            batch_size=batch_size,
+            random_seed=SEED,
+            num_epochs=FAST_EPOCHS,
+            learning_rate=LR,
+            kl_weight=kl_weight,
+            val_ratio=0.2,
+            early_stop=False,
+            early_stop_num=30,
+            pre_model=None,
+            save_model=None,
+            cap=False,
+            loss_fn="MSE",
+            use_scheduler=False,
+            step_size=10,
+            gamma=0.5,
+            batch_frac=BATCH_FRAC,
+            verbose=0,
+        )
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model", ["AE", "VAE1-10"])
+    @pytest.mark.slow
+    def test_ae_family_original_vs_rebuilt_generation_parity(self, sample_data, model):
+        """AE/VAE: original trained model and rebuilt model generate identically."""
+        from syng_bts.inference import run_generation
+
+        trained_original = self._train_test_model(sample_data, model)
+        ap = trained_original.arch_params
+        rebuilt_model = self._rebuild_ae_model(ap, trained_original.model_state)
+        trained_rebuilt = TrainedModel(
+            model=rebuilt_model,
+            model_state=trained_original.model_state,
+            arch_params=ap,
+            log_dict={},
+            epochs_trained=0,
+        )
+
+        torch.manual_seed(99)
+        gen_original = run_generation(trained_original, num_samples=50)
+        torch.manual_seed(99)
+        gen_rebuilt = run_generation(trained_rebuilt, num_samples=50)
+
+        assert gen_original.shape == gen_rebuilt.shape
+        assert torch.allclose(gen_original, gen_rebuilt)
+        assert torch.isfinite(gen_original).all()
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model", ["GAN", "WGAN", "WGANGP"])
+    def test_gan_family_original_vs_rebuilt_generation_parity(self, sample_data, model):
+        """GAN variants: original trained model and rebuilt model generate identically."""
+        from syng_bts.inference import run_generation
+
+        trained_original = self._train_test_model(sample_data, model)
+        ap = trained_original.arch_params
+        rebuilt_model = self._rebuild_gan_model(ap, trained_original.model_state)
+        trained_rebuilt = TrainedModel(
+            model=rebuilt_model,
+            model_state=trained_original.model_state,
+            arch_params=ap,
+            log_dict={},
+            epochs_trained=0,
+        )
+
+        torch.manual_seed(99)
+        gen_original = run_generation(trained_original, num_samples=50)
+        torch.manual_seed(99)
+        gen_rebuilt = run_generation(trained_rebuilt, num_samples=50)
+
+        assert gen_original.shape == gen_rebuilt.shape
+        assert torch.allclose(gen_original, gen_rebuilt)
+        assert torch.isfinite(gen_original).all()
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "model", ["maf", "realnvp", "glow", "maf-split", "maf-split-glow"]
+    )
+    def test_flow_family_original_vs_rebuilt_generation_parity(
+        self, sample_data, model
+    ):
+        """Flow variants: original trained model and rebuilt model generate identically."""
+        from syng_bts.inference import run_generation
+
+        if model == "glow":
+            pytest.xfail(
+                "glow reconstruction from state_dict is not parity-stable yet: "
+                "LUInvertibleMM stores critical tensors (e.g., P/sign_S) outside "
+                "the serialized state"
+            )
+
+        trained_original = self._train_test_model(sample_data, model)
+        ap = trained_original.arch_params
+        rebuilt_model = self._rebuild_flow_model(ap, trained_original.model_state)
+        trained_rebuilt = TrainedModel(
+            model=rebuilt_model,
+            model_state=trained_original.model_state,
+            arch_params=ap,
+            log_dict={},
+            epochs_trained=0,
+        )
+
+        torch.manual_seed(99)
+        gen_original = run_generation(trained_original, num_samples=50)
+        torch.manual_seed(99)
+        gen_rebuilt = run_generation(trained_rebuilt, num_samples=50)
+
+        assert gen_original.shape == gen_rebuilt.shape
+        assert torch.allclose(gen_original, gen_rebuilt)
+        assert torch.isfinite(gen_original).all()
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("model", ["AE", "VAE1-10"])
+    def test_ae_family_original_vs_rebuilt_reconstruction_parity(
+        self, sample_data, model
+    ):
+        """AE/VAE: original trained model and rebuilt model reconstruct identically."""
+        from torch.utils.data import DataLoader, TensorDataset
+
+        from syng_bts.helper_utils import preprocessinglog2
+        from syng_bts.inference import run_reconstruction
+
+        trained_original = self._train_test_model(sample_data, model)
+        ap = trained_original.arch_params
+        rebuilt_model = self._rebuild_ae_model(ap, trained_original.model_state)
+        trained_rebuilt = TrainedModel(
+            model=rebuilt_model,
+            model_state=trained_original.model_state,
+            arch_params=ap,
+            log_dict={},
+            epochs_trained=0,
+        )
+
+        # Build a small deterministic data loader
+        oridata = torch.from_numpy(sample_data.to_numpy().copy()).to(torch.float32)
+        oridata = preprocessinglog2(oridata)
+        labels = torch.zeros(oridata.shape[0], 1)
+        loader = DataLoader(
+            TensorDataset(oridata, labels),
+            batch_size=oridata.shape[0],
+            shuffle=False,
+            drop_last=False,
+        )
+
+        torch.manual_seed(1234)
+        recon_original, _ = run_reconstruction(
+            trained_original, loader, oridata.shape[1]
+        )
+        torch.manual_seed(1234)
+        recon_rebuilt, _ = run_reconstruction(trained_rebuilt, loader, oridata.shape[1])
+
+        assert recon_original.shape == recon_rebuilt.shape
+        assert torch.allclose(recon_original, recon_rebuilt)
+        assert torch.isfinite(recon_original).all()
+
+
+# =========================================================================
+# Metadata required keys and schema validation
+# =========================================================================
+
+
+class TestMetadataSchemaValidation:
+    """Comprehensive metadata schema checks for all model families.
+
+    Ensures required keys are present, types are correct, and
+    arch_params schema matches the model family.
+    """
+
+    def test_ae_metadata_schema(self, sample_data):
+        """AE metadata has correct schema."""
         result = generate(
             data=sample_data,
             model="AE",
@@ -675,6 +849,87 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            _use_v2=False,
         )
-        assert "arch_params" not in result.metadata
+        _assert_metadata_schema(result, model_str="AE")
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "ae"
+        assert ap["modelname"] == "AE"
+        assert "num_features" in ap
+        assert "latent_size" in ap
+        assert ap["latent_size"] == 64  # AE uses 64
+
+    def test_vae_metadata_schema(self, sample_data):
+        """VAE metadata has correct schema."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+        _assert_metadata_schema(result, model_str="VAE1-10")
+        ap = result.metadata["arch_params"]
+        assert ap["latent_size"] == 32  # VAE uses 32
+
+    def test_gan_metadata_schema(self, sample_data):
+        """GAN metadata has correct schema."""
+        result = generate(
+            data=sample_data,
+            model="GAN",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+        _assert_metadata_schema(result, model_str="GAN")
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "gan"
+        assert "latent_dim" in ap
+        assert ap["latent_dim"] == 32
+
+    def test_wgangp_metadata_schema(self, sample_data):
+        """WGANGP metadata has correct schema."""
+        result = generate(
+            data=sample_data,
+            model="WGANGP",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+        _assert_metadata_schema(result, model_str="WGANGP")
+
+    def test_maf_metadata_schema(self, sample_data):
+        """MAF metadata has correct schema."""
+        result = generate(
+            data=sample_data,
+            model="maf",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+        _assert_metadata_schema(result, model_str="maf")
+        ap = result.metadata["arch_params"]
+        assert ap["family"] == "flow"
+        assert "num_inputs" in ap
+        assert "num_blocks" in ap
+        assert "num_hidden" in ap
+
+    def test_glow_metadata_schema(self, sample_data):
+        """Glow metadata has correct schema."""
+        result = generate(
+            data=sample_data,
+            model="glow",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=SEED,
+            verbose="silent",
+        )
+        _assert_metadata_schema(result, model_str="glow")

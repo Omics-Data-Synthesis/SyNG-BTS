@@ -22,7 +22,7 @@ from syng_bts.experiments import (
     _parse_model_spec,
     _resolve_early_stopping_config,
 )
-from syng_bts.helper_training import TrainOutput
+from syng_bts.helper_training import TrainedModel
 from syng_bts.result import PilotResult, SyngResult
 
 # ---------------------------------------------------------------------------
@@ -637,23 +637,36 @@ class TestGenerate:
         assert result.metadata["epochs_trained"] <= result.metadata["num_epochs"]
 
     def test_epochs_trained_uses_training_output_value(self, sample_data, monkeypatch):
+        import torch.nn as nn
+
         import syng_bts.experiments as exp
 
-        def fake_training_aes(*args, **kwargs):
-            generated = torch.zeros((5, NUM_FEATURES), dtype=torch.float32)
-            reconstructed = torch.zeros((10, NUM_FEATURES), dtype=torch.float32)
-            return TrainOutput(
+        fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
+
+        def fake_train_model(*args, **kwargs):
+            return TrainedModel(
+                model=fake_model,
+                model_state=fake_model.state_dict(),
+                arch_params={
+                    "family": "ae",
+                    "modelname": "AE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 64,
+                },
                 log_dict={
                     "train_loss_per_batch": [1.0],
                     "val_loss_per_batch": [1.0],
                 },
-                generated_data=generated,
-                reconstructed_data=reconstructed,
-                model_state={"w": torch.tensor([1.0])},
                 epochs_trained=2,
             )
 
-        monkeypatch.setattr(exp, "training_AEs", fake_training_aes)
+        def fake_infer(trained, *, new_size, rawdata, rawlabels, batch_size, cap=False):
+            gen = torch.zeros((5, NUM_FEATURES), dtype=torch.float32)
+            recon = torch.zeros((10, NUM_FEATURES), dtype=torch.float32)
+            return gen, recon
+
+        monkeypatch.setattr(exp, "_train_model", fake_train_model)
+        monkeypatch.setattr(exp, "_infer_from_trained", fake_infer)
 
         result = generate(
             data=sample_data,

@@ -21,11 +21,8 @@ from .helper_train import _resolve_verbose
 from .helper_training import (
     TrainedModel,
     training_AEs,
-    training_AEs_v2,
     training_flows,
-    training_flows_v2,
     training_GANs,
-    training_GANs_v2,
     training_iter,
 )
 from .helper_utils import (
@@ -64,7 +61,7 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
     Parameters
     ----------
     log_dict : dict
-        Raw loss series as returned by ``TrainOutput.log_dict``.
+        Raw loss series as returned by ``TrainedModel.log_dict``.
     modelname : str
         The short model name (``"AE"``, ``"VAE"``, ``"CVAE"``, ``"GAN"``,
         ``"WGAN"``, ``"WGANGP"``, ``"maf"``, ``"glow"``, ``"realnvp"``, etc.).
@@ -106,11 +103,12 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: v2 training dispatch + TrainedModel → TrainOutput bridge
+# ---------------------------------------------------------------------------
+# Training dispatch
 # ---------------------------------------------------------------------------
 
 
-def _train_v2(
+def _train_model(
     rawdata: torch.Tensor,
     rawlabels: torch.Tensor,
     *,
@@ -133,7 +131,7 @@ def _train_v2(
     batch_frac: float = 0.1,
     verbose=1,
 ) -> TrainedModel:
-    """Dispatch to the appropriate v2 training wrapper.
+    """Dispatch to the appropriate training wrapper.
 
     Returns
     -------
@@ -141,7 +139,7 @@ def _train_v2(
         Training-only output (no generation/reconstruction).
     """
     if "GAN" in modelname:
-        return training_GANs_v2(
+        return training_GANs(
             rawdata=rawdata,
             rawlabels=rawlabels,
             batch_size=batch_size,
@@ -156,7 +154,7 @@ def _train_v2(
             verbose=verbose,
         )
     elif "AE" in modelname:
-        trained = training_AEs_v2(
+        trained = training_AEs(
             rawdata=rawdata,
             rawlabels=rawlabels,
             batch_size=batch_size,
@@ -177,13 +175,12 @@ def _train_v2(
             gamma=gamma,
             verbose=verbose,
         )
-        # Phase 1 parity bridge: persist split controls to reproduce
-        # legacy reconstruction shape/path in _infer_from_trained.
+        # Persist split controls for reconstruction path
         trained.arch_params["_train_random_seed"] = random_seed
         trained.arch_params["_train_val_ratio"] = val_ratio
         return trained
     elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
-        return training_flows_v2(
+        return training_flows(
             rawdata=rawdata,
             batch_frac=batch_frac,
             valid_batch_frac=0.3,
@@ -200,7 +197,7 @@ def _train_v2(
             verbose=verbose,
         )
     else:
-        raise ValueError(f"Unsupported model for v2 training: {modelname!r}")
+        raise ValueError(f"Unsupported model: {modelname!r}")
 
 
 def _infer_from_trained(
@@ -453,7 +450,6 @@ def generate(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
-    _use_v2: bool = False,
 ) -> SyngResult:
     """Train a deep generative model and generate synthetic data.
 
@@ -620,113 +616,39 @@ def generate(
     # --- 9. Train --------------------------------------------------------
     batch_size = max(1, round(rawdata.shape[0] * batch_frac))
 
-    if _use_v2:
-        # --- Phase 1 v2 path: training-only, then separate inference ---
-        trained = _train_v2(
-            rawdata=rawdata,
-            rawlabels=rawlabels,
-            modelname=modelname,
-            batch_size=batch_size,
-            random_seed=random_seed,
-            num_epochs=num_epochs,
-            learning_rate=learning_rate,
-            kl_weight=kl_weight,
-            val_ratio=val_ratio,
-            early_stop=early_stop,
-            early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
-            cap=cap,
-            loss_fn="MSE",
-            use_scheduler=use_scheduler,
-            step_size=step_size,
-            gamma=gamma,
-            batch_frac=batch_frac,
-            verbose=verbose_level,
-        )
-        gen_data, recon_data = _infer_from_trained(
-            trained,
-            new_size=effective_new_size,
-            rawdata=rawdata,
-            rawlabels=rawlabels,
-            batch_size=batch_size,
-            cap=cap,
-        )
-
-        # Build a duck-type-compatible namespace for the rest of the pipeline
-        class _V2Out:
-            pass
-
-        train_out = _V2Out()
-        train_out.generated_data = gen_data  # type: ignore[attr-defined]
-        train_out.reconstructed_data = recon_data  # type: ignore[attr-defined]
-        train_out.model_state = trained.model_state  # type: ignore[attr-defined]
-        train_out.log_dict = trained.log_dict  # type: ignore[attr-defined]
-        train_out.epochs_trained = trained.epochs_trained  # type: ignore[attr-defined]
-    else:
-        # --- Legacy path (unchanged) ---
-        if "GAN" in modelname:
-            train_out = training_GANs(
-                rawdata=rawdata,
-                rawlabels=rawlabels,
-                batch_size=batch_size,
-                random_seed=random_seed,
-                modelname=modelname,
-                num_epochs=num_epochs,
-                learning_rate=learning_rate,
-                new_size=effective_new_size,
-                early_stop=early_stop,
-                early_stop_num=early_stop_num,
-                pre_model=pre_model,
-                save_model=save_model,
-                verbose=verbose_level,
-            )
-        elif "AE" in modelname:
-            train_out = training_AEs(
-                rawdata=rawdata,
-                rawlabels=rawlabels,
-                batch_size=batch_size,
-                random_seed=random_seed,
-                modelname=modelname,
-                num_epochs=num_epochs,
-                learning_rate=learning_rate,
-                val_ratio=val_ratio,
-                kl_weight=kl_weight,
-                early_stop=early_stop,
-                early_stop_num=early_stop_num,
-                pre_model=pre_model,
-                save_model=save_model,
-                cap=cap,
-                loss_fn="MSE",
-                new_size=effective_new_size,
-                use_scheduler=use_scheduler,
-                step_size=step_size,
-                gamma=gamma,
-                verbose=verbose_level,
-            )
-        elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
-            train_out = training_flows(
-                rawdata=rawdata,
-                batch_frac=batch_frac,
-                valid_batch_frac=0.3,
-                random_seed=random_seed,
-                modelname=modelname,
-                num_blocks=5,
-                num_epochs=num_epochs,
-                learning_rate=learning_rate,
-                new_size=effective_new_size,
-                num_hidden=226,
-                early_stop=early_stop,
-                early_stop_num=early_stop_num,
-                pre_model=pre_model,
-                save_model=save_model,
-                verbose=verbose_level,
-            )
-        else:
-            raise ValueError(f"Unsupported model: {model!r}")
+    trained = _train_model(
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        modelname=modelname,
+        batch_size=batch_size,
+        random_seed=random_seed,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        kl_weight=kl_weight,
+        val_ratio=val_ratio,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        pre_model=pre_model,
+        save_model=save_model,
+        cap=cap,
+        loss_fn="MSE",
+        use_scheduler=use_scheduler,
+        step_size=step_size,
+        gamma=gamma,
+        batch_frac=batch_frac,
+        verbose=verbose_level,
+    )
+    gen_data, recon_data = _infer_from_trained(
+        trained,
+        new_size=effective_new_size,
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+        batch_size=batch_size,
+        cap=cap,
+    )
 
     # --- 10. Assemble SyngResult -----------------------------------------
-    gen_np = train_out.generated_data.detach().numpy()
+    gen_np = gen_data.detach().numpy()
 
     # For CVAE, strip the appended label column — it is the conditioning
     # input, not a generated feature.  Store it in metadata instead.
@@ -739,8 +661,8 @@ def generate(
 
     recon_df = None
     recon_labels = None
-    if train_out.reconstructed_data is not None:
-        recon_np = train_out.reconstructed_data.detach().numpy()
+    if recon_data is not None:
+        recon_np = recon_data.detach().numpy()
 
         if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
             recon_labels = pd.Series(recon_np[:, -1], name="label")
@@ -767,14 +689,14 @@ def generate(
             "This is an internal error; please report it."
         )
 
-    loss_df = _build_loss_df(train_out.log_dict, modelname)
+    loss_df = _build_loss_df(trained.log_dict, modelname)
 
     metadata = {
         "model": model,
         "modelname": modelname,
         "dataname": dataname,
         "num_epochs": num_epochs,
-        "epochs_trained": train_out.epochs_trained,
+        "epochs_trained": trained.epochs_trained,
         "seed": random_seed,
         "kl_weight": kl_weight,
         "input_shape": (n_samples, len(colnames)),
@@ -783,20 +705,17 @@ def generate(
         "generated_labels": gen_labels,
         "reconstructed_labels": recon_labels,
         "apply_log": apply_log,
-    }
-
-    # Phase 2: enrich metadata with arch_params from v2 training path
-    if _use_v2:
-        metadata["arch_params"] = {
+        "arch_params": {
             k: v for k, v in trained.arch_params.items() if not k.startswith("_")
-        }
+        },
+    }
 
     result = SyngResult(
         generated_data=gen_df,
         loss=loss_df,
         reconstructed_data=recon_df,
         original_data=data_pd.copy(),
-        model_state=train_out.model_state,
+        model_state=trained.model_state,
         metadata=metadata,
     )
 
@@ -825,7 +744,6 @@ def pilot_study(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
-    _use_v2: bool = False,
 ) -> PilotResult:
     """Sweep over pilot sizes with replicated random draws.
 
@@ -983,107 +901,33 @@ def pilot_study(
 
             batch_size = max(1, round(rawdata.shape[0] * batch_frac))
 
-            # Train
-            if _use_v2:
-                # --- Phase 1 v2 path: training-only, then separate inference
-                trained = _train_v2(
-                    rawdata=rawdata,
-                    rawlabels=rawlabels,
-                    modelname=modelname,
-                    batch_size=batch_size,
-                    random_seed=random_seed,
-                    num_epochs=num_epochs,
-                    learning_rate=learning_rate,
-                    kl_weight=kl_weight,
-                    early_stop=early_stop,
-                    early_stop_num=early_stop_num,
-                    pre_model=pre_model,
-                    save_model=None,
-                    batch_frac=batch_frac,
-                    verbose=verbose_level,
-                )
-                gen_data, recon_data = _infer_from_trained(
-                    trained,
-                    new_size=effective_new_size,
-                    rawdata=rawdata,
-                    rawlabels=rawlabels,
-                    batch_size=batch_size,
-                )
-
-                class _V2Out:
-                    pass
-
-                train_out = _V2Out()
-                train_out.generated_data = gen_data  # type: ignore[attr-defined]
-                train_out.reconstructed_data = recon_data  # type: ignore[attr-defined]
-                train_out.model_state = trained.model_state  # type: ignore[attr-defined]
-                train_out.log_dict = trained.log_dict  # type: ignore[attr-defined]
-                train_out.epochs_trained = trained.epochs_trained  # type: ignore[attr-defined]
-            else:
-                # --- Legacy path (unchanged) ---
-                if "GAN" in modelname:
-                    train_out = training_GANs(
-                        rawdata=rawdata,
-                        rawlabels=rawlabels,
-                        batch_size=batch_size,
-                        random_seed=random_seed,
-                        modelname=modelname,
-                        num_epochs=num_epochs,
-                        learning_rate=learning_rate,
-                        new_size=effective_new_size,
-                        early_stop=early_stop,
-                        early_stop_num=early_stop_num,
-                        pre_model=pre_model,
-                        save_model=None,
-                        verbose=verbose_level,
-                    )
-                elif "AE" in modelname:
-                    train_out = training_AEs(
-                        rawdata=rawdata,
-                        rawlabels=rawlabels,
-                        batch_size=batch_size,
-                        random_seed=random_seed,
-                        modelname=modelname,
-                        num_epochs=num_epochs,
-                        learning_rate=learning_rate,
-                        kl_weight=kl_weight,
-                        early_stop=early_stop,
-                        early_stop_num=early_stop_num,
-                        pre_model=pre_model,
-                        save_model=None,
-                        loss_fn="MSE",
-                        new_size=effective_new_size,
-                        verbose=verbose_level,
-                    )
-                elif modelname in (
-                    "maf",
-                    "realnvp",
-                    "glow",
-                    "maf-split",
-                    "maf-split-glow",
-                ):
-                    train_out = training_flows(
-                        rawdata=rawdata,
-                        batch_frac=batch_frac,
-                        valid_batch_frac=0.3,
-                        random_seed=random_seed,
-                        modelname=modelname,
-                        num_blocks=5,
-                        num_epochs=num_epochs,
-                        learning_rate=learning_rate,
-                        new_size=effective_new_size,
-                        num_hidden=226,
-                        early_stop=early_stop,
-                        early_stop_num=early_stop_num,
-                        pre_model=pre_model,
-                        save_model=None,
-                        verbose=verbose_level,
-                    )
-                else:
-                    raise ValueError(f"Unsupported model: {model!r}")
+            # Train and infer
+            trained = _train_model(
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                modelname=modelname,
+                batch_size=batch_size,
+                random_seed=random_seed,
+                num_epochs=num_epochs,
+                learning_rate=learning_rate,
+                kl_weight=kl_weight,
+                early_stop=early_stop,
+                early_stop_num=early_stop_num,
+                pre_model=pre_model,
+                save_model=None,
+                batch_frac=batch_frac,
+                verbose=verbose_level,
+            )
+            gen_data, recon_data = _infer_from_trained(
+                trained,
+                new_size=effective_new_size,
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+                batch_size=batch_size,
+            )
 
             # -- Assemble SyngResult for this run -------------------------
-            gen_np = train_out.generated_data.detach().numpy()
+            gen_np = gen_data.detach().numpy()
 
             # For CVAE, strip the appended label column — it is the conditioning
             # input, not a generated feature.  Store it in metadata instead.
@@ -1096,8 +940,8 @@ def pilot_study(
 
             recon_df = None
             recon_labels = None
-            if train_out.reconstructed_data is not None:
-                recon_np = train_out.reconstructed_data.detach().numpy()
+            if recon_data is not None:
+                recon_np = recon_data.detach().numpy()
 
                 if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
                     recon_labels = pd.Series(recon_np[:, -1], name="label")
@@ -1127,14 +971,14 @@ def pilot_study(
             # Per-draw original data subset
             pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
 
-            loss_df = _build_loss_df(train_out.log_dict, modelname)
+            loss_df = _build_loss_df(trained.log_dict, modelname)
 
             run_metadata = {
                 "model": model,
                 "modelname": modelname,
                 "dataname": dataname,
                 "num_epochs": num_epochs,
-                "epochs_trained": train_out.epochs_trained,
+                "epochs_trained": trained.epochs_trained,
                 "seed": random_seed,
                 "kl_weight": kl_weight,
                 "pilot_size": n_pilot,
@@ -1146,22 +990,19 @@ def pilot_study(
                 "generated_labels": gen_labels,
                 "reconstructed_labels": recon_labels,
                 "apply_log": apply_log,
-            }
-
-            # Phase 2: enrich metadata with arch_params from v2 training path
-            if _use_v2:
-                run_metadata["arch_params"] = {
+                "arch_params": {
                     k: v
                     for k, v in trained.arch_params.items()
                     if not k.startswith("_")
-                }
+                },
+            }
 
             runs[(n_pilot, rand_pilot)] = SyngResult(
                 generated_data=gen_df,
                 loss=loss_df,
                 reconstructed_data=recon_df,
                 original_data=pilot_original,
-                model_state=train_out.model_state,
+                model_state=trained.model_state,
                 metadata=run_metadata,
             )
 
@@ -1208,7 +1049,6 @@ def transfer(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
-    _use_v2: bool = False,
 ) -> SyngResult | PilotResult:
     """Train on source data, then fine-tune and generate on target data.
 
@@ -1312,7 +1152,6 @@ def transfer(
         random_seed=random_seed,
         output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
         verbose=verbose,
-        _use_v2=_use_v2,
     )
 
     # --- 2. fine-tune on target ------------------------------------------
@@ -1335,7 +1174,6 @@ def transfer(
             random_seed=random_seed,
             output_dir=output_dir,
             verbose=verbose,
-            _use_v2=_use_v2,
         )
     else:
         result = generate(
@@ -1356,7 +1194,6 @@ def transfer(
             random_seed=random_seed,
             output_dir=output_dir,
             verbose=verbose,
-            _use_v2=_use_v2,
         )
 
     # Cleanup temp dir if we created one

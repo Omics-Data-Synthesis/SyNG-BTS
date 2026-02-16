@@ -954,6 +954,22 @@ class TestPilotStudy:
         for run in result.runs.values():
             assert list(run.generated_data.columns) == list(sample_data.columns)
 
+    def test_pilot_run_metadata_contains_indices_and_draw(self, sample_data):
+        result = pilot_study(
+            data=sample_data,
+            pilot_size=[10],
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        for (psize, draw), run in result.runs.items():
+            assert run.metadata["pilot_size"] == psize
+            assert run.metadata["draw"] == draw
+            assert "pilot_indices" in run.metadata
+            assert isinstance(run.metadata["pilot_indices"], list)
+            assert len(run.metadata["pilot_indices"]) == psize
+
     def test_cvae_generated_data_excludes_label_column(self, sample_data):
         """CVAE generated_data is feature-only; labels in metadata."""
         result = pilot_study(

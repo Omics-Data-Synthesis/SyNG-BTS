@@ -298,6 +298,151 @@ def _compute_new_size(
     return new_size
 
 
+def _assemble_result(
+    *,
+    gen_data: torch.Tensor,
+    recon_data: torch.Tensor | None,
+    trained: TrainedModel,
+    colnames: list[str],
+    modelname: str,
+    model: str,
+    dataname: str,
+    n_samples: int,
+    num_epochs: int,
+    random_seed: int,
+    kl_weight: int,
+    early_stop: bool,
+    early_stop_num: int,
+    apply_log: bool,
+    original_data: pd.DataFrame,
+    extra_metadata: dict | None = None,
+) -> SyngResult:
+    """Assemble a :class:`SyngResult` from training/inference outputs.
+
+    Centralises CVAE label stripping, DataFrame construction, inverse
+    log transform, column-order validation, loss assembly, metadata
+    assembly, and ``SyngResult`` construction.
+
+    Parameters
+    ----------
+    gen_data : torch.Tensor
+        Raw generated data tensor.
+    recon_data : torch.Tensor or None
+        Raw reconstructed data tensor (AE-family only).
+    trained : TrainedModel
+        Training output from the dispatch layer.
+    colnames : list[str]
+        Original column names.
+    modelname : str
+        Short model name (e.g. ``"VAE"``, ``"CVAE"``).
+    model : str
+        Full model specification string (e.g. ``"VAE1-10"``).
+    dataname : str
+        Dataset name for metadata.
+    n_samples : int
+        Number of original samples (for ``input_shape``).
+    num_epochs : int
+        Maximum epoch count configured.
+    random_seed : int
+        Random seed used.
+    kl_weight : int
+        KL weight used.
+    early_stop : bool
+        Whether early stopping was enabled.
+    early_stop_num : int
+        Early stopping patience value.
+    apply_log : bool
+        Whether ``log2(x + 1)`` preprocessing was applied.
+    original_data : pd.DataFrame
+        Original data subset to attach to the result.
+    extra_metadata : dict or None
+        Additional metadata entries (e.g. ``pilot_size``, ``draw``,
+        ``pilot_indices``).
+
+    Returns
+    -------
+    SyngResult
+    """
+    gen_np = gen_data.detach().numpy()
+
+    # For CVAE, strip the appended label column — it is the conditioning
+    # input, not a generated feature.  Store it in metadata instead.
+    gen_labels = None
+    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        gen_labels = pd.Series(gen_np[:, -1], name="label")
+        gen_np = gen_np[:, :-1]
+
+    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
+
+    recon_df = None
+    recon_labels = None
+    if recon_data is not None:
+        recon_np = recon_data.detach().numpy()
+
+        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+            recon_labels = pd.Series(recon_np[:, -1], name="label")
+            recon_np = recon_np[:, :-1]
+
+        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+    # Inverse log transform to count scale
+    if apply_log:
+        gen_df = inverse_log2(gen_df)
+        if recon_df is not None:
+            recon_df = inverse_log2(recon_df)
+
+    # Validate column order consistency
+    if not gen_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in generated_data. "
+            "This is an internal error; please report it."
+        )
+    if recon_df is not None and not recon_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in reconstructed_data. "
+            "This is an internal error; please report it."
+        )
+
+    loss_df = _build_loss_df(trained.log_dict, modelname)
+
+    metadata: dict = {
+        "model": model,
+        "modelname": modelname,
+        "dataname": dataname,
+        "num_epochs": num_epochs,
+        "epochs_trained": trained.epochs_trained,
+        "seed": random_seed,
+        "kl_weight": kl_weight,
+        "input_shape": (n_samples, len(colnames)),
+        "early_stop": early_stop,
+        "early_stop_patience": early_stop_num,
+        "generated_labels": gen_labels,
+        "reconstructed_labels": recon_labels,
+        "apply_log": apply_log,
+        "arch_params": {
+            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
+        },
+    }
+
+    if extra_metadata is not None:
+        overlapping = set(extra_metadata).intersection(metadata)
+        if overlapping:
+            overlap_str = ", ".join(sorted(overlapping))
+            raise ValueError(
+                f"extra_metadata contains reserved metadata keys: {overlap_str}"
+            )
+        metadata.update(extra_metadata)
+
+    return SyngResult(
+        generated_data=gen_df,
+        loss=loss_df,
+        reconstructed_data=recon_df,
+        original_data=original_data,
+        model_state=trained.model_state,
+        metadata=metadata,
+    )
+
+
 def _resolve_early_stopping_config(
     epoch: int | None,
     early_stop_patience: int | None,
@@ -636,75 +781,22 @@ def generate(
     )
 
     # --- 10. Assemble SyngResult -----------------------------------------
-    gen_np = gen_data.detach().numpy()
-
-    # For CVAE, strip the appended label column — it is the conditioning
-    # input, not a generated feature.  Store it in metadata instead.
-    gen_labels = None
-    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-        gen_labels = pd.Series(gen_np[:, -1], name="label")
-        gen_np = gen_np[:, :-1]
-
-    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-    recon_df = None
-    recon_labels = None
-    if recon_data is not None:
-        recon_np = recon_data.detach().numpy()
-
-        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-            recon_labels = pd.Series(recon_np[:, -1], name="label")
-            recon_np = recon_np[:, :-1]
-
-        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-    # --- 10b. Inverse log transform to count scale -----------------------
-    if apply_log:
-        gen_df = inverse_log2(gen_df)
-        if recon_df is not None:
-            recon_df = inverse_log2(recon_df)
-
-    # --- 10c. Validate column order consistency ---------------------------
-    # Defensive check: ensure all DataFrames have the same column order
-    if not gen_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in generated_data. "
-            "This is an internal error; please report it."
-        )
-    if recon_df is not None and not recon_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in reconstructed_data. "
-            "This is an internal error; please report it."
-        )
-
-    loss_df = _build_loss_df(trained.log_dict, modelname)
-
-    metadata = {
-        "model": model,
-        "modelname": modelname,
-        "dataname": dataname,
-        "num_epochs": num_epochs,
-        "epochs_trained": trained.epochs_trained,
-        "seed": random_seed,
-        "kl_weight": kl_weight,
-        "input_shape": (n_samples, len(colnames)),
-        "early_stop": early_stop,
-        "early_stop_patience": early_stop_num,
-        "generated_labels": gen_labels,
-        "reconstructed_labels": recon_labels,
-        "apply_log": apply_log,
-        "arch_params": {
-            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
-        },
-    }
-
-    result = SyngResult(
-        generated_data=gen_df,
-        loss=loss_df,
-        reconstructed_data=recon_df,
+    result = _assemble_result(
+        gen_data=gen_data,
+        recon_data=recon_data,
+        trained=trained,
+        colnames=colnames,
+        modelname=modelname,
+        model=model,
+        dataname=dataname,
+        n_samples=n_samples,
+        num_epochs=num_epochs,
+        random_seed=random_seed,
+        kl_weight=kl_weight,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        apply_log=apply_log,
         original_data=data_pd.copy(),
-        model_state=trained.model_state,
-        metadata=metadata,
     )
 
     if output_dir is not None:
@@ -846,16 +938,9 @@ def pilot_study(
                 rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
 
             # new_size for this pilot (group-balanced if needed)
-            if (len(torch.unique(orilabels)) > 1) and (
-                int(sum(orilabels == 0)) != int(sum(orilabels == 1))
-            ):
-                effective_new_size: int | list[int] = [
-                    int(sum(orilabels == 0)),
-                    int(sum(orilabels == 1)),
-                    repli,
-                ]
-            else:
-                effective_new_size = repli * n_pilot
+            effective_new_size = _compute_new_size(
+                orilabels, n_samples, repli * n_pilot, repli=repli
+            )
 
             # Gaussian augmentation
             if off_aug == "Gaussian_head":
@@ -910,83 +995,29 @@ def pilot_study(
             )
 
             # -- Assemble SyngResult for this run -------------------------
-            gen_np = gen_data.detach().numpy()
-
-            # For CVAE, strip the appended label column — it is the conditioning
-            # input, not a generated feature.  Store it in metadata instead.
-            gen_labels = None
-            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-                gen_labels = pd.Series(gen_np[:, -1], name="label")
-                gen_np = gen_np[:, :-1]
-
-            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-            recon_df = None
-            recon_labels = None
-            if recon_data is not None:
-                recon_np = recon_data.detach().numpy()
-
-                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-                    recon_labels = pd.Series(recon_np[:, -1], name="label")
-                    recon_np = recon_np[:, :-1]
-
-                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-            # -- Inverse log transform to count scale ---------------------
-            if apply_log:
-                gen_df = inverse_log2(gen_df)
-                if recon_df is not None:
-                    recon_df = inverse_log2(recon_df)
-
-            # -- Validate column order consistency -------------------------
-            # Defensive check: ensure all DataFrames have the same column order
-            if not gen_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in generated_data. "
-                    "This is an internal error; please report it."
-                )
-            if recon_df is not None and not recon_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in reconstructed_data. "
-                    "This is an internal error; please report it."
-                )
-
-            # Per-draw original data subset
             pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
 
-            loss_df = _build_loss_df(trained.log_dict, modelname)
-
-            run_metadata = {
-                "model": model,
-                "modelname": modelname,
-                "dataname": dataname,
-                "num_epochs": num_epochs,
-                "epochs_trained": trained.epochs_trained,
-                "seed": random_seed,
-                "kl_weight": kl_weight,
-                "pilot_size": n_pilot,
-                "draw": rand_pilot,
-                "pilot_indices": pilot_indices.tolist(),
-                "input_shape": (n_samples, len(colnames)),
-                "early_stop": early_stop,
-                "early_stop_patience": early_stop_num,
-                "generated_labels": gen_labels,
-                "reconstructed_labels": recon_labels,
-                "apply_log": apply_log,
-                "arch_params": {
-                    k: v
-                    for k, v in trained.arch_params.items()
-                    if not k.startswith("_")
-                },
-            }
-
-            runs[(n_pilot, rand_pilot)] = SyngResult(
-                generated_data=gen_df,
-                loss=loss_df,
-                reconstructed_data=recon_df,
+            runs[(n_pilot, rand_pilot)] = _assemble_result(
+                gen_data=gen_data,
+                recon_data=recon_data,
+                trained=trained,
+                colnames=colnames,
+                modelname=modelname,
+                model=model,
+                dataname=dataname,
+                n_samples=n_samples,
+                num_epochs=num_epochs,
+                random_seed=random_seed,
+                kl_weight=kl_weight,
+                early_stop=early_stop,
+                early_stop_num=early_stop_num,
+                apply_log=apply_log,
                 original_data=pilot_original,
-                model_state=trained.model_state,
-                metadata=run_metadata,
+                extra_metadata={
+                    "pilot_size": n_pilot,
+                    "draw": rand_pilot,
+                    "pilot_indices": pilot_indices.tolist(),
+                },
             )
 
     # --- 7. Assemble PilotResult -----------------------------------------
@@ -1132,66 +1163,22 @@ def _run_generate(
         batch_size=batch_size,
     )
 
-    gen_np = gen_data.detach().numpy()
-    gen_labels = None
-    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-        gen_labels = pd.Series(gen_np[:, -1], name="label")
-        gen_np = gen_np[:, :-1]
-    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-    recon_df = None
-    recon_labels = None
-    if recon_data is not None:
-        recon_np = recon_data.detach().numpy()
-        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-            recon_labels = pd.Series(recon_np[:, -1], name="label")
-            recon_np = recon_np[:, :-1]
-        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-    if apply_log:
-        gen_df = inverse_log2(gen_df)
-        if recon_df is not None:
-            recon_df = inverse_log2(recon_df)
-
-    if not gen_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in generated_data. "
-            "This is an internal error; please report it."
-        )
-    if recon_df is not None and not recon_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in reconstructed_data. "
-            "This is an internal error; please report it."
-        )
-
-    loss_df = _build_loss_df(trained.log_dict, modelname)
-
-    metadata = {
-        "model": model,
-        "modelname": modelname,
-        "dataname": dataname,
-        "num_epochs": num_epochs,
-        "epochs_trained": trained.epochs_trained,
-        "seed": random_seed,
-        "kl_weight": kl_weight,
-        "input_shape": (n_samples, len(colnames)),
-        "early_stop": early_stop,
-        "early_stop_patience": early_stop_num,
-        "generated_labels": gen_labels,
-        "reconstructed_labels": recon_labels,
-        "apply_log": apply_log,
-        "arch_params": {
-            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
-        },
-    }
-
-    result = SyngResult(
-        generated_data=gen_df,
-        loss=loss_df,
-        reconstructed_data=recon_df,
+    result = _assemble_result(
+        gen_data=gen_data,
+        recon_data=recon_data,
+        trained=trained,
+        colnames=colnames,
+        modelname=modelname,
+        model=model,
+        dataname=dataname,
+        n_samples=n_samples,
+        num_epochs=num_epochs,
+        random_seed=random_seed,
+        kl_weight=kl_weight,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        apply_log=apply_log,
         original_data=data_pd.copy(),
-        model_state=trained.model_state,
-        metadata=metadata,
     )
 
     if output_dir is not None:
@@ -1276,16 +1263,9 @@ def _run_pilot(
             if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
                 rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
 
-            if (len(torch.unique(orilabels)) > 1) and (
-                int(sum(orilabels == 0)) != int(sum(orilabels == 1))
-            ):
-                effective_new_size: int | list[int] = [
-                    int(sum(orilabels == 0)),
-                    int(sum(orilabels == 1)),
-                    repli,
-                ]
-            else:
-                effective_new_size = repli * n_pilot
+            effective_new_size = _compute_new_size(
+                orilabels, n_samples, repli * n_pilot, repli=repli
+            )
 
             if off_aug == "Gaussian_head":
                 rawdata, rawlabels = Gaussian_aug(
@@ -1337,72 +1317,29 @@ def _run_pilot(
                 batch_size=batch_size,
             )
 
-            gen_np = gen_data.detach().numpy()
-            gen_labels = None
-            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-                gen_labels = pd.Series(gen_np[:, -1], name="label")
-                gen_np = gen_np[:, :-1]
-            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-            recon_df = None
-            recon_labels = None
-            if recon_data is not None:
-                recon_np = recon_data.detach().numpy()
-                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-                    recon_labels = pd.Series(recon_np[:, -1], name="label")
-                    recon_np = recon_np[:, :-1]
-                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-            if apply_log:
-                gen_df = inverse_log2(gen_df)
-                if recon_df is not None:
-                    recon_df = inverse_log2(recon_df)
-
-            if not gen_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in generated_data. "
-                    "This is an internal error; please report it."
-                )
-            if recon_df is not None and not recon_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in reconstructed_data. "
-                    "This is an internal error; please report it."
-                )
-
             pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
-            loss_df = _build_loss_df(trained.log_dict, modelname)
 
-            run_metadata = {
-                "model": model,
-                "modelname": modelname,
-                "dataname": dataname,
-                "num_epochs": num_epochs,
-                "epochs_trained": trained.epochs_trained,
-                "seed": random_seed,
-                "kl_weight": kl_weight,
-                "pilot_size": n_pilot,
-                "draw": rand_pilot,
-                "pilot_indices": pilot_indices.tolist(),
-                "input_shape": (n_samples, len(colnames)),
-                "early_stop": early_stop,
-                "early_stop_patience": early_stop_num,
-                "generated_labels": gen_labels,
-                "reconstructed_labels": recon_labels,
-                "apply_log": apply_log,
-                "arch_params": {
-                    k: v
-                    for k, v in trained.arch_params.items()
-                    if not k.startswith("_")
-                },
-            }
-
-            runs[(n_pilot, rand_pilot)] = SyngResult(
-                generated_data=gen_df,
-                loss=loss_df,
-                reconstructed_data=recon_df,
+            runs[(n_pilot, rand_pilot)] = _assemble_result(
+                gen_data=gen_data,
+                recon_data=recon_data,
+                trained=trained,
+                colnames=colnames,
+                modelname=modelname,
+                model=model,
+                dataname=dataname,
+                n_samples=n_samples,
+                num_epochs=num_epochs,
+                random_seed=random_seed,
+                kl_weight=kl_weight,
+                early_stop=early_stop,
+                early_stop_num=early_stop_num,
+                apply_log=apply_log,
                 original_data=pilot_original,
-                model_state=trained.model_state,
-                metadata=run_metadata,
+                extra_metadata={
+                    "pilot_size": n_pilot,
+                    "draw": rand_pilot,
+                    "pilot_indices": pilot_indices.tolist(),
+                },
             )
 
     pilot_result = PilotResult(

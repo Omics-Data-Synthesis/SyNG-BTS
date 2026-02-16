@@ -10,6 +10,7 @@ Public API
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,110 @@ from .result import PilotResult, SyngResult
 # =========================================================================
 # Private helpers
 # =========================================================================
+
+
+@dataclass
+class PreparedData:
+    """Container for pre-processed data shared across public API functions.
+
+    Holds everything produced by :func:`_prepare_data` so that
+    ``generate()``, ``pilot_study()``, and (later) ``transfer()`` can
+    consume a single, validated object instead of duplicating the
+    resolve → validate → convert → label pipeline.
+    """
+
+    df: pd.DataFrame
+    """Original DataFrame (unmodified)."""
+
+    colnames: list[str]
+    """Column names from the original DataFrame."""
+
+    oridata: torch.Tensor
+    """Numeric data as a float32 tensor, optionally log-transformed."""
+
+    n_samples: int
+    """Number of samples (rows) in *oridata*."""
+
+    orilabels: torch.Tensor
+    """Label tensor (one-hot or single-column)."""
+
+    oriblurlabels: torch.Tensor
+    """Blurred-label tensor."""
+
+    dataname: str
+    """Short dataset name for metadata / filenames."""
+
+    effective_groups: np.ndarray | None
+    """Resolved group array (explicit > bundled > ``None``)."""
+
+    apply_log: bool
+    """Whether ``log2(x + 1)`` was applied to *oridata*."""
+
+
+def _prepare_data(
+    *,
+    data: pd.DataFrame | str | Path,
+    name: str | None,
+    groups: pd.Series | np.ndarray | None,
+    apply_log: bool,
+) -> PreparedData:
+    """Shared data-preparation pipeline for public API functions.
+
+    Resolves the input data, validates it, derives the dataset name,
+    converts to a float32 tensor (with optional log2 transform),
+    resolves groups, and creates labels.
+
+    Parameters
+    ----------
+    data : DataFrame, str, or Path
+        Input data — a pandas DataFrame, a path to a CSV file, or the
+        name of a bundled dataset.
+    name : str or None
+        Short name override.  Derived automatically when ``None``.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels.
+    apply_log : bool
+        Apply ``log2(x + 1)`` preprocessing.
+
+    Returns
+    -------
+    PreparedData
+    """
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
+    dataname = derive_dataname(data, name)
+
+    colnames = list(df.columns)
+    oridata = torch.from_numpy(df.to_numpy().copy()).to(torch.float32)
+
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
+
+    n_samples = oridata.shape[0]
+
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
+
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
+
+    return PreparedData(
+        df=df,
+        colnames=colnames,
+        oridata=oridata,
+        n_samples=n_samples,
+        orilabels=orilabels,
+        oriblurlabels=oriblurlabels,
+        dataname=dataname,
+        effective_groups=effective_groups,
+        apply_log=apply_log,
+    )
 
 
 def _parse_model_spec(model: str) -> tuple[str, int]:
@@ -693,37 +798,13 @@ def generate(
     # --- 0. Resolve verbose level ----------------------------------------
     verbose_level = _resolve_verbose(verbose)
 
-    # --- 1. Resolve data -------------------------------------------------
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = derive_dataname(data, name)
+    # --- 1. Prepare data (resolve, validate, convert, label) -------------
+    prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
-    # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-
-    n_samples = oridata.shape[0]
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    # --- 3. Labels -------------------------------------------------------
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    # --- 4. Parse model spec ---------------------------------------------
+    # --- 2. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # --- 5. Epoch / early-stopping logic ---------------------------------
+    # --- 3. Epoch / early-stopping logic ---------------------------------
     num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
         epoch=epoch,
         early_stop_patience=early_stop_patience,
@@ -731,18 +812,18 @@ def generate(
         default_patience=30,
     )
 
-    # --- 6. Prepare raw data & labels ------------------------------------
-    rawdata = oridata
-    rawlabels = orilabels
+    # --- 4. Prepare raw data & labels ------------------------------------
+    rawdata = prep.oridata
+    rawlabels = prep.orilabels
 
     # For training two groups without CVAE, append blurred labels
     if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
-        rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
+        rawdata = torch.cat((rawdata, prep.oriblurlabels), dim=1)
 
-    # --- 7. Compute new_size (group-balanced if needed) ------------------
-    effective_new_size = _compute_new_size(orilabels, n_samples, new_size)
+    # --- 5. Compute new_size (group-balanced if needed) ------------------
+    effective_new_size = _compute_new_size(prep.orilabels, prep.n_samples, new_size)
 
-    # --- 8. Offline augmentation -----------------------------------------
+    # --- 6. Offline augmentation -----------------------------------------
     if off_aug == "Gaussian_head":
         rawdata, rawlabels = Gaussian_aug(
             rawdata, rawlabels, multiplier=[Gaussian_head_num]
@@ -768,7 +849,7 @@ def generate(
         rawdata = feed_data
         rawlabels = feed_labels
 
-    # --- 9. Train --------------------------------------------------------
+    # --- 7. Train --------------------------------------------------------
     batch_size = max(1, round(rawdata.shape[0] * batch_frac))
 
     trained = _train_model(
@@ -800,23 +881,23 @@ def generate(
         cap=cap,
     )
 
-    # --- 10. Assemble SyngResult -----------------------------------------
+    # --- 8. Assemble SyngResult ------------------------------------------
     result = _assemble_result(
         gen_data=gen_data,
         recon_data=recon_data,
         trained=trained,
-        colnames=colnames,
+        colnames=prep.colnames,
         modelname=modelname,
         model=model,
-        dataname=dataname,
-        n_samples=n_samples,
+        dataname=prep.dataname,
+        n_samples=prep.n_samples,
         num_epochs=num_epochs,
         random_seed=random_seed,
         kl_weight=kl_weight,
         early_stop=early_stop,
         early_stop_num=early_stop_num,
-        apply_log=apply_log,
-        original_data=data_pd.copy(),
+        apply_log=prep.apply_log,
+        original_data=prep.df.copy(),
     )
 
     if output_dir is not None:
@@ -906,36 +987,13 @@ def pilot_study(
     # --- 0. Resolve verbose level ----------------------------------------
     verbose_level = _resolve_verbose(verbose)
 
-    # --- 1. Resolve data -------------------------------------------------
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = derive_dataname(data, name)
+    # --- 1. Prepare data (resolve, validate, convert, label) -------------
+    prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
-    # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-    n_samples = oridata.shape[0]
-
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    # --- 3. Labels -------------------------------------------------------
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    # --- 4. Parse model spec ---------------------------------------------
+    # --- 2. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # --- 5. Epoch / early-stopping logic ---------------------------------
+    # --- 3. Epoch / early-stopping logic ---------------------------------
     num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
         epoch=epoch,
         early_stop_patience=early_stop_patience,
@@ -943,7 +1001,7 @@ def pilot_study(
         default_patience=30,
     )
 
-    # --- 6. Pilot loop ---------------------------------------------------
+    # --- 4. Pilot loop ---------------------------------------------------
     # new_size = n_draws × pilot (per group if unbalanced)
     repli = n_draws
 
@@ -953,9 +1011,9 @@ def pilot_study(
         for rand_pilot in range(1, n_draws + 1):
             # Draw pilot sub-sample
             rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
-                dataset=oridata,
-                labels=orilabels,
-                blurlabels=oriblurlabels,
+                dataset=prep.oridata,
+                labels=prep.orilabels,
+                blurlabels=prep.oriblurlabels,
                 n_pilot=n_pilot,
                 seednum=rand_pilot,
             )
@@ -966,7 +1024,7 @@ def pilot_study(
 
             # new_size for this pilot (group-balanced if needed)
             effective_new_size = _compute_new_size(
-                orilabels, n_samples, repli * n_pilot, repli=repli
+                prep.orilabels, prep.n_samples, repli * n_pilot, repli=repli
             )
 
             # Gaussian augmentation
@@ -1022,23 +1080,23 @@ def pilot_study(
             )
 
             # -- Assemble SyngResult for this run -------------------------
-            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
+            pilot_original = prep.df.iloc[pilot_indices.numpy()].copy()
 
             runs[(n_pilot, rand_pilot)] = _assemble_result(
                 gen_data=gen_data,
                 recon_data=recon_data,
                 trained=trained,
-                colnames=colnames,
+                colnames=prep.colnames,
                 modelname=modelname,
                 model=model,
-                dataname=dataname,
-                n_samples=n_samples,
+                dataname=prep.dataname,
+                n_samples=prep.n_samples,
                 num_epochs=num_epochs,
                 random_seed=random_seed,
                 kl_weight=kl_weight,
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
-                apply_log=apply_log,
+                apply_log=prep.apply_log,
                 original_data=pilot_original,
                 extra_metadata={
                     "pilot_size": n_pilot,
@@ -1047,14 +1105,14 @@ def pilot_study(
                 },
             )
 
-    # --- 7. Assemble PilotResult -----------------------------------------
+    # --- 5. Assemble PilotResult -----------------------------------------
     pilot_result = PilotResult(
         runs=runs,
-        original_data=data_pd.copy(),
+        original_data=prep.df.copy(),
         metadata={
             "model": model,
             "modelname": modelname,
-            "dataname": dataname,
+            "dataname": prep.dataname,
             "pilot_sizes": pilot_size,
             "num_epochs": num_epochs,
             "seed": random_seed,

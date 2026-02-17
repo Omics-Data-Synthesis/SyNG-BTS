@@ -208,7 +208,6 @@ def training_iter(
                 early_stop_num=early_stop_num,
                 skip_epoch_stats=True,
                 logging_interval=50,
-                save_model=None,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -269,7 +268,6 @@ def training_iter(
                 reconstruction_term_weight=1,
                 kl_weight=kl_weight,
                 logging_interval=50,
-                save_model=None,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -326,8 +324,7 @@ def training_AEs(
     num_epochs,
     learning_rate,
     val_ratio=0.2,
-    pre_model=None,
-    save_model=None,
+    model_state: dict | None = None,
     kl_weight=1,
     early_stop=True,
     early_stop_num=30,
@@ -381,9 +378,9 @@ def training_AEs(
         val_dataset, batch_size=len(val_dataset), shuffle=False, drop_last=False
     )
 
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
 
     # Train the model
     if modelname == "CVAE":
@@ -400,7 +397,6 @@ def training_AEs(
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
             logging_interval=50,
-            save_model=save_model,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -418,7 +414,6 @@ def training_AEs(
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
             logging_interval=50,
-            save_model=save_model,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -434,7 +429,6 @@ def training_AEs(
             early_stop_num=early_stop_num,
             skip_epoch_stats=True,
             logging_interval=50,
-            save_model=save_model,
             verbose=verbose,
         )
 
@@ -474,8 +468,7 @@ def training_GANs(
     modelname,
     num_epochs,
     learning_rate,
-    pre_model=None,
-    save_model=None,
+    model_state: dict | None = None,
     early_stop=True,
     early_stop_num=30,
     verbose=VerbosityLevel.MINIMAL,
@@ -504,9 +497,9 @@ def training_GANs(
     optim_discr = torch.optim.Adam(
         model.discriminator.parameters(), betas=(0.5, 0.999), lr=learning_rate
     )
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
 
     if modelname == "GAN":
         log_dict, best_model = ht.train_GAN(
@@ -519,7 +512,6 @@ def training_GANs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             logging_interval=100,
-            save_model=save_model,
             verbose=verbose,
         )
     elif modelname == "WGAN":
@@ -533,7 +525,6 @@ def training_GANs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             logging_interval=100,
-            save_model=save_model,
             verbose=verbose,
         )
     elif modelname == "WGANGP":
@@ -550,7 +541,6 @@ def training_GANs(
             logging_interval=100,
             gradient_penalty=True,
             gradient_penalty_weight=10,
-            save_model=save_model,
             verbose=verbose,
         )
     else:
@@ -593,8 +583,7 @@ def training_flows(
     num_hidden,
     early_stop,
     early_stop_num,
-    pre_model,
-    save_model=None,
+    model_state: dict | None = None,
     tensorboard_dir: str | None = None,
     verbose=VerbosityLevel.MINIMAL,
 ) -> TrainedModel:
@@ -703,9 +692,9 @@ def training_flows(
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.data.fill_(0)
 
-    # transfer learning
-    if pre_model is not None:
-        model.load_state_dict(torch.load(pre_model))
+    # transfer learning — load pre-trained weights from in-memory state dict
+    if model_state is not None:
+        model.load_state_dict(model_state)
     model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-6)
@@ -825,9 +814,6 @@ def training_flows(
 
     if writer is not None:
         writer.close()
-
-    if save_model is not None:
-        torch.save(best_model.state_dict(), save_model)
 
     best_model.eval()
 

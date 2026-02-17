@@ -119,6 +119,10 @@ Generation Parameters
    * - ``pilot_size``
      - list[int]
      - Sample sizes to evaluate (only for ``pilot_study()``).
+   * - ``n_draws``
+     - int
+     - Number of replicated random draws per pilot size (default: 5).
+       Used in ``pilot_study()``.
 
 Augmentation Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -166,12 +170,6 @@ Advanced Parameters (``generate`` only)
    * - ``cap``
      - bool
      - Cap generated values to observed range (default: ``False``).
-   * - ``pre_model``
-     - str or None
-     - Path to a pre-trained model for transfer learning.
-   * - ``save_model``
-     - str or None
-     - Path to save the trained model state.
 
 ``generate()`` Parameters
 -------------------------
@@ -193,8 +191,6 @@ Advanced Parameters (``generate`` only)
        off_aug=None,                # Offline augmentation
        AE_head_num=2,               # AE-head folds
        Gaussian_head_num=9,         # Gaussian-head folds
-       pre_model=None,              # Pre-trained model path
-       save_model=None,             # Save model path
        use_scheduler=False,         # LR scheduler
        cap=False,                   # Cap generated values
        random_seed=123,             # Random seed
@@ -212,6 +208,7 @@ Advanced Parameters (``generate`` only)
        data="SKCMPositive_4",       # Data input (required)
        pilot_size=[50, 100],        # Pilot sizes (required)
        name=None,                   # Output name (auto-derived)
+       n_draws=5,                   # Draws per pilot size
        model="VAE1-10",             # Model specification
        batch_frac=0.1,              # Batch fraction
        learning_rate=0.0005,        # Learning rate
@@ -220,7 +217,6 @@ Advanced Parameters (``generate`` only)
        off_aug=None,                # Offline augmentation
        AE_head_num=2,               # AE-head folds
        Gaussian_head_num=9,         # Gaussian-head folds
-       pre_model=None,              # Pre-trained model path
        random_seed=123,             # Random seed
        output_dir=None,             # Output directory
    )
@@ -237,8 +233,6 @@ Advanced Parameters (``generate`` only)
        target_data="BRCA",          # Target dataset (required)
        source_name=None,            # Source name (auto-derived)
        target_name=None,            # Target name (auto-derived)
-       pilot_size=None,             # Pilot sizes (None=use generate)
-       source_size=500,             # Source generation size
        new_size=500,                # Target generation size
        model="maf",                 # Model specification
        apply_log=True,              # Log-transform data

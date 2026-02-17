@@ -40,7 +40,7 @@ try:
     __version__ = version("syng-bts")
 except PackageNotFoundError:
     # Package is not installed (running from source)
-    __version__ = "3.1.2"
+    __version__ = "3.2.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
@@ -49,6 +49,11 @@ __license__ = "AGPL-3.0"
 # Import main experiment functions
 # Import evaluation functions
 # Import data utilities
+from .core import (
+    generate,
+    pilot_study,
+    transfer,
+)
 from .data_utils import (
     derive_dataname,
     get_output_dir,
@@ -60,11 +65,6 @@ from .evaluations import (
     UMAP_eval,
     evaluation,
     heatmap_eval,
-)
-from .experiments import (
-    generate,
-    pilot_study,
-    transfer,
 )
 
 # Import models (for advanced users who want to use models directly)

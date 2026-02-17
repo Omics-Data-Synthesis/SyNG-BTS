@@ -143,7 +143,6 @@ Examples
    result = transfer(
        source_data="PRAD",
        target_data="BRCA",
-       source_size=551,
        new_size=500,
        model="maf",
        apply_log=True,
@@ -153,22 +152,9 @@ Examples
    print(result.generated_data.shape)
    result.save("./transfer_output/")
 
-.. code-block:: python
-
-   from syng_bts import transfer
-
-   # Transfer with pilot study on target
-   pilot = transfer(
-       source_data="PRAD",
-       target_data="BRCA",
-       pilot_size=[50, 100],
-       source_size=551,
-       model="maf",
-       epoch=10,
-   )
-
-   # Returns PilotResult when pilot_size is set
-   print(pilot.summary())
+``transfer()`` is a single-run operation and always returns a
+``SyngResult``. For pilot sweeps over target sample sizes, use
+``pilot_study()``.
 
 Choosing a Model
 ----------------

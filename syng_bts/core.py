@@ -1,4 +1,4 @@
-"""Experiment functions for SyNG-BTS.
+"""Core experiment functions for SyNG-BTS.
 
 Public API
 ----------
@@ -10,6 +10,7 @@ Public API
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,144 @@ from .result import PilotResult, SyngResult
 # =========================================================================
 # Private helpers
 # =========================================================================
+
+
+@dataclass
+class PreparedData:
+    """Container for pre-processed data shared across public API functions.
+
+    Holds everything produced by :func:`_prepare_data` so that
+    ``generate()``, ``pilot_study()``, and ``transfer()`` can
+    consume a single, validated object instead of duplicating the
+    resolve → validate → convert → label pipeline.
+    """
+
+    df: pd.DataFrame
+    """Original DataFrame (unmodified)."""
+
+    colnames: list[str]
+    """Column names from the original DataFrame."""
+
+    oridata: torch.Tensor
+    """Numeric data as a float32 tensor, optionally log-transformed."""
+
+    n_samples: int
+    """Number of samples (rows) in *oridata*."""
+
+    orilabels: torch.Tensor
+    """Label tensor (one-hot or single-column)."""
+
+    oriblurlabels: torch.Tensor
+    """Blurred-label tensor."""
+
+    dataname: str
+    """Short dataset name for metadata / filenames."""
+
+    effective_groups: np.ndarray | None
+    """Resolved group array (explicit > bundled > ``None``)."""
+
+    apply_log: bool
+    """Whether ``log2(x + 1)`` was applied to *oridata*."""
+
+
+@dataclass
+class TrainingContext:
+    """Sidecar training context returned by :func:`orchestrate_training`.
+
+    Contains non-architectural training runtime information needed for
+    reconstruction parity and metadata assembly.  This avoids leaking
+    private ``_train_*`` keys into ``TrainedModel.arch_params``.
+    """
+
+    random_seed: int
+    """Random seed used for the training split."""
+
+    val_ratio: float
+    """Validation split ratio used during training."""
+
+    batch_size: int
+    """Computed batch size (from ``batch_frac``)."""
+
+    num_epochs: int
+    """Resolved maximum epoch count."""
+
+    early_stop: bool
+    """Whether early stopping was enabled."""
+
+    early_stop_num: int
+    """Early stopping patience value."""
+
+    rawdata: torch.Tensor
+    """Training data after blur-label appending and augmentation."""
+
+    rawlabels: torch.Tensor
+    """Training labels after augmentation."""
+
+
+def _prepare_data(
+    *,
+    data: pd.DataFrame | str | Path,
+    name: str | None,
+    groups: pd.Series | np.ndarray | None,
+    apply_log: bool,
+) -> PreparedData:
+    """Shared data-preparation pipeline for public API functions.
+
+    Resolves the input data, validates it, derives the dataset name,
+    converts to a float32 tensor (with optional log2 transform),
+    resolves groups, and creates labels.
+
+    Parameters
+    ----------
+    data : DataFrame, str, or Path
+        Input data — a pandas DataFrame, a path to a CSV file, or the
+        name of a bundled dataset.
+    name : str or None
+        Short name override.  Derived automatically when ``None``.
+    groups : pd.Series, np.ndarray, or None
+        Optional binary group labels.
+    apply_log : bool
+        Apply ``log2(x + 1)`` preprocessing.
+
+    Returns
+    -------
+    PreparedData
+    """
+    df, bundled_groups = resolve_data(data)
+    _validate_feature_data(df)
+    dataname = derive_dataname(data, name)
+
+    colnames = list(df.columns)
+    oridata = torch.from_numpy(df.to_numpy().copy()).to(torch.float32)
+
+    if apply_log:
+        oridata = preprocessinglog2(oridata)
+
+    n_samples = oridata.shape[0]
+
+    effective_groups = _resolve_effective_groups(
+        groups,
+        bundled_groups,
+        n_samples=n_samples,
+        param_name="groups",
+    )
+
+    orilabels, oriblurlabels = create_labels(
+        n_samples=n_samples,
+        groups=effective_groups,
+    )
+
+    return PreparedData(
+        df=df,
+        colnames=colnames,
+        oridata=oridata,
+        n_samples=n_samples,
+        orilabels=orilabels,
+        oriblurlabels=oriblurlabels,
+        dataname=dataname,
+        effective_groups=effective_groups,
+        apply_log=apply_log,
+    )
 
 
 def _parse_model_spec(model: str) -> tuple[str, int]:
@@ -104,42 +243,141 @@ def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# Training dispatch
+# Training orchestration
 # ---------------------------------------------------------------------------
 
 
-def _train_model(
+def orchestrate_training(
+    *,
     rawdata: torch.Tensor,
     rawlabels: torch.Tensor,
-    *,
+    oriblurlabels: torch.Tensor,
     modelname: str,
-    batch_size: int,
-    random_seed: int,
-    num_epochs: int,
-    learning_rate: float,
     kl_weight: int = 1,
+    batch_frac: float = 0.1,
+    random_seed: int = 123,
+    epoch: int | None = None,
+    early_stop_patience: int | None = None,
+    learning_rate: float = 0.0005,
     val_ratio: float = 0.2,
-    early_stop: bool = True,
-    early_stop_num: int = 30,
-    pre_model: str | None = None,
-    save_model: str | None = None,
+    off_aug: str | None = None,
+    AE_head_num: int = 2,
+    Gaussian_head_num: int = 9,
+    model_state: dict | None = None,
     cap: bool = False,
     loss_fn: str = "MSE",
     use_scheduler: bool = False,
     step_size: int = 10,
     gamma: float = 0.5,
-    batch_frac: float = 0.1,
-    verbose=1,
-) -> TrainedModel:
-    """Dispatch to the appropriate training wrapper.
+    verbose: int = 1,
+) -> tuple[TrainedModel, TrainingContext]:
+    """Centralized training orchestrator.
+
+    Resolves early-stopping configuration, appends blur-labels for
+    non-CVAE multi-group data, applies offline augmentation, computes
+    batch size, and dispatches to the appropriate model-family
+    training wrapper.
+
+    Model parsing is **external** — the caller passes ``modelname``
+    and ``kl_weight`` (see :func:`_parse_model_spec`).
+
+    Parameters
+    ----------
+    rawdata : torch.Tensor
+        Input data tensor (pre-blur-label, pre-augmentation).
+    rawlabels : torch.Tensor
+        Label tensor.
+    oriblurlabels : torch.Tensor
+        Blurred-label tensor for two-group training.
+    modelname : str
+        Short model name (``"AE"``, ``"VAE"``, ``"GAN"``, etc.).
+    kl_weight : int
+        KL divergence weight (VAE/CVAE only).
+    batch_frac : float
+        Batch size as a fraction of sample count.
+    random_seed : int
+        Random seed for reproducibility.
+    epoch : int or None
+        Fixed epoch count, or ``None`` for early stopping.
+    early_stop_patience : int or None
+        Early stopping patience, or ``None``.
+    learning_rate : float
+        Optimizer learning rate.
+    val_ratio : float
+        Validation split ratio (AE family only).
+    off_aug : str or None
+        Offline augmentation: ``"AE_head"``, ``"Gaussian_head"``,
+        or ``None``.
+    AE_head_num : int
+        Fold multiplier for AE-head augmentation.
+    Gaussian_head_num : int
+        Fold multiplier for Gaussian-head augmentation.
+    model_state : dict or None
+        Pre-trained model state for transfer learning.
+    cap : bool
+        Cap generated values (AE family training).
+    loss_fn : str
+        Loss function name (AE family).
+    use_scheduler : bool
+        Enable learning-rate scheduler (AE family).
+    step_size : int
+        Scheduler step size.
+    gamma : float
+        Scheduler gamma.
+    verbose : int
+        Verbosity level.
 
     Returns
     -------
-    TrainedModel
-        Training-only output (no generation/reconstruction).
+    tuple[TrainedModel, TrainingContext]
+        The trained model and a sidecar context with runtime info
+        needed for inference and metadata assembly.
     """
+    # --- 1. Resolve early-stopping config --------------------------------
+    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        default_max_epochs=1000,
+        default_patience=30,
+    )
+
+    # --- 2. Append blur-labels for non-CVAE two-group data ---------------
+    if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
+        rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
+
+    # --- 3. Offline augmentation -----------------------------------------
+    if off_aug == "Gaussian_head":
+        rawdata, rawlabels = Gaussian_aug(
+            rawdata, rawlabels, multiplier=[Gaussian_head_num]
+        )
+    elif off_aug == "AE_head":
+        # TODO Change hardcoded training config for AE head augmentation
+        # to be more flexible
+        feed_data, feed_labels = training_iter(
+            iter_times=AE_head_num,
+            rawdata=rawdata,
+            rawlabels=rawlabels,
+            random_seed=random_seed,
+            modelname="AE",
+            num_epochs=1000,
+            batch_size=round(rawdata.shape[0] * 0.1),
+            learning_rate=0.0005,
+            early_stop=False,
+            early_stop_num=30,
+            kl_weight=1,
+            loss_fn="MSE",
+            replace=True,
+            verbose=verbose,
+        )
+        rawdata = feed_data
+        rawlabels = feed_labels
+
+    # --- 4. Compute batch size -------------------------------------------
+    batch_size = max(1, round(rawdata.shape[0] * batch_frac))
+
+    # --- 5. Dispatch to model-family training ----------------------------
     if "GAN" in modelname:
-        return training_GANs(
+        trained = training_GANs(
             rawdata=rawdata,
             rawlabels=rawlabels,
             batch_size=batch_size,
@@ -149,8 +387,7 @@ def _train_model(
             learning_rate=learning_rate,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
+            model_state=model_state,
             verbose=verbose,
         )
     elif "AE" in modelname:
@@ -166,8 +403,7 @@ def _train_model(
             kl_weight=kl_weight,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
+            model_state=model_state,
             cap=cap,
             loss_fn=loss_fn,
             use_scheduler=use_scheduler,
@@ -175,12 +411,8 @@ def _train_model(
             gamma=gamma,
             verbose=verbose,
         )
-        # Persist split controls for reconstruction path
-        trained.arch_params["_train_random_seed"] = random_seed
-        trained.arch_params["_train_val_ratio"] = val_ratio
-        return trained
     elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
-        return training_flows(
+        trained = training_flows(
             rawdata=rawdata,
             batch_frac=batch_frac,
             valid_batch_frac=0.3,
@@ -192,21 +424,31 @@ def _train_model(
             num_hidden=226,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            pre_model=pre_model,
-            save_model=save_model,
+            model_state=model_state,
             verbose=verbose,
         )
     else:
         raise ValueError(f"Unsupported model: {modelname!r}")
+
+    ctx = TrainingContext(
+        random_seed=random_seed,
+        val_ratio=val_ratio,
+        batch_size=batch_size,
+        num_epochs=num_epochs,
+        early_stop=early_stop,
+        early_stop_num=early_stop_num,
+        rawdata=rawdata,
+        rawlabels=rawlabels,
+    )
+
+    return trained, ctx
 
 
 def _infer_from_trained(
     trained: TrainedModel,
     *,
     new_size: int | list[int],
-    rawdata: torch.Tensor,
-    rawlabels: torch.Tensor,
-    batch_size: int,
+    ctx: TrainingContext,
     cap: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Run generation and reconstruction via the unified inference dispatcher.
@@ -214,6 +456,19 @@ def _infer_from_trained(
     This delegates to :func:`inference.run_generation` and
     :func:`inference.run_reconstruction`, keeping post-training
     inference cleanly separated from training orchestrators.
+
+    Parameters
+    ----------
+    trained : TrainedModel
+        Output from the training dispatch layer.
+    new_size : int or list[int]
+        Number of synthetic samples to generate.
+    ctx : TrainingContext
+        Sidecar context from :func:`orchestrate_training` containing
+        the training data, batch size, and split parameters needed
+        for reconstruction parity.
+    cap : bool
+        Cap generated values to observed range.
 
     Returns
     -------
@@ -226,8 +481,8 @@ def _infer_from_trained(
 
     # --- Determine capping values ---
     if cap:
-        col_max, _ = torch.max(rawdata, dim=0)
-        col_sd = torch.std(rawdata, dim=0, unbiased=True)
+        col_max, _ = torch.max(ctx.rawdata, dim=0)
+        col_sd = torch.std(ctx.rawdata, dim=0, unbiased=True)
     else:
         col_max = None
         col_sd = None
@@ -244,32 +499,21 @@ def _infer_from_trained(
     reconstructed = None
     if family == "ae":
         num_features = trained.arch_params["num_features"]
-        data = TensorDataset(rawdata, rawlabels)
+        data = TensorDataset(ctx.rawdata, ctx.rawlabels)
 
         # Reproduce legacy reconstruction path as closely as possible:
         # training_AEs reconstructs over the train split DataLoader
         # (shuffle=True, drop_last=True).
-        split_seed = trained.arch_params.get("_train_random_seed")
-        split_val_ratio = trained.arch_params.get("_train_val_ratio")
-
-        if (split_seed is not None) and (split_val_ratio is not None):
-            set_all_seeds(int(split_seed))
-            val_size = int(len(data) * float(split_val_ratio))
-            train_size = len(data) - val_size
-            train_dataset, _val_dataset = random_split(data, [train_size, val_size])
-            recon_loader = DataLoader(
-                train_dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                drop_last=True,
-            )
-        else:
-            recon_loader = DataLoader(
-                data,
-                batch_size=batch_size,
-                shuffle=True,
-                drop_last=True,
-            )
+        set_all_seeds(ctx.random_seed)
+        val_size = int(len(data) * ctx.val_ratio)
+        train_size = len(data) - val_size
+        train_dataset, _val_dataset = random_split(data, [train_size, val_size])
+        recon_loader = DataLoader(
+            train_dataset,
+            batch_size=ctx.batch_size,
+            shuffle=True,
+            drop_last=True,
+        )
 
         reconstructed, _ = run_reconstruction(
             trained,
@@ -300,6 +544,151 @@ def _compute_new_size(
     ):
         return [int(sum(orilabels == 0)), int(sum(orilabels == 1)), repli]
     return new_size
+
+
+def _assemble_result(
+    *,
+    gen_data: torch.Tensor,
+    recon_data: torch.Tensor | None,
+    trained: TrainedModel,
+    colnames: list[str],
+    modelname: str,
+    model: str,
+    dataname: str,
+    n_samples: int,
+    num_epochs: int,
+    random_seed: int,
+    kl_weight: int,
+    early_stop: bool,
+    early_stop_num: int,
+    apply_log: bool,
+    original_data: pd.DataFrame,
+    extra_metadata: dict | None = None,
+) -> SyngResult:
+    """Assemble a :class:`SyngResult` from training/inference outputs.
+
+    Centralises CVAE label stripping, DataFrame construction, inverse
+    log transform, column-order validation, loss assembly, metadata
+    assembly, and ``SyngResult`` construction.
+
+    Parameters
+    ----------
+    gen_data : torch.Tensor
+        Raw generated data tensor.
+    recon_data : torch.Tensor or None
+        Raw reconstructed data tensor (AE-family only).
+    trained : TrainedModel
+        Training output from the dispatch layer.
+    colnames : list[str]
+        Original column names.
+    modelname : str
+        Short model name (e.g. ``"VAE"``, ``"CVAE"``).
+    model : str
+        Full model specification string (e.g. ``"VAE1-10"``).
+    dataname : str
+        Dataset name for metadata.
+    n_samples : int
+        Number of original samples (for ``input_shape``).
+    num_epochs : int
+        Maximum epoch count configured.
+    random_seed : int
+        Random seed used.
+    kl_weight : int
+        KL weight used.
+    early_stop : bool
+        Whether early stopping was enabled.
+    early_stop_num : int
+        Early stopping patience value.
+    apply_log : bool
+        Whether ``log2(x + 1)`` preprocessing was applied.
+    original_data : pd.DataFrame
+        Original data subset to attach to the result.
+    extra_metadata : dict or None
+        Additional metadata entries (e.g. ``pilot_size``, ``draw``,
+        ``pilot_indices``).
+
+    Returns
+    -------
+    SyngResult
+    """
+    gen_np = gen_data.detach().numpy()
+
+    # For CVAE, strip the appended label column — it is the conditioning
+    # input, not a generated feature.  Store it in metadata instead.
+    gen_labels = None
+    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        gen_labels = pd.Series(gen_np[:, -1], name="label")
+        gen_np = gen_np[:, :-1]
+
+    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
+
+    recon_df = None
+    recon_labels = None
+    if recon_data is not None:
+        recon_np = recon_data.detach().numpy()
+
+        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+            recon_labels = pd.Series(recon_np[:, -1], name="label")
+            recon_np = recon_np[:, :-1]
+
+        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
+
+    # Inverse log transform to count scale
+    if apply_log:
+        gen_df = inverse_log2(gen_df)
+        if recon_df is not None:
+            recon_df = inverse_log2(recon_df)
+
+    # Validate column order consistency
+    if not gen_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in generated_data. "
+            "This is an internal error; please report it."
+        )
+    if recon_df is not None and not recon_df.columns.tolist() == colnames:
+        raise RuntimeError(
+            "Column order mismatch in reconstructed_data. "
+            "This is an internal error; please report it."
+        )
+
+    loss_df = _build_loss_df(trained.log_dict, modelname)
+
+    metadata: dict = {
+        "model": model,
+        "modelname": modelname,
+        "dataname": dataname,
+        "num_epochs": num_epochs,
+        "epochs_trained": trained.epochs_trained,
+        "seed": random_seed,
+        "kl_weight": kl_weight,
+        "input_shape": (n_samples, len(colnames)),
+        "early_stop": early_stop,
+        "early_stop_patience": early_stop_num,
+        "generated_labels": gen_labels,
+        "reconstructed_labels": recon_labels,
+        "apply_log": apply_log,
+        "arch_params": {
+            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
+        },
+    }
+
+    if extra_metadata is not None:
+        overlapping = set(extra_metadata).intersection(metadata)
+        if overlapping:
+            overlap_str = ", ".join(sorted(overlapping))
+            raise ValueError(
+                f"extra_metadata contains reserved metadata keys: {overlap_str}"
+            )
+        metadata.update(extra_metadata)
+
+    return SyngResult(
+        generated_data=gen_df,
+        loss=loss_df,
+        reconstructed_data=recon_df,
+        original_data=original_data,
+        model_state=trained.model_state,
+        metadata=metadata,
+    )
 
 
 def _resolve_early_stopping_config(
@@ -356,6 +745,26 @@ def _resolve_early_stopping_config(
     else:
         # Neither: default early stopping with default patience
         return default_max_epochs, True, default_patience
+
+
+def _validate_n_draws(n_draws: int, *, param_name: str = "n_draws") -> int:
+    """Validate replicated draw count parameters.
+
+    Parameters
+    ----------
+    n_draws : int
+        Number of replicated random draws.
+    param_name : str
+        Parameter name used in error messages.
+
+    Returns
+    -------
+    int
+        Validated draw count.
+    """
+    if isinstance(n_draws, bool) or not isinstance(n_draws, int) or n_draws <= 0:
+        raise ValueError(f"'{param_name}' must be a positive integer, got {n_draws!r}")
+    return n_draws
 
 
 def _coerce_groups_array(
@@ -421,7 +830,7 @@ def _resolve_effective_groups(
 
 
 # =========================================================================
-# New public API
+# Public API
 # =========================================================================
 
 
@@ -441,8 +850,6 @@ def generate(
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
-    save_model: str | None = None,
     use_scheduler: bool = False,
     step_size: int = 10,
     gamma: float = 0.5,
@@ -504,10 +911,6 @@ def generate(
         Fold multiplier for AE-head augmentation.
     Gaussian_head_num : int
         Fold multiplier for Gaussian-head augmentation.
-    pre_model : str or None
-        Path to a pre-trained model for transfer learning.
-    save_model : str or None
-        Path to save the trained model state.
     use_scheduler : bool
         Enable learning-rate scheduler (AE family).
     step_size : int
@@ -538,185 +941,64 @@ def generate(
     # --- 0. Resolve verbose level ----------------------------------------
     verbose_level = _resolve_verbose(verbose)
 
-    # --- 1. Resolve data -------------------------------------------------
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = derive_dataname(data, name)
+    # --- 1. Prepare data (resolve, validate, convert, label) -------------
+    prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
-    # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-
-    n_samples = oridata.shape[0]
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    # --- 3. Labels -------------------------------------------------------
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    # --- 4. Parse model spec ---------------------------------------------
+    # --- 2. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # --- 5. Epoch / early-stopping logic ---------------------------------
-    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
+    # --- 3. Compute new_size (group-balanced if needed) ------------------
+    effective_new_size = _compute_new_size(prep.orilabels, prep.n_samples, new_size)
+
+    # --- 4. Train (orchestrate: early-stop, blur-label, aug, dispatch) ---
+    trained, ctx = orchestrate_training(
+        rawdata=prep.oridata,
+        rawlabels=prep.orilabels,
+        oriblurlabels=prep.oriblurlabels,
+        modelname=modelname,
+        kl_weight=kl_weight,
+        batch_frac=batch_frac,
+        random_seed=random_seed,
         epoch=epoch,
         early_stop_patience=early_stop_patience,
-        default_max_epochs=1000,
-        default_patience=30,
-    )
-
-    # --- 6. Prepare raw data & labels ------------------------------------
-    rawdata = oridata
-    rawlabels = orilabels
-
-    # For training two groups without CVAE, append blurred labels
-    if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
-        rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
-
-    # --- 7. Compute new_size (group-balanced if needed) ------------------
-    effective_new_size = _compute_new_size(orilabels, n_samples, new_size)
-
-    # --- 8. Offline augmentation -----------------------------------------
-    if off_aug == "Gaussian_head":
-        rawdata, rawlabels = Gaussian_aug(
-            rawdata, rawlabels, multiplier=[Gaussian_head_num]
-        )
-    elif off_aug == "AE_head":
-        # TODO Change hardcoded training config for AE head augmentation to be more flexible
-        feed_data, feed_labels = training_iter(
-            iter_times=AE_head_num,
-            rawdata=rawdata,
-            rawlabels=rawlabels,
-            random_seed=random_seed,
-            modelname="AE",
-            num_epochs=1000,
-            batch_size=round(rawdata.shape[0] * 0.1),
-            learning_rate=0.0005,
-            early_stop=False,
-            early_stop_num=30,
-            kl_weight=1,
-            loss_fn="MSE",
-            replace=True,
-            verbose=verbose_level,
-        )
-        rawdata = feed_data
-        rawlabels = feed_labels
-
-    # --- 9. Train --------------------------------------------------------
-    batch_size = max(1, round(rawdata.shape[0] * batch_frac))
-
-    trained = _train_model(
-        rawdata=rawdata,
-        rawlabels=rawlabels,
-        modelname=modelname,
-        batch_size=batch_size,
-        random_seed=random_seed,
-        num_epochs=num_epochs,
         learning_rate=learning_rate,
-        kl_weight=kl_weight,
         val_ratio=val_ratio,
-        early_stop=early_stop,
-        early_stop_num=early_stop_num,
-        pre_model=pre_model,
-        save_model=save_model,
+        off_aug=off_aug,
+        AE_head_num=AE_head_num,
+        Gaussian_head_num=Gaussian_head_num,
         cap=cap,
         loss_fn="MSE",
         use_scheduler=use_scheduler,
         step_size=step_size,
         gamma=gamma,
-        batch_frac=batch_frac,
         verbose=verbose_level,
     )
+
+    # --- 5. Infer --------------------------------------------------------
     gen_data, recon_data = _infer_from_trained(
         trained,
         new_size=effective_new_size,
-        rawdata=rawdata,
-        rawlabels=rawlabels,
-        batch_size=batch_size,
+        ctx=ctx,
         cap=cap,
     )
 
-    # --- 10. Assemble SyngResult -----------------------------------------
-    gen_np = gen_data.detach().numpy()
-
-    # For CVAE, strip the appended label column — it is the conditioning
-    # input, not a generated feature.  Store it in metadata instead.
-    gen_labels = None
-    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-        gen_labels = pd.Series(gen_np[:, -1], name="label")
-        gen_np = gen_np[:, :-1]
-
-    gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-    recon_df = None
-    recon_labels = None
-    if recon_data is not None:
-        recon_np = recon_data.detach().numpy()
-
-        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-            recon_labels = pd.Series(recon_np[:, -1], name="label")
-            recon_np = recon_np[:, :-1]
-
-        recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-    # --- 10b. Inverse log transform to count scale -----------------------
-    if apply_log:
-        gen_df = inverse_log2(gen_df)
-        if recon_df is not None:
-            recon_df = inverse_log2(recon_df)
-
-    # --- 10c. Validate column order consistency ---------------------------
-    # Defensive check: ensure all DataFrames have the same column order
-    if not gen_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in generated_data. "
-            "This is an internal error; please report it."
-        )
-    if recon_df is not None and not recon_df.columns.tolist() == colnames:
-        raise RuntimeError(
-            "Column order mismatch in reconstructed_data. "
-            "This is an internal error; please report it."
-        )
-
-    loss_df = _build_loss_df(trained.log_dict, modelname)
-
-    metadata = {
-        "model": model,
-        "modelname": modelname,
-        "dataname": dataname,
-        "num_epochs": num_epochs,
-        "epochs_trained": trained.epochs_trained,
-        "seed": random_seed,
-        "kl_weight": kl_weight,
-        "input_shape": (n_samples, len(colnames)),
-        "early_stop": early_stop,
-        "early_stop_patience": early_stop_num,
-        "generated_labels": gen_labels,
-        "reconstructed_labels": recon_labels,
-        "apply_log": apply_log,
-        "arch_params": {
-            k: v for k, v in trained.arch_params.items() if not k.startswith("_")
-        },
-    }
-
-    result = SyngResult(
-        generated_data=gen_df,
-        loss=loss_df,
-        reconstructed_data=recon_df,
-        original_data=data_pd.copy(),
-        model_state=trained.model_state,
-        metadata=metadata,
+    # --- 6. Assemble SyngResult ------------------------------------------
+    result = _assemble_result(
+        gen_data=gen_data,
+        recon_data=recon_data,
+        trained=trained,
+        colnames=prep.colnames,
+        modelname=modelname,
+        model=model,
+        dataname=prep.dataname,
+        n_samples=prep.n_samples,
+        num_epochs=ctx.num_epochs,
+        random_seed=random_seed,
+        kl_weight=kl_weight,
+        early_stop=ctx.early_stop,
+        early_stop_num=ctx.early_stop_num,
+        apply_log=prep.apply_log,
+        original_data=prep.df.copy(),
     )
 
     if output_dir is not None:
@@ -731,6 +1013,7 @@ def pilot_study(
     *,
     name: str | None = None,
     groups: pd.Series | np.ndarray | None = None,
+    n_draws: int = 5,
     model: str = "VAE1-10",
     apply_log: bool = True,
     batch_frac: float = 0.1,
@@ -740,16 +1023,16 @@ def pilot_study(
     off_aug: str | None = None,
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
-    pre_model: str | None = None,
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
 ) -> PilotResult:
     """Sweep over pilot sizes with replicated random draws.
 
-    For each pilot size, five random sub-samples are drawn from the
-    original data.  A model is trained on each sub-sample and synthetic
-    data equal to five times the sub-sample size is generated.
+    For each pilot size, *n_draws* random sub-samples are drawn from
+    the original data.  A model is trained on each sub-sample and
+    synthetic data equal to *n_draws* times the sub-sample size is
+    generated.
 
     This replaces the legacy ``PilotExperiment`` function.
 
@@ -764,6 +1047,9 @@ def pilot_study(
     groups : pd.Series, np.ndarray, or None
         Optional binary group labels. When provided, these labels take
         precedence over bundled dataset groups.
+    n_draws : int
+        Number of replicated random draws per pilot size (default: 5).
+        Must be a positive integer.
     model : str
         Model specification (e.g. ``"VAE1-10"``).
     apply_log : bool
@@ -785,8 +1071,6 @@ def pilot_study(
         Fold multiplier for AE-head augmentation.
     Gaussian_head_num : int
         Fold multiplier for Gaussian-head augmentation.
-    pre_model : str or None
-        Path to a pre-trained model for transfer learning.
     random_seed : int
         Base random seed for reproducibility.
     output_dir : str, Path, or None
@@ -799,223 +1083,111 @@ def pilot_study(
     PilotResult
         Wrapper containing one ``SyngResult`` per (pilot_size, draw).
     """
+    n_draws = _validate_n_draws(n_draws, param_name="n_draws")
+
     # --- 0. Resolve verbose level ----------------------------------------
     verbose_level = _resolve_verbose(verbose)
 
-    # --- 1. Resolve data -------------------------------------------------
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = derive_dataname(data, name)
+    # --- 1. Prepare data (resolve, validate, convert, label) -------------
+    prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
-    # --- 2. Extract numeric data, capture column names -------------------
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-    n_samples = oridata.shape[0]
-
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    # --- 3. Labels -------------------------------------------------------
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    # --- 4. Parse model spec ---------------------------------------------
+    # --- 2. Parse model spec ---------------------------------------------
     modelname, kl_weight = _parse_model_spec(model)
 
-    # --- 5. Epoch / early-stopping logic ---------------------------------
-    num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-        epoch=epoch,
-        early_stop_patience=early_stop_patience,
-        default_max_epochs=1000,
-        default_patience=30,
-    )
-
-    # --- 6. Pilot loop ---------------------------------------------------
-    # new_size = 5× pilot (per group if unbalanced)
-    repli = 5
+    # --- 3. Pilot loop ---------------------------------------------------
+    # new_size = n_draws × pilot (per group if unbalanced)
+    repli = n_draws
 
     runs: dict[tuple[int, int], SyngResult] = {}
+    last_ctx: TrainingContext | None = None
 
     for n_pilot in pilot_size:
-        for rand_pilot in range(1, 6):
+        for rand_pilot in range(1, n_draws + 1):
             # Draw pilot sub-sample
             rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
-                dataset=oridata,
-                labels=orilabels,
-                blurlabels=oriblurlabels,
+                dataset=prep.oridata,
+                labels=prep.orilabels,
+                blurlabels=prep.oriblurlabels,
                 n_pilot=n_pilot,
                 seednum=rand_pilot,
             )
 
-            # For two groups without CVAE, append blurred labels
-            if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
-                rawdata = torch.cat((rawdata, rawblurlabels), dim=1)
-
             # new_size for this pilot (group-balanced if needed)
-            if (len(torch.unique(orilabels)) > 1) and (
-                int(sum(orilabels == 0)) != int(sum(orilabels == 1))
-            ):
-                effective_new_size: int | list[int] = [
-                    int(sum(orilabels == 0)),
-                    int(sum(orilabels == 1)),
-                    repli,
-                ]
-            else:
-                effective_new_size = repli * n_pilot
+            effective_new_size = _compute_new_size(
+                prep.orilabels, prep.n_samples, repli * n_pilot, repli=repli
+            )
 
-            # Gaussian augmentation
-            if off_aug == "Gaussian_head":
-                rawdata, rawlabels = Gaussian_aug(
-                    rawdata, rawlabels, multiplier=[Gaussian_head_num]
-                )
-
-            # AE head augmentation
-            if off_aug == "AE_head":
-                feed_data, feed_labels = training_iter(
-                    iter_times=AE_head_num,
-                    rawdata=rawdata,
-                    rawlabels=rawlabels,
-                    random_seed=random_seed,
-                    modelname="AE",
-                    num_epochs=1000,
-                    batch_size=round(rawdata.shape[0] * 0.1),
-                    learning_rate=0.0005,
-                    early_stop=False,
-                    early_stop_num=30,
-                    kl_weight=1,
-                    loss_fn="MSE",
-                    replace=True,
-                    verbose=verbose_level,
-                )
-                rawdata = feed_data
-                rawlabels = feed_labels
-
-            batch_size = max(1, round(rawdata.shape[0] * batch_frac))
-
-            # Train and infer
-            trained = _train_model(
+            # Train (orchestrate: early-stop, blur-label, aug, dispatch)
+            trained, ctx = orchestrate_training(
                 rawdata=rawdata,
                 rawlabels=rawlabels,
+                oriblurlabels=rawblurlabels,
                 modelname=modelname,
-                batch_size=batch_size,
-                random_seed=random_seed,
-                num_epochs=num_epochs,
-                learning_rate=learning_rate,
                 kl_weight=kl_weight,
-                early_stop=early_stop,
-                early_stop_num=early_stop_num,
-                pre_model=pre_model,
-                save_model=None,
                 batch_frac=batch_frac,
+                random_seed=random_seed,
+                epoch=epoch,
+                early_stop_patience=early_stop_patience,
+                learning_rate=learning_rate,
+                off_aug=off_aug,
+                AE_head_num=AE_head_num,
+                Gaussian_head_num=Gaussian_head_num,
                 verbose=verbose_level,
             )
+            last_ctx = ctx
+
             gen_data, recon_data = _infer_from_trained(
                 trained,
                 new_size=effective_new_size,
-                rawdata=rawdata,
-                rawlabels=rawlabels,
-                batch_size=batch_size,
+                ctx=ctx,
             )
 
             # -- Assemble SyngResult for this run -------------------------
-            gen_np = gen_data.detach().numpy()
+            pilot_original = prep.df.iloc[pilot_indices.numpy()].copy()
 
-            # For CVAE, strip the appended label column — it is the conditioning
-            # input, not a generated feature.  Store it in metadata instead.
-            gen_labels = None
-            if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
-                gen_labels = pd.Series(gen_np[:, -1], name="label")
-                gen_np = gen_np[:, :-1]
-
-            gen_df = pd.DataFrame(gen_np, columns=list(colnames))
-
-            recon_df = None
-            recon_labels = None
-            if recon_data is not None:
-                recon_np = recon_data.detach().numpy()
-
-                if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
-                    recon_labels = pd.Series(recon_np[:, -1], name="label")
-                    recon_np = recon_np[:, :-1]
-
-                recon_df = pd.DataFrame(recon_np, columns=list(colnames))
-
-            # -- Inverse log transform to count scale ---------------------
-            if apply_log:
-                gen_df = inverse_log2(gen_df)
-                if recon_df is not None:
-                    recon_df = inverse_log2(recon_df)
-
-            # -- Validate column order consistency -------------------------
-            # Defensive check: ensure all DataFrames have the same column order
-            if not gen_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in generated_data. "
-                    "This is an internal error; please report it."
-                )
-            if recon_df is not None and not recon_df.columns.tolist() == colnames:
-                raise RuntimeError(
-                    "Column order mismatch in reconstructed_data. "
-                    "This is an internal error; please report it."
-                )
-
-            # Per-draw original data subset
-            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
-
-            loss_df = _build_loss_df(trained.log_dict, modelname)
-
-            run_metadata = {
-                "model": model,
-                "modelname": modelname,
-                "dataname": dataname,
-                "num_epochs": num_epochs,
-                "epochs_trained": trained.epochs_trained,
-                "seed": random_seed,
-                "kl_weight": kl_weight,
-                "pilot_size": n_pilot,
-                "draw": rand_pilot,
-                "pilot_indices": pilot_indices.tolist(),
-                "input_shape": (n_samples, len(colnames)),
-                "early_stop": early_stop,
-                "early_stop_patience": early_stop_num,
-                "generated_labels": gen_labels,
-                "reconstructed_labels": recon_labels,
-                "apply_log": apply_log,
-                "arch_params": {
-                    k: v
-                    for k, v in trained.arch_params.items()
-                    if not k.startswith("_")
-                },
-            }
-
-            runs[(n_pilot, rand_pilot)] = SyngResult(
-                generated_data=gen_df,
-                loss=loss_df,
-                reconstructed_data=recon_df,
+            runs[(n_pilot, rand_pilot)] = _assemble_result(
+                gen_data=gen_data,
+                recon_data=recon_data,
+                trained=trained,
+                colnames=prep.colnames,
+                modelname=modelname,
+                model=model,
+                dataname=prep.dataname,
+                n_samples=prep.n_samples,
+                num_epochs=ctx.num_epochs,
+                random_seed=random_seed,
+                kl_weight=kl_weight,
+                early_stop=ctx.early_stop,
+                early_stop_num=ctx.early_stop_num,
+                apply_log=prep.apply_log,
                 original_data=pilot_original,
-                model_state=trained.model_state,
-                metadata=run_metadata,
+                extra_metadata={
+                    "pilot_size": n_pilot,
+                    "draw": rand_pilot,
+                    "pilot_indices": pilot_indices.tolist(),
+                },
             )
 
-    # --- 7. Assemble PilotResult -----------------------------------------
+    # Resolve num_epochs for PilotResult metadata — use last training
+    # context if available, otherwise resolve defaults directly.
+    if last_ctx is not None:
+        resolved_num_epochs = last_ctx.num_epochs
+    else:
+        resolved_num_epochs, _, _ = _resolve_early_stopping_config(
+            epoch=epoch,
+            early_stop_patience=early_stop_patience,
+        )
+
+    # --- 4. Assemble PilotResult -----------------------------------------
     pilot_result = PilotResult(
         runs=runs,
-        original_data=data_pd.copy(),
+        original_data=prep.df.copy(),
         metadata={
             "model": model,
             "modelname": modelname,
-            "dataname": dataname,
+            "dataname": prep.dataname,
             "pilot_sizes": pilot_size,
-            "num_epochs": num_epochs,
+            "num_epochs": resolved_num_epochs,
             "seed": random_seed,
         },
     )
@@ -1034,9 +1206,7 @@ def transfer(
     target_name: str | None = None,
     source_groups: pd.Series | np.ndarray | None = None,
     target_groups: pd.Series | np.ndarray | None = None,
-    pilot_size: list[int] | None = None,
-    source_size: int = 500,
-    new_size: int = 500,
+    new_size: int | list[int] = 500,
     model: str = "VAE1-10",
     apply_log: bool = True,
     batch_frac: float = 0.1,
@@ -1049,12 +1219,12 @@ def transfer(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
-) -> SyngResult | PilotResult:
+) -> SyngResult:
     """Train on source data, then fine-tune and generate on target data.
 
-    The model is first trained on *source_data* and its state is saved.
-    Then the saved state is loaded as a pre-trained model and fine-tuned
-    on *target_data*.
+    The model is first trained on *source_data* and its learned state
+    is kept in-memory, then fine-tuned on *target_data*.  This is a
+    single-run operation returning a :class:`SyngResult`.
 
     This replaces the legacy ``TransferExperiment`` function.
 
@@ -1072,13 +1242,8 @@ def transfer(
         Optional binary groups for the source dataset.
     target_groups : pd.Series, np.ndarray, or None
         Optional binary groups for the target dataset.
-    pilot_size : list[int] or None
-        If set, uses ``pilot_study`` for the target phase.  Otherwise
-        uses ``generate``.
-    source_size : int
-        Number of samples to generate during pre-training.
-    new_size : int
-        Number of samples to generate in ``generate`` mode.
+    new_size : int or list[int]
+        Number of samples to generate from the fine-tuned model.
     model : str
         Model specification.
     apply_log : bool
@@ -1109,97 +1274,100 @@ def transfer(
 
     Returns
     -------
-    SyngResult or PilotResult
-        ``SyngResult`` when ``pilot_size`` is ``None``, otherwise
-        ``PilotResult``.
+    SyngResult
+        Result from the fine-tuned target-phase model.
     """
-    import tempfile
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
 
-    fromname = derive_dataname(source_data, source_name)
-    toname = derive_dataname(target_data, target_name)
-
-    # We need a temp file to pass the model state between the two phases.
-    # If output_dir is set, use a Transfer subdir; otherwise use a temp dir.
-    if output_dir is not None:
-        transfer_dir = Path(output_dir) / "Transfer"
-        transfer_dir.mkdir(parents=True, exist_ok=True)
-        save_model_path = str(transfer_dir / f"{toname}_from{fromname}_{model}.pt")
-        _cleanup_transfer = False
-    else:
-        _transfer_tmpdir = tempfile.mkdtemp()
-        save_model_path = str(
-            Path(_transfer_tmpdir) / f"{toname}_from{fromname}_{model}.pt"
-        )
-        _cleanup_transfer = True
-
-    # --- 1. pre-train on source ------------------------------------------
-    _source_result = generate(
+    # --- 1. Prepare source and target data -------------------------------
+    source_prep = _prepare_data(
         data=source_data,
-        name=fromname,
+        name=source_name,
         groups=source_groups,
-        new_size=[source_size],
-        model=model,
         apply_log=apply_log,
+    )
+    target_prep = _prepare_data(
+        data=target_data,
+        name=target_name,
+        groups=target_groups,
+        apply_log=apply_log,
+    )
+
+    # --- 2. Parse model spec ---------------------------------------------
+    modelname, kl_weight = _parse_model_spec(model)
+
+    # --- 3. Pre-train on source ------------------------------------------
+    source_trained, _source_ctx = orchestrate_training(
+        rawdata=source_prep.oridata,
+        rawlabels=source_prep.orilabels,
+        oriblurlabels=source_prep.oriblurlabels,
+        modelname=modelname,
+        kl_weight=kl_weight,
         batch_frac=batch_frac,
-        learning_rate=learning_rate,
+        random_seed=random_seed,
         epoch=epoch,
         early_stop_patience=early_stop_patience,
+        learning_rate=learning_rate,
         off_aug=off_aug,
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
-        pre_model=None,
-        save_model=save_model_path,
-        random_seed=random_seed,
-        output_dir=(str(Path(output_dir) / "Transfer") if output_dir else None),
-        verbose=verbose,
+        verbose=verbose_level,
+    )
+    source_model_state = source_trained.model_state
+
+    # --- 4. Fine-tune on target ------------------------------------------
+    effective_new_size = _compute_new_size(
+        target_prep.orilabels,
+        target_prep.n_samples,
+        new_size,
     )
 
-    # --- 2. fine-tune on target ------------------------------------------
-    if pilot_size is not None:
-        result = pilot_study(
-            data=target_data,
-            pilot_size=pilot_size,
-            name=toname,
-            groups=target_groups,
-            model=model,
-            apply_log=apply_log,
-            batch_frac=batch_frac,
-            learning_rate=learning_rate,
-            epoch=epoch,
-            early_stop_patience=early_stop_patience,
-            off_aug=off_aug,
-            AE_head_num=AE_head_num,
-            Gaussian_head_num=Gaussian_head_num,
-            pre_model=save_model_path,
-            random_seed=random_seed,
-            output_dir=output_dir,
-            verbose=verbose,
-        )
-    else:
-        result = generate(
-            data=target_data,
-            name=toname,
-            groups=target_groups,
-            new_size=new_size,
-            model=model,
-            apply_log=apply_log,
-            batch_frac=batch_frac,
-            learning_rate=learning_rate,
-            epoch=epoch,
-            early_stop_patience=early_stop_patience,
-            off_aug=off_aug,
-            AE_head_num=AE_head_num,
-            Gaussian_head_num=Gaussian_head_num,
-            pre_model=save_model_path,
-            random_seed=random_seed,
-            output_dir=output_dir,
-            verbose=verbose,
-        )
+    target_trained, target_ctx = orchestrate_training(
+        rawdata=target_prep.oridata,
+        rawlabels=target_prep.orilabels,
+        oriblurlabels=target_prep.oriblurlabels,
+        modelname=modelname,
+        kl_weight=kl_weight,
+        batch_frac=batch_frac,
+        random_seed=random_seed,
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        learning_rate=learning_rate,
+        off_aug=off_aug,
+        AE_head_num=AE_head_num,
+        Gaussian_head_num=Gaussian_head_num,
+        model_state=source_model_state,
+        verbose=verbose_level,
+    )
 
-    # Cleanup temp dir if we created one
-    if _cleanup_transfer:
-        import shutil
+    # --- 5. Infer --------------------------------------------------------
+    gen_data, recon_data = _infer_from_trained(
+        target_trained,
+        new_size=effective_new_size,
+        ctx=target_ctx,
+    )
 
-        shutil.rmtree(_transfer_tmpdir, ignore_errors=True)
+    # --- 6. Assemble SyngResult ------------------------------------------
+    result = _assemble_result(
+        gen_data=gen_data,
+        recon_data=recon_data,
+        trained=target_trained,
+        colnames=target_prep.colnames,
+        modelname=modelname,
+        model=model,
+        dataname=target_prep.dataname,
+        n_samples=target_prep.n_samples,
+        num_epochs=target_ctx.num_epochs,
+        random_seed=random_seed,
+        kl_weight=kl_weight,
+        early_stop=target_ctx.early_stop,
+        early_stop_num=target_ctx.early_stop_num,
+        apply_log=target_prep.apply_log,
+        original_data=target_prep.df.copy(),
+    )
+
+    if output_dir is not None:
+        result.save(output_dir)
 
     return result

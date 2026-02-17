@@ -47,6 +47,26 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 
+# Mock heavy dependencies for ReadTheDocs builds
+# This prevents build failures when these libraries aren't available
+autodoc_mock_imports = [
+    "torch",
+    "torch.nn",
+    "torch.optim",
+    "torch.utils",
+    "torch.utils.data",
+    "scipy",
+    "scipy.stats",
+    "sklearn",
+    "sklearn.decomposition",
+    "sklearn.preprocessing",
+    "umap",
+    "tensorboardX",
+    "matplotlib",
+    "matplotlib.pyplot",
+    "seaborn",
+]
+
 # Napoleon settings for Google/NumPy style docstrings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True

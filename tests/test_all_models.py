@@ -653,7 +653,7 @@ class TestModelReconstructionParity:
     @staticmethod
     def _train_test_model(sample_data, model: str, *, groups=None) -> TrainedModel:
         """Train a model and return TrainedModel for direct parity checks."""
-        from syng_bts.core import _parse_model_spec, _train_model
+        from syng_bts.core import _parse_model_spec, orchestrate_training
         from syng_bts.helper_utils import create_labels, preprocessinglog2
 
         oridata = torch.from_numpy(sample_data.to_numpy().copy()).to(torch.float32)
@@ -663,32 +663,20 @@ class TestModelReconstructionParity:
         orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
         modelname, kl_weight = _parse_model_spec(model)
 
-        rawdata = oridata
-        rawlabels = orilabels
-        if (modelname != "CVAE") and (torch.unique(rawlabels).shape[0] > 1):
-            rawdata = torch.cat((rawdata, oriblurlabels), dim=1)
-
-        batch_size = max(1, round(rawdata.shape[0] * BATCH_FRAC))
-        return _train_model(
-            rawdata=rawdata,
-            rawlabels=rawlabels,
+        trained, _ctx = orchestrate_training(
+            rawdata=oridata,
+            rawlabels=orilabels,
+            oriblurlabels=oriblurlabels,
             modelname=modelname,
-            batch_size=batch_size,
-            random_seed=SEED,
-            num_epochs=FAST_EPOCHS,
-            learning_rate=LR,
             kl_weight=kl_weight,
-            val_ratio=0.2,
-            early_stop=False,
-            early_stop_num=30,
-            cap=False,
-            loss_fn="MSE",
-            use_scheduler=False,
-            step_size=10,
-            gamma=0.5,
             batch_frac=BATCH_FRAC,
+            random_seed=SEED,
+            epoch=FAST_EPOCHS,
+            early_stop_patience=None,
+            learning_rate=LR,
             verbose=0,
         )
+        return trained
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model", ["AE", "VAE1-10"])

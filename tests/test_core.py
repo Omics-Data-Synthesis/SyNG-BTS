@@ -656,11 +656,12 @@ class TestGenerate:
         import torch.nn as nn
 
         import syng_bts.core as exp
+        from syng_bts.core import TrainingContext
 
         fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
 
-        def fake_train_model(*args, **kwargs):
-            return TrainedModel(
+        def fake_orchestrate(*args, **kwargs):
+            trained = TrainedModel(
                 model=fake_model,
                 model_state=fake_model.state_dict(),
                 arch_params={
@@ -675,13 +676,24 @@ class TestGenerate:
                 },
                 epochs_trained=2,
             )
+            ctx = TrainingContext(
+                random_seed=123,
+                val_ratio=0.2,
+                batch_size=1,
+                num_epochs=8,
+                early_stop=False,
+                early_stop_num=30,
+                rawdata=torch.zeros((10, NUM_FEATURES)),
+                rawlabels=torch.zeros(10),
+            )
+            return trained, ctx
 
-        def fake_infer(trained, *, new_size, rawdata, rawlabels, batch_size, cap=False):
+        def fake_infer(trained, *, new_size, ctx, cap=False):
             gen = torch.zeros((5, NUM_FEATURES), dtype=torch.float32)
             recon = torch.zeros((10, NUM_FEATURES), dtype=torch.float32)
             return gen, recon
 
-        monkeypatch.setattr(exp, "_train_model", fake_train_model)
+        monkeypatch.setattr(exp, "orchestrate_training", fake_orchestrate)
         monkeypatch.setattr(exp, "_infer_from_trained", fake_infer)
 
         result = generate(

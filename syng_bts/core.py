@@ -145,6 +145,26 @@ def _prepare_data(
     """
     df, bundled_groups = resolve_data(data)
     _validate_feature_data(df)
+
+    # Light sanity checks when user requests automatic log2 preprocessing.
+    # - If negatives are present, that's invalid for log2 and we raise.
+    # - If data contains non-integer values, warn the user because the
+    #   input may already be transformed (double-logging risk).
+    if apply_log:
+        arr = df.to_numpy()
+        if (arr < 0).any():
+            raise ValueError("Input contains negative values; cannot apply log2.")
+        # Treat non-integer values as suspicious (non-fatal).
+        if not (arr.shape[0] == 0 or np.allclose(arr, np.round(arr))):
+            import warnings
+
+            warnings.warn(
+                "apply_log=True but input contains non-integer values — the data may already "
+                "be log-transformed. To avoid double-logging, pass apply_log=False.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     dataname = derive_dataname(data, name)
 
     colnames = list(df.columns)

@@ -199,6 +199,74 @@ class TestBuildLossDf:
 
 
 # =========================================================================
+# Log2 sanity checks (_prepare_data validation)
+# =========================================================================
+class TestLog2SanityChecks:
+    """Test validation of log2 preprocessing to prevent double-logging."""
+
+    def test_negative_values_with_apply_log_raises(self):
+        """Negative values should raise ValueError when apply_log=True."""
+        import pandas as pd
+
+        df_with_negatives = pd.DataFrame({"x": [1, 2, -1], "y": [3, 4, 5]})
+        with pytest.raises(ValueError, match="negative values"):
+            generate(df_with_negatives, apply_log=True, epoch=1, verbose="silent")
+
+    def test_non_integer_values_with_apply_log_warns(self):
+        """Non-integer values should warn when apply_log=True."""
+        import pandas as pd
+
+        df_non_int = pd.DataFrame(
+            {
+                "x": [1.5, 2.3, 3.7, 4.1, 5.2, 6.8, 7.9, 8.4, 9.1, 10.5],
+                "y": [4.2, 5.1, 6.9, 7.3, 8.6, 9.2, 10.1, 11.4, 12.7, 13.5],
+            }
+        )
+        with pytest.warns(UserWarning, match="non-integer values"):
+            generate(df_non_int, apply_log=True, epoch=1, verbose="silent", model="AE")
+
+    def test_integer_values_with_apply_log_no_warning(self):
+        """Integer values should not warn when apply_log=True."""
+        import warnings
+
+        import pandas as pd
+
+        df_int = pd.DataFrame(
+            {
+                "x": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                "y": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            # Should not raise a UserWarning
+            result = generate(
+                df_int, apply_log=True, epoch=1, verbose="silent", model="AE"
+            )
+            assert result is not None
+
+    def test_apply_log_false_allows_non_integers(self):
+        """apply_log=False should allow non-integer values without warning."""
+        import warnings
+
+        import pandas as pd
+
+        df_non_int = pd.DataFrame(
+            {
+                "x": [1.5, 2.3, 3.7, 4.1, 5.2, 6.8, 7.9, 8.4, 9.1, 10.5],
+                "y": [4.2, 5.1, 6.9, 7.3, 8.6, 9.2, 10.1, 11.4, 12.7, 13.5],
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            # Should not raise any UserWarning
+            result = generate(
+                df_non_int, apply_log=False, epoch=1, verbose="silent", model="AE"
+            )
+            assert result is not None
+
+
+# =========================================================================
 # Result schema verification
 # =========================================================================
 class TestResultSchema:

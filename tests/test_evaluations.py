@@ -163,6 +163,19 @@ class TestUMAPEval:
         assert isinstance(fig, Figure)
         plt.close(fig)
 
+    def test_umap_apply_log_with_generated_data(self, sample_data):
+        """apply_log works with both real and generated data."""
+        from syng_bts import UMAP_eval
+
+        gen_data = sample_data * 1.5
+        fig_log_true = UMAP_eval(sample_data, generated_data=gen_data, apply_log=True)
+        fig_log_false = UMAP_eval(sample_data, generated_data=gen_data, apply_log=False)
+
+        assert isinstance(fig_log_true, Figure)
+        assert isinstance(fig_log_false, Figure)
+        plt.close(fig_log_true)
+        plt.close(fig_log_false)
+
 
 # ---------------------------------------------------------------------------
 # evaluation

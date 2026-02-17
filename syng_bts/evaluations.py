@@ -46,6 +46,7 @@ def heatmap_eval(
     real_data: pd.DataFrame,
     generated_data: pd.DataFrame | None = None,
     *,
+    apply_log: bool = True,
     cmap: str = "YlGnBu",
 ) -> Figure:
     r"""Create a heatmap visualization comparing real and generated data.
@@ -59,6 +60,9 @@ def heatmap_eval(
         The original/real data.
     generated_data : pd.DataFrame or None, optional
         The generated/synthetic data. If ``None``, only *real_data* is plotted.
+    apply_log : bool, default True
+        Whether to apply ``log2(x + 1)`` transformation to both real
+        and generated data before visualization.
     cmap : str, default ``"YlGnBu"``
         Colormap passed to :func:`seaborn.heatmap`.
 
@@ -68,12 +72,18 @@ def heatmap_eval(
         The matplotlib Figure containing the heatmap(s).
     """
     # Select only numeric columns.
-    real_data_plot = real_data.select_dtypes(include=["number"])
+    real_data_plot = real_data.select_dtypes(include=["number"]).copy()
     generated_data_plot = (
-        generated_data.select_dtypes(include=["number"])
+        generated_data.select_dtypes(include=["number"]).copy()
         if generated_data is not None
         else None
     )
+
+    # Apply log2 transformation if requested
+    if apply_log:
+        real_data_plot = np.log2(real_data_plot + 1)
+        if generated_data_plot is not None:
+            generated_data_plot = np.log2(generated_data_plot + 1)
 
     if generated_data_plot is None:
         fig = plt.figure(figsize=(6, 6))
@@ -104,6 +114,7 @@ def UMAP_eval(
     real_data: pd.DataFrame,
     generated_data: pd.DataFrame | None = None,
     *,
+    apply_log: bool = True,
     groups_real: pd.Series | None = None,
     groups_generated: pd.Series | None = None,
     random_seed: int = 42,
@@ -121,6 +132,9 @@ def UMAP_eval(
     generated_data : pd.DataFrame or None, optional
         The generated/synthetic data. If ``None``, only *real_data* is
         visualised.
+    apply_log : bool, default True
+        Whether to apply ``log2(x + 1)`` transformation to both real
+        and generated data before dimensionality reduction.
     groups_real : pd.Series or None, optional
         Group labels for real samples. Used for styling.
     groups_generated : pd.Series or None, optional
@@ -135,9 +149,14 @@ def UMAP_eval(
     Figure
         The matplotlib Figure containing the UMAP scatter plot.
     """
+    # Select numeric columns and apply log transformation if requested
+    real_data_processed = real_data.select_dtypes(include=[np.number]).copy()
+    if apply_log:
+        real_data_processed = np.log2(real_data_processed + 1)
+
     if generated_data is None:
         reducer = UMAP(random_state=random_seed)
-        embedding = reducer.fit_transform(real_data.values)
+        embedding = reducer.fit_transform(real_data_processed.values)
 
         umap_df = pd.DataFrame(embedding, columns=["UMAP1", "UMAP2"])
 
@@ -160,10 +179,16 @@ def UMAP_eval(
 
         return fig
 
+    # Process generated data and filter to match real_data columns
+    gen_data_processed = generated_data.iloc[:, : real_data_processed.shape[1]].copy()
+    gen_data_processed.columns = real_data_processed.columns
+    if apply_log:
+        gen_data_processed = np.log2(gen_data_processed + 1)
+
     # Filter out features with zero variance in generated data
-    non_zero_var_cols = generated_data.var(axis=0) != 0
-    real_filtered = real_data.loc[:, non_zero_var_cols]
-    gen_filtered = generated_data.loc[:, non_zero_var_cols]
+    non_zero_var_cols = gen_data_processed.var(axis=0) != 0
+    real_filtered = real_data_processed.loc[:, non_zero_var_cols]
+    gen_filtered = gen_data_processed.loc[:, non_zero_var_cols]
 
     # Combine datasets
     combined_data = np.vstack((real_filtered.values, gen_filtered.values))
@@ -314,10 +339,13 @@ def evaluation(
     )
 
     # --- Produce figures ----------------------------------------------------
-    fig_heatmap = heatmap_eval(real_data=real_sub, generated_data=gen_sub)
+    fig_heatmap = heatmap_eval(
+        real_data=real_sub, generated_data=gen_sub, apply_log=False
+    )
     fig_umap = UMAP_eval(
         real_data=real_sub,
         generated_data=gen_sub,
+        apply_log=False,
         groups_real=groups_real_sub,
         groups_generated=groups_gen_sub,
         random_seed=random_seed,

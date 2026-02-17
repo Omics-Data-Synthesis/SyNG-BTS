@@ -122,8 +122,7 @@ Generation Parameters
    * - ``n_draws``
      - int
      - Number of replicated random draws per pilot size (default: 5).
-       Used in ``pilot_study()`` and ``transfer()`` when ``pilot_size``
-       is set.
+       Used in ``pilot_study()``.
 
 Augmentation Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -234,9 +233,6 @@ Advanced Parameters (``generate`` only)
        target_data="BRCA",          # Target dataset (required)
        source_name=None,            # Source name (auto-derived)
        target_name=None,            # Target name (auto-derived)
-       pilot_size=None,             # Pilot sizes (None=use generate)
-       n_draws=5,                   # Draws per pilot size
-       source_size=500,             # Source generation size
        new_size=500,                # Target generation size
        model="maf",                 # Model specification
        apply_log=True,              # Log-transform data

@@ -47,7 +47,7 @@ class PreparedData:
     """Container for pre-processed data shared across public API functions.
 
     Holds everything produced by :func:`_prepare_data` so that
-    ``generate()``, ``pilot_study()``, and (later) ``transfer()`` can
+    ``generate()``, ``pilot_study()``, and ``transfer()`` can
     consume a single, validated object instead of duplicating the
     resolve → validate → convert → label pipeline.
     """
@@ -1198,269 +1198,6 @@ def pilot_study(
     return pilot_result
 
 
-# =========================================================================
-# Internal orchestration helpers
-# =========================================================================
-
-
-def _run_generate(
-    *,
-    data: pd.DataFrame | str | Path,
-    name: str,
-    groups: pd.Series | np.ndarray | None,
-    new_size: int | list[int],
-    model: str,
-    apply_log: bool,
-    batch_frac: float,
-    learning_rate: float,
-    epoch: int | None,
-    early_stop_patience: int | None,
-    off_aug: str | None,
-    AE_head_num: int,
-    Gaussian_head_num: int,
-    random_seed: int,
-    model_state: dict | None,
-    output_dir: str | Path | None,
-    verbose: int | str,
-) -> SyngResult:
-    """Internal single-run train → infer → assemble helper.
-
-    Contains the full orchestration logic shared by :func:`generate`
-    (via ``model_state=None``) and the transfer target phase (via a
-    pre-trained ``model_state`` dict).  This avoids routing transfer
-    orchestration through public API functions while keeping the
-    training/inference pipeline in one place.
-    """
-    verbose_level = _resolve_verbose(verbose)
-
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = name
-
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-
-    n_samples = oridata.shape[0]
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    modelname, kl_weight = _parse_model_spec(model)
-
-    effective_new_size = _compute_new_size(orilabels, n_samples, new_size)
-
-    trained, ctx = orchestrate_training(
-        rawdata=oridata,
-        rawlabels=orilabels,
-        oriblurlabels=oriblurlabels,
-        modelname=modelname,
-        kl_weight=kl_weight,
-        batch_frac=batch_frac,
-        random_seed=random_seed,
-        epoch=epoch,
-        early_stop_patience=early_stop_patience,
-        learning_rate=learning_rate,
-        off_aug=off_aug,
-        AE_head_num=AE_head_num,
-        Gaussian_head_num=Gaussian_head_num,
-        model_state=model_state,
-        verbose=verbose_level,
-    )
-
-    gen_data, recon_data = _infer_from_trained(
-        trained,
-        new_size=effective_new_size,
-        ctx=ctx,
-    )
-
-    result = _assemble_result(
-        gen_data=gen_data,
-        recon_data=recon_data,
-        trained=trained,
-        colnames=colnames,
-        modelname=modelname,
-        model=model,
-        dataname=dataname,
-        n_samples=n_samples,
-        num_epochs=ctx.num_epochs,
-        random_seed=random_seed,
-        kl_weight=kl_weight,
-        early_stop=ctx.early_stop,
-        early_stop_num=ctx.early_stop_num,
-        apply_log=apply_log,
-        original_data=data_pd.copy(),
-    )
-
-    if output_dir is not None:
-        result.save(output_dir)
-
-    return result
-
-
-def _run_pilot(
-    *,
-    data: pd.DataFrame | str | Path,
-    name: str,
-    groups: pd.Series | np.ndarray | None,
-    pilot_size: list[int],
-    n_draws: int = 5,
-    model: str,
-    apply_log: bool,
-    batch_frac: float,
-    learning_rate: float,
-    epoch: int | None,
-    early_stop_patience: int | None,
-    off_aug: str | None,
-    AE_head_num: int,
-    Gaussian_head_num: int,
-    random_seed: int,
-    model_state: dict | None,
-    output_dir: str | Path | None,
-    verbose: int | str,
-) -> PilotResult:
-    """Internal pilot-study train → infer → assemble helper.
-
-    Contains the full pilot-loop orchestration logic shared by
-    :func:`pilot_study` and the transfer target phase.  Accepts a
-    optional pre-trained ``model_state`` dict for in-memory transfer handoff.
-    """
-    n_draws = _validate_n_draws(n_draws, param_name="n_draws")
-    verbose_level = _resolve_verbose(verbose)
-
-    df, bundled_groups = resolve_data(data)
-    _validate_feature_data(df)
-    dataname = name
-
-    data_pd = df
-    colnames = list(data_pd.columns)
-    oridata = torch.from_numpy(data_pd.to_numpy().copy()).to(torch.float32)
-    if apply_log:
-        oridata = preprocessinglog2(oridata)
-    n_samples = oridata.shape[0]
-
-    effective_groups = _resolve_effective_groups(
-        groups,
-        bundled_groups,
-        n_samples=n_samples,
-        param_name="groups",
-    )
-
-    orilabels, oriblurlabels = create_labels(
-        n_samples=n_samples,
-        groups=effective_groups,
-    )
-
-    modelname, kl_weight = _parse_model_spec(model)
-
-    repli = n_draws
-    runs: dict[tuple[int, int], SyngResult] = {}
-    last_ctx: TrainingContext | None = None
-
-    for n_pilot in pilot_size:
-        for rand_pilot in range(1, n_draws + 1):
-            rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
-                dataset=oridata,
-                labels=orilabels,
-                blurlabels=oriblurlabels,
-                n_pilot=n_pilot,
-                seednum=rand_pilot,
-            )
-
-            effective_new_size = _compute_new_size(
-                orilabels, n_samples, repli * n_pilot, repli=repli
-            )
-
-            # Train (orchestrate: early-stop, blur-label, aug, dispatch)
-            trained, ctx = orchestrate_training(
-                rawdata=rawdata,
-                rawlabels=rawlabels,
-                oriblurlabels=rawblurlabels,
-                modelname=modelname,
-                kl_weight=kl_weight,
-                batch_frac=batch_frac,
-                random_seed=random_seed,
-                epoch=epoch,
-                early_stop_patience=early_stop_patience,
-                learning_rate=learning_rate,
-                off_aug=off_aug,
-                AE_head_num=AE_head_num,
-                Gaussian_head_num=Gaussian_head_num,
-                model_state=model_state,
-                verbose=verbose_level,
-            )
-            last_ctx = ctx
-
-            gen_data, recon_data = _infer_from_trained(
-                trained,
-                new_size=effective_new_size,
-                ctx=ctx,
-            )
-
-            pilot_original = data_pd.iloc[pilot_indices.numpy()].copy()
-
-            runs[(n_pilot, rand_pilot)] = _assemble_result(
-                gen_data=gen_data,
-                recon_data=recon_data,
-                trained=trained,
-                colnames=colnames,
-                modelname=modelname,
-                model=model,
-                dataname=dataname,
-                n_samples=n_samples,
-                num_epochs=ctx.num_epochs,
-                random_seed=random_seed,
-                kl_weight=kl_weight,
-                early_stop=ctx.early_stop,
-                early_stop_num=ctx.early_stop_num,
-                apply_log=apply_log,
-                original_data=pilot_original,
-                extra_metadata={
-                    "pilot_size": n_pilot,
-                    "draw": rand_pilot,
-                    "pilot_indices": pilot_indices.tolist(),
-                },
-            )
-
-    # Resolve num_epochs for PilotResult metadata — use last training
-    # context if available, otherwise resolve defaults directly.
-    if last_ctx is not None:
-        resolved_num_epochs = last_ctx.num_epochs
-    else:
-        resolved_num_epochs, _, _ = _resolve_early_stopping_config(
-            epoch=epoch,
-            early_stop_patience=early_stop_patience,
-        )
-
-    pilot_result = PilotResult(
-        runs=runs,
-        original_data=data_pd.copy(),
-        metadata={
-            "model": model,
-            "modelname": modelname,
-            "dataname": dataname,
-            "pilot_sizes": pilot_size,
-            "num_epochs": resolved_num_epochs,
-            "seed": random_seed,
-        },
-    )
-
-    if output_dir is not None:
-        pilot_result.save(output_dir)
-
-    return pilot_result
-
-
 def transfer(
     source_data: pd.DataFrame | str | Path,
     target_data: pd.DataFrame | str | Path,
@@ -1469,10 +1206,7 @@ def transfer(
     target_name: str | None = None,
     source_groups: pd.Series | np.ndarray | None = None,
     target_groups: pd.Series | np.ndarray | None = None,
-    pilot_size: list[int] | None = None,
-    n_draws: int = 5,
-    source_size: int = 500,
-    new_size: int = 500,
+    new_size: int | list[int] = 500,
     model: str = "VAE1-10",
     apply_log: bool = True,
     batch_frac: float = 0.1,
@@ -1485,12 +1219,12 @@ def transfer(
     random_seed: int = 123,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
-) -> SyngResult | PilotResult:
+) -> SyngResult:
     """Train on source data, then fine-tune and generate on target data.
 
-    The model is first trained on *source_data* and its state is kept
-    in-memory, then fine-tuned on *target_data* using internal
-    orchestration helpers (no file-based handoff).
+    The model is first trained on *source_data* and its learned state
+    is kept in-memory, then fine-tuned on *target_data*.  This is a
+    single-run operation returning a :class:`SyngResult`.
 
     This replaces the legacy ``TransferExperiment`` function.
 
@@ -1508,18 +1242,8 @@ def transfer(
         Optional binary groups for the source dataset.
     target_groups : pd.Series, np.ndarray, or None
         Optional binary groups for the target dataset.
-    pilot_size : list[int] or None
-        If set, target fine-tuning follows the internal pilot-study path.
-        Otherwise, target fine-tuning follows the internal single-run
-        generation path.
-    n_draws : int
-        Number of replicated random draws per pilot size (default: 5).
-        Only used when *pilot_size* is not ``None``. Must be a positive
-        integer.
-    source_size : int
-        Number of samples to generate during pre-training.
-    new_size : int
-        Number of samples to generate in ``generate`` mode.
+    new_size : int or list[int]
+        Number of samples to generate from the fine-tuned model.
     model : str
         Model specification.
     apply_log : bool
@@ -1550,79 +1274,100 @@ def transfer(
 
     Returns
     -------
-    SyngResult or PilotResult
-        ``SyngResult`` when ``pilot_size`` is ``None``, otherwise
-        ``PilotResult``.
+    SyngResult
+        Result from the fine-tuned target-phase model.
     """
-    fromname = derive_dataname(source_data, source_name)
-    toname = derive_dataname(target_data, target_name)
+    # --- 0. Resolve verbose level ----------------------------------------
+    verbose_level = _resolve_verbose(verbose)
 
-    # --- 1. Pre-train on source ------------------------------------------
-    _source_result = _run_generate(
+    # --- 1. Prepare source and target data -------------------------------
+    source_prep = _prepare_data(
         data=source_data,
-        name=fromname,
+        name=source_name,
         groups=source_groups,
-        new_size=[source_size],
-        model=model,
         apply_log=apply_log,
+    )
+    target_prep = _prepare_data(
+        data=target_data,
+        name=target_name,
+        groups=target_groups,
+        apply_log=apply_log,
+    )
+
+    # --- 2. Parse model spec ---------------------------------------------
+    modelname, kl_weight = _parse_model_spec(model)
+
+    # --- 3. Pre-train on source ------------------------------------------
+    source_trained, _source_ctx = orchestrate_training(
+        rawdata=source_prep.oridata,
+        rawlabels=source_prep.orilabels,
+        oriblurlabels=source_prep.oriblurlabels,
+        modelname=modelname,
+        kl_weight=kl_weight,
         batch_frac=batch_frac,
-        learning_rate=learning_rate,
+        random_seed=random_seed,
         epoch=epoch,
         early_stop_patience=early_stop_patience,
+        learning_rate=learning_rate,
         off_aug=off_aug,
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
-        random_seed=random_seed,
-        model_state=None,
-        output_dir=None,
-        verbose=verbose,
+        verbose=verbose_level,
+    )
+    source_model_state = source_trained.model_state
+
+    # --- 4. Fine-tune on target ------------------------------------------
+    effective_new_size = _compute_new_size(
+        target_prep.orilabels,
+        target_prep.n_samples,
+        new_size,
     )
 
-    # Capture source model state in-memory for target-phase fine-tuning
-    source_model_state = _source_result.model_state
+    target_trained, target_ctx = orchestrate_training(
+        rawdata=target_prep.oridata,
+        rawlabels=target_prep.orilabels,
+        oriblurlabels=target_prep.oriblurlabels,
+        modelname=modelname,
+        kl_weight=kl_weight,
+        batch_frac=batch_frac,
+        random_seed=random_seed,
+        epoch=epoch,
+        early_stop_patience=early_stop_patience,
+        learning_rate=learning_rate,
+        off_aug=off_aug,
+        AE_head_num=AE_head_num,
+        Gaussian_head_num=Gaussian_head_num,
+        model_state=source_model_state,
+        verbose=verbose_level,
+    )
 
-    # --- 2. Fine-tune on target ------------------------------------------
-    if pilot_size is not None:
-        n_draws = _validate_n_draws(n_draws, param_name="n_draws")
-        result = _run_pilot(
-            data=target_data,
-            name=toname,
-            groups=target_groups,
-            pilot_size=pilot_size,
-            n_draws=n_draws,
-            model=model,
-            apply_log=apply_log,
-            batch_frac=batch_frac,
-            learning_rate=learning_rate,
-            epoch=epoch,
-            early_stop_patience=early_stop_patience,
-            off_aug=off_aug,
-            AE_head_num=AE_head_num,
-            Gaussian_head_num=Gaussian_head_num,
-            random_seed=random_seed,
-            model_state=source_model_state,
-            output_dir=output_dir,
-            verbose=verbose,
-        )
-    else:
-        result = _run_generate(
-            data=target_data,
-            name=toname,
-            groups=target_groups,
-            new_size=new_size,
-            model=model,
-            apply_log=apply_log,
-            batch_frac=batch_frac,
-            learning_rate=learning_rate,
-            epoch=epoch,
-            early_stop_patience=early_stop_patience,
-            off_aug=off_aug,
-            AE_head_num=AE_head_num,
-            Gaussian_head_num=Gaussian_head_num,
-            random_seed=random_seed,
-            model_state=source_model_state,
-            output_dir=output_dir,
-            verbose=verbose,
-        )
+    # --- 5. Infer --------------------------------------------------------
+    gen_data, recon_data = _infer_from_trained(
+        target_trained,
+        new_size=effective_new_size,
+        ctx=target_ctx,
+    )
+
+    # --- 6. Assemble SyngResult ------------------------------------------
+    result = _assemble_result(
+        gen_data=gen_data,
+        recon_data=recon_data,
+        trained=target_trained,
+        colnames=target_prep.colnames,
+        modelname=modelname,
+        model=model,
+        dataname=target_prep.dataname,
+        n_samples=target_prep.n_samples,
+        num_epochs=target_ctx.num_epochs,
+        random_seed=random_seed,
+        kl_weight=kl_weight,
+        early_stop=target_ctx.early_stop,
+        early_stop_num=target_ctx.early_stop_num,
+        apply_log=target_prep.apply_log,
+        original_data=target_prep.df.copy(),
+    )
+
+    if output_dir is not None:
+        result.save(output_dir)
 
     return result

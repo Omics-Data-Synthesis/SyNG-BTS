@@ -118,7 +118,6 @@ from syng_bts import transfer
 result = transfer(
     source_data="PRAD",
     target_data="BRCA",
-    source_size=551,
     new_size=500,
     model="maf",
     apply_log=True,

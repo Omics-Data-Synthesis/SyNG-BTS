@@ -4,7 +4,7 @@ Tests for core experiment functions including integration training tests.
 Tests cover:
 - generate() returns SyngResult with correct structure
 - pilot_study() returns PilotResult with correct runs dict
-- transfer() pre-trains, fine-tunes, and returns appropriate result type
+- transfer() pre-trains, fine-tunes, and returns SyngResult (single-run only)
 - Internal helpers: _build_loss_df, _parse_model_spec, _compute_new_size
 - Column names preservation, output_dir persistence
 - Legacy names are removed
@@ -1155,48 +1155,24 @@ class TestTransfer:
     """Integration tests for transfer()."""
 
     def test_returns_syng_result(self, sample_data):
-        """transfer() without pilot_size returns SyngResult."""
+        """transfer() always returns SyngResult (single-run only)."""
         result = transfer(
             source_data=sample_data,
             target_data=sample_data,
             model="VAE1-10",
             new_size=10,
-            source_size=10,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
         )
         assert isinstance(result, SyngResult)
 
-    def test_returns_pilot_result(self, sample_data):
-        """transfer() with pilot_size returns PilotResult."""
-        result = transfer(
-            source_data=sample_data,
-            target_data=sample_data,
-            pilot_size=[10],
-            source_size=10,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, PilotResult)
-
-    @pytest.mark.parametrize("n_draws", [0, -1, 1.5, True])
-    def test_transfer_invalid_n_draws_raises(self, sample_data, n_draws):
-        """transfer() validates n_draws when pilot mode is enabled."""
-        with pytest.raises(ValueError, match="must be a positive integer"):
-            transfer(
-                source_data=sample_data,
-                target_data=sample_data,
-                pilot_size=[10],
-                n_draws=n_draws,
-                source_size=10,
-                model="VAE1-10",
-                epoch=FAST_EPOCHS,
-                batch_frac=BATCH_FRAC,
-                learning_rate=LR,
-            )
+    def test_no_pilot_size_parameter(self):
+        """transfer() no longer accepts pilot_size or n_draws parameters."""
+        sig = inspect.signature(transfer)
+        assert "pilot_size" not in sig.parameters
+        assert "n_draws" not in sig.parameters
+        assert "source_size" not in sig.parameters
 
     def test_transfer_without_output_dir_returns_result(self, sample_data):
         """transfer() without output_dir still returns a valid result."""
@@ -1205,7 +1181,6 @@ class TestTransfer:
             target_data=sample_data,
             model="VAE1-10",
             new_size=5,
-            source_size=5,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
@@ -1218,7 +1193,6 @@ class TestTransfer:
             target_data=sample_data,
             model="VAE1-10",
             new_size=5,
-            source_size=5,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
@@ -1235,7 +1209,6 @@ class TestTransfer:
             target_data="PRAD",
             model="VAE1-10",
             new_size=10,
-            source_size=10,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
@@ -1243,54 +1216,82 @@ class TestTransfer:
         assert isinstance(result, SyngResult)
 
     def test_transfer_forwards_groups_and_apply_log(self, sample_data, monkeypatch):
-        """transfer() forwards new group and apply_log args to downstream calls."""
+        """transfer() forwards groups and apply_log to data preparation."""
+        import torch.nn as nn
+
         import syng_bts.core as exp
+        from syng_bts.core import TrainingContext
 
-        observed: dict[str, object] = {}
-        source_calls: list[dict[str, object]] = []
+        prep_calls: list[dict[str, object]] = []
+        original_prepare = exp._prepare_data
 
-        def fake_run_generate(**kwargs):
-            source_calls.append(kwargs)
-            observed["source_groups"] = kwargs.get("groups")
-            return SyngResult(
-                generated_data=pd.DataFrame([[0.0]]),
-                loss=pd.DataFrame({"train_loss": [1.0]}),
-                metadata={"model": "AE", "dataname": "x", "seed": 1},
-                model_state={"fake": True},
+        def tracking_prepare(**kwargs):
+            prep_calls.append(kwargs)
+            return original_prepare(**kwargs)
+
+        fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
+
+        def fake_orchestrate(**kwargs):
+            trained = TrainedModel(
+                model=fake_model,
+                model_state=fake_model.state_dict(),
+                arch_params={
+                    "family": "ae",
+                    "modelname": "AE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 64,
+                },
+                log_dict={
+                    "train_loss_per_batch": [1.0],
+                    "val_loss_per_batch": [1.0],
+                },
+                epochs_trained=1,
             )
+            ctx = TrainingContext(
+                random_seed=123,
+                val_ratio=0.2,
+                batch_size=1,
+                num_epochs=1,
+                early_stop=False,
+                early_stop_num=30,
+                rawdata=torch.zeros((10, NUM_FEATURES)),
+                rawlabels=torch.zeros(10),
+            )
+            return trained, ctx
 
-        def fake_run_pilot(**kwargs):
-            observed["target_groups_pilot"] = kwargs.get("groups")
-            observed["pilot_apply_log"] = kwargs.get("apply_log")
-            return PilotResult(runs={})
+        def fake_infer(trained, *, new_size, ctx, cap=False):
+            return torch.zeros((5, NUM_FEATURES)), None
 
-        monkeypatch.setattr(exp, "_run_generate", fake_run_generate)
-        monkeypatch.setattr(exp, "_run_pilot", fake_run_pilot)
+        monkeypatch.setattr(exp, "_prepare_data", tracking_prepare)
+        monkeypatch.setattr(exp, "orchestrate_training", fake_orchestrate)
+        monkeypatch.setattr(exp, "_infer_from_trained", fake_infer)
 
-        source_groups = pd.Series(["S0"] * len(sample_data))
-        target_groups = pd.Series(["T0"] * len(sample_data))
+        source_groups = pd.Series([0] * len(sample_data))
+        target_groups = pd.Series([0] * len(sample_data))
 
         result = transfer(
             source_data=sample_data,
             target_data=sample_data,
             source_groups=source_groups,
             target_groups=target_groups,
-            pilot_size=[10],
             apply_log=False,
             model="AE",
+            new_size=5,
             epoch=1,
         )
 
-        assert isinstance(result, PilotResult)
-        assert observed["source_groups"] is source_groups
-        assert observed["target_groups_pilot"] is target_groups
-        assert observed["pilot_apply_log"] is False
-        assert len(source_calls) == 1
+        assert isinstance(result, SyngResult)
+        # Two _prepare_data calls: source and target
+        assert len(prep_calls) == 2
+        assert prep_calls[0]["groups"] is source_groups
+        assert prep_calls[1]["groups"] is target_groups
+        assert prep_calls[0]["apply_log"] is False
+        assert prep_calls[1]["apply_log"] is False
 
     def test_transfer_does_not_call_public_generate_or_pilot_study(
         self, sample_data, monkeypatch
     ):
-        """transfer() uses internal orchestration helpers, not public APIs."""
+        """transfer() uses direct internal orchestration, not public APIs."""
         import syng_bts.core as exp
 
         def fail_generate(*args, **kwargs):
@@ -1299,28 +1300,81 @@ class TestTransfer:
         def fail_pilot_study(*args, **kwargs):
             raise AssertionError("transfer() should not call public pilot_study()")
 
-        def fake_run_generate(**kwargs):
-            return SyngResult(
-                generated_data=pd.DataFrame([[0.0]]),
-                loss=pd.DataFrame({"train_loss": [1.0]}),
-                metadata={"model": "AE", "dataname": "x", "seed": 1},
-                model_state={"fake": True},
-            )
-
         monkeypatch.setattr(exp, "generate", fail_generate)
         monkeypatch.setattr(exp, "pilot_study", fail_pilot_study)
-        monkeypatch.setattr(exp, "_run_generate", fake_run_generate)
 
         result = transfer(
             source_data=sample_data,
             target_data=sample_data,
             model="AE",
-            source_size=5,
+            new_size=5,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+
+        assert isinstance(result, SyngResult)
+
+    def test_transfer_passes_source_model_state_to_target(
+        self, sample_data, monkeypatch
+    ):
+        """transfer() passes source model_state to target training."""
+        import torch.nn as nn
+
+        import syng_bts.core as exp
+        from syng_bts.core import TrainingContext
+
+        orchestrate_calls: list[dict[str, object]] = []
+        fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
+
+        def tracking_orchestrate(**kwargs):
+            orchestrate_calls.append(kwargs)
+            trained = TrainedModel(
+                model=fake_model,
+                model_state=fake_model.state_dict(),
+                arch_params={
+                    "family": "ae",
+                    "modelname": "AE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 64,
+                },
+                log_dict={
+                    "train_loss_per_batch": [1.0],
+                    "val_loss_per_batch": [1.0],
+                },
+                epochs_trained=1,
+            )
+            ctx = TrainingContext(
+                random_seed=123,
+                val_ratio=0.2,
+                batch_size=1,
+                num_epochs=1,
+                early_stop=False,
+                early_stop_num=30,
+                rawdata=torch.zeros((10, NUM_FEATURES)),
+                rawlabels=torch.zeros(10),
+            )
+            return trained, ctx
+
+        def fake_infer(trained, *, new_size, ctx, cap=False):
+            return torch.zeros((5, NUM_FEATURES)), None
+
+        monkeypatch.setattr(exp, "orchestrate_training", tracking_orchestrate)
+        monkeypatch.setattr(exp, "_infer_from_trained", fake_infer)
+
+        transfer(
+            source_data=sample_data,
+            target_data=sample_data,
+            model="AE",
             new_size=5,
             epoch=1,
         )
 
-        assert isinstance(result, SyngResult)
+        # Two orchestrate_training calls: source (no model_state)
+        # and target (with source model_state)
+        assert len(orchestrate_calls) == 2
+        assert orchestrate_calls[0].get("model_state") is None
+        assert orchestrate_calls[1].get("model_state") is not None
 
 
 # =========================================================================

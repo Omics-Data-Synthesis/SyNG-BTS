@@ -27,7 +27,7 @@ Function Renames
      - ``SyngResult``
    * - ``TransferExperiment(...)``
      - ``transfer(...)``
-     - ``SyngResult`` or ``PilotResult``
+     - ``SyngResult``
 
 Parameter Changes
 -----------------
@@ -55,8 +55,8 @@ Parameter Changes
      - ``source_data`` / ``target_data``
      - Now accept DataFrames too
    * - ``fromsize``
-     - ``source_size``
-     - Renamed for clarity
+     - *(removed)*
+     - ``transfer()`` no longer generates from the source phase; source is pre-training only
 
 Data Input
 ----------
@@ -166,6 +166,8 @@ SyNG-BTS v3.1 mainly tightens data and evaluation contracts.
 - Generated/reconstructed outputs are returned in count scale when
   ``apply_log=True``.
 - ``SyngResult``/``PilotResult`` include ``original_data``.
+- ``transfer()`` is single-run only and returns a ``SyngResult``; pilot controls
+  (``pilot_size``, ``n_draws``) and ``source_size`` are removed.
 - ``evaluation()`` uses ``real_groups``/``generated_groups``;
   ``load_data()`` and ``load_dataset()`` are removed.
 

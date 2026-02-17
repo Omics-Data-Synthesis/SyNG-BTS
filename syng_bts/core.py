@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 
 from .data_utils import _validate_feature_data, derive_dataname, resolve_data
-from .helper_train import _resolve_verbose
+from .helper_train import VerbosityLevel, _resolve_verbose
 from .helper_training import (
     TrainedModel,
     training_AEs,
@@ -1101,8 +1101,21 @@ def pilot_study(
     runs: dict[tuple[int, int], SyngResult] = {}
     last_ctx: TrainingContext | None = None
 
+    # Calculate total number of runs for progress logging
+    total_runs = len(pilot_size) * n_draws
+    current_run = 0
+
     for n_pilot in pilot_size:
         for rand_pilot in range(1, n_draws + 1):
+            current_run += 1
+
+            # Log progress before training (if verbosity >= MINIMAL)
+            if verbose_level >= VerbosityLevel.MINIMAL:
+                print(
+                    f"[Pilot size {n_pilot}] Draw {rand_pilot}/{n_draws} "
+                    f"(training no. {current_run}/{total_runs})"
+                )
+
             # Draw pilot sub-sample
             rawdata, rawlabels, rawblurlabels, pilot_indices = draw_pilot(
                 dataset=prep.oridata,
@@ -1167,6 +1180,10 @@ def pilot_study(
                     "pilot_indices": pilot_indices.tolist(),
                 },
             )
+
+            # Newline after each run for readability
+            if verbose_level >= VerbosityLevel.MINIMAL:
+                print()
 
     # Resolve num_epochs for PilotResult metadata — use last training
     # context if available, otherwise resolve defaults directly.

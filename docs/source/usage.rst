@@ -79,7 +79,8 @@ After installation, import SyNG-BTS in your Python code:
 Browse Bundled Datasets
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-SyNG-BTS includes bundled datasets for testing:
+Use :func:`~syng_bts.list_bundled_datasets` to browse available bundled datasets,
+and :func:`~syng_bts.resolve_data` to load them:
 
 .. code-block:: python
 
@@ -96,7 +97,8 @@ SyNG-BTS includes bundled datasets for testing:
 Generate Synthetic Data
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Train a generative model and produce synthetic samples:
+Use :func:`~syng_bts.generate` to train a generative model and produce
+synthetic samples (see :ref:`generate` in :doc:`methods`):
 
 .. code-block:: python
 
@@ -129,7 +131,8 @@ Train a generative model and produce synthetic samples:
 Run a Pilot Study
 ~~~~~~~~~~~~~~~~~
 
-Sweep over multiple pilot sizes with replicated random draws:
+Use :func:`~syng_bts.pilot_study` to sweep over multiple pilot sizes with
+replicated random draws (see :ref:`pilot` in :doc:`methods`):
 
 .. code-block:: python
 
@@ -172,7 +175,9 @@ Pass your own data as a pandas DataFrame:
 Evaluate Results
 ~~~~~~~~~~~~~~~~
 
-Visualize generated data with heatmaps and UMAP:
+Visualize generated data using :meth:`~syng_bts.SyngResult.plot_heatmap`
+(on the result object) or the standalone :func:`~syng_bts.heatmap_eval` and
+:func:`~syng_bts.UMAP_eval` functions (see :doc:`evals`):
 
 .. code-block:: python
 
@@ -191,7 +196,7 @@ Visualize generated data with heatmaps and UMAP:
 Next Steps
 ----------
 
-- See :doc:`methods` for detailed experiment examples
+- See :doc:`methods` for all synthetic data generation methods
 - See :doc:`configuration` for all available parameters
 - See :doc:`api` for the complete API reference
 - See :doc:`datasets` for information about bundled datasets

@@ -38,7 +38,7 @@ Install SyNG-BTS:
 
    pip install syng-bts
 
-Generate synthetic data:
+Generate synthetic data with :func:`~syng_bts.generate`:
 
 .. code-block:: python
 
@@ -48,7 +48,7 @@ Generate synthetic data:
    print(result.generated_data.shape)
    figs = result.plot_loss()
 
-Run a pilot study:
+Run a pilot study with :func:`~syng_bts.pilot_study`:
 
 .. code-block:: python
 

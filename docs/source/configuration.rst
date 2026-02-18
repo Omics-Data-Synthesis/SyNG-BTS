@@ -14,32 +14,24 @@ SyNG-BTS supports several deep generative models for data augmentation:
 
 .. list-table:: Supported Models
    :header-rows: 1
-   :widths: 20 40 40
+   :widths: 20 50
 
    * - Model Code
      - Description
-     - Use Case
    * - ``VAE1-10``
      - Variational Autoencoder with 1:10 reconstruction/KL loss ratio
-     - General purpose, good for pilot experiments
    * - ``VAE1-20``
      - VAE with 1:20 loss ratio
-     - Higher reconstruction fidelity
    * - ``CVAE1-10``
      - Conditional VAE with 1:10 loss ratio
-     - When class labels are available
    * - ``CVAE1-20``
      - Conditional VAE with 1:20 loss ratio
-     - Case studies with labeled data
    * - ``GAN``
-     - Standard Generative Adversarial Network
-     - Alternative generative approach
+     - Generative Adversarial Network
    * - ``WGANGP``
      - Wasserstein GAN with Gradient Penalty
-     - More stable GAN training
    * - ``maf``
      - Masked Autoregressive Flow
-     - Transfer learning scenarios
 
 Common Parameters
 -----------------
@@ -287,7 +279,7 @@ SyNG-BTS includes several bundled datasets for testing and examples:
    data, groups = resolve_data("SKCMPositive_4")
    print(f"Shape: {data.shape}")
 
-Available bundled datasets:
+Available bundled datasets (see :doc:`datasets` for details):
 
 - **Examples**: ``SKCMPositive_4``
 - **Transfer Learning**: ``BRCA``, ``PRAD``

@@ -197,9 +197,11 @@ SyNG-BTS requires Python 3.10+ and the following packages:
 
 Full documentation is available at [syng-bts.readthedocs.io](https://syng-bts.readthedocs.io/).
 
-- [Installation Guide](https://syng-bts.readthedocs.io/en/latest/usage.html)
-- [API Reference](https://syng-bts.readthedocs.io/en/latest/methods.html)
-- [Examples & Tutorials](https://syng-bts.readthedocs.io/en/latest/evals.html)
+- [Installation Guide](https://syng-bts.readthedocs.io/en/latest/usage.html#installation)
+- [API Reference](https://syng-bts.readthedocs.io/en/latest/api.html)
+- [Examples & Tutorials](https://syng-bts.readthedocs.io/en/latest/evals.html) 
+
+<!-- TODO Update the examples and tutorials -->
 
 ## Development
 

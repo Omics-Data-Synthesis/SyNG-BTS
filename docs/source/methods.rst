@@ -1,7 +1,7 @@
-Experiment Methods
-==================
+Synthetic Data Generation
+=========================
 
-This page documents the main experiment functions in SyNG-BTS.
+This page documents the core synthetic data generation functions in SyNG-BTS.
 
 .. contents:: Table of Contents
    :local:
@@ -10,9 +10,10 @@ This page documents the main experiment functions in SyNG-BTS.
 Overview
 --------
 
-SyNG-BTS provides three main experiment functions. All accept data as a
-pandas DataFrame, a CSV file path, or the name of a bundled dataset, and
-return rich result objects (``SyngResult`` or ``PilotResult``).
+SyNG-BTS provides three core synthetic data generation functions. All accept
+data as a pandas DataFrame, a CSV file path, or the name of a bundled dataset,
+and return rich result objects (``SyngResult`` or ``PilotResult``).
+See :doc:`configuration` for all available parameters and model choices.
 
 - :func:`~syng_bts.generate` — Train a model and produce synthetic samples
 - :func:`~syng_bts.pilot_study` — Sweep over pilot sizes with replicated draws
@@ -75,7 +76,7 @@ Examples
 pilot_study
 -----------
 
-Run pilot experiments to evaluate models across multiple pilot sizes.
+Run pilot studies to evaluate models across multiple pilot sizes.
 For each pilot size, five random sub-samples are drawn and a model is
 trained on each.
 
@@ -163,31 +164,23 @@ SyNG-BTS supports several generative models:
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 50 30
+   :widths: 20 50
 
    * - Model
      - Description
-     - Best For
    * - ``VAE1-10``
      - VAE with 1:10 loss ratio
-     - General purpose
    * - ``VAE1-20``
      - VAE with 1:20 loss ratio
-     - Higher fidelity
    * - ``CVAE1-10``
      - Conditional VAE (1:10)
-     - Labeled data
    * - ``CVAE1-20``
      - Conditional VAE (1:20)
-     - Case studies
    * - ``GAN``
      - Standard GAN
-     - Alternative to VAE
    * - ``WGANGP``
      - Wasserstein GAN-GP
-     - Stable training
    * - ``maf``
      - Masked Autoregressive Flow
-     - Transfer learning
 
 See :doc:`configuration` for detailed parameter descriptions.

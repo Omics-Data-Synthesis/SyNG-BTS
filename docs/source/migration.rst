@@ -1,9 +1,10 @@
-Migration Guide (v2.x → v3.0)
-==============================
+Migration Guide / Changelog
+============================
 
 SyNG-BTS v3.0 is a **breaking** release that replaces the file-centric API
 with a Pythonic, DataFrame-friendly interface. This guide covers the key
-changes. See also the `v3.0 → v3.1 section <v31-changes_>`_ below.
+changes and all subsequent version updates. See also
+`Changes in v3.1 <v31-changes_>`_ and `Changes in v3.2 <v32-changes_>`_ below.
 
 .. contents:: Table of Contents
    :local:
@@ -152,7 +153,7 @@ Quick Migration Checklist
 .. _v31-changes:
 
 Changes in v3.1
-================
+---------------
 
 SyNG-BTS v3.1 mainly tightens data and evaluation contracts.
 
@@ -180,10 +181,34 @@ SyNG-BTS v3.1 mainly tightens data and evaluation contracts.
    data, groups = resolve_data("SKCMPositive_4")
 
 v3.1 Quick Migration Checklist
-------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. Unpack loader returns: ``data, groups = resolve_data(...)``.
 2. Pass labels via ``groups=`` (or transfer equivalents), not DataFrame columns.
 3. Remove ``groups`` / ``samples`` columns from user input DataFrames.
 4. Replace ``group_names=`` with ``real_groups=`` / ``generated_groups=``.
 5. Replace ``load_data()`` / ``load_dataset()`` with ``resolve_data()``.
+
+.. _v32-changes:
+
+Changes in v3.2
+---------------
+
+SyNG-BTS v3.2 is an **internal refactor** with no breaking changes to public
+API outputs or result schemas.
+
+- :func:`~syng_bts.transfer` is now **single-run only**: the parameters
+  ``pilot_size``, ``n_draws``, and ``source_size`` are removed from its
+  signature. Use :func:`~syng_bts.pilot_study` for multi-draw sweeps.
+- Training orchestration is centralized in an internal ``orchestrate_training()``
+  helper that consolidates early-stop resolution, data augmentation, batch-size
+  computation, and model dispatch — no change in training behavior.
+- ``_train_model()``, ``_run_generate()``, and ``_run_pilot()`` private helpers
+  are removed; all code paths now use the unified orchestrator.
+
+v3.2 Migration Checklist
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Remove ``pilot_size``, ``n_draws``, and ``source_size`` arguments from any
+   ``transfer()`` calls; these parameters no longer exist.
+2. No other public API changes — all other call sites are unaffected.

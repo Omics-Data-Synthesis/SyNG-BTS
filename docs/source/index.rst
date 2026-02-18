@@ -36,7 +36,7 @@ Install SyNG-BTS:
 
 .. code-block:: bash
 
-   pip install syng-bts
+   pip install --index-url https://test.pypi.org/simple/ syng-bts
 
 Generate synthetic data with :func:`~syng_bts.generate`:
 
@@ -70,10 +70,10 @@ Citation
 
 If you use SyNG-BTS in your research, please cite:
 
-   Qin, L.-X., et al. (2025). Optimizing sample size for supervised machine
-   learning with bulk transcriptomic sequencing: a learning curve approach.
-   *BMC Bioinformatics*, 26.
-   https://doi.org/10.1093/bib/bbaf097
+   Qi Y, Wang X, Qin LX. Optimizing sample size for supervised machine 
+   learning with bulk transcriptomic sequencing: a learning curve approach. 
+   Brief Bioinform. 2025 Mar 4;26(2):bbaf097. doi: 10.1093/bib/bbaf097. 
+   PMID: 40072846; PMCID: PMC11899567. https://doi.org/10.1093/bib/bbaf097
 
 Contents
 --------
@@ -104,8 +104,9 @@ Links
 -----
 
 - **GitHub Repository**: https://github.com/Omics-Data-Synthesis/SyNG-BTS
+- **Documentation**: https://syng-bts.readthedocs.io/
 - **PyPI Package**: https://pypi.org/project/syng-bts/
-- **Issue Tracker**: https://github.com/Omics-Data-Synthesis/SyNG-BTS
+- **Issue Tracker**: https://github.com/Omics-Data-Synthesis/SyNG-BTS/issues
 
 Indices and tables
 ------------------

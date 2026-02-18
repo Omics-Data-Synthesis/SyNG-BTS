@@ -122,13 +122,6 @@ publish: build
 	$(PYTHON) -m twine upload dist/*
 
 publish-test: build
-	@printf "Are you sure you want to publish to TestPyPI? Type 'yes' to continue (default: no): "; \
-	read -r resp; \
-	resp=$$(echo "$$resp" | tr '[:upper:]' '[:lower:]'); \
-	if [ "$$resp" != "yes" ]; then \
-		echo "Publish aborted."; \
-		exit 1; \
-	fi; \
 	@echo "Publishing to TestPyPI..."
 	$(PYTHON) -m twine upload --repository testpypi dist/*
 

@@ -36,7 +36,7 @@ Install SyNG-BTS:
 
 .. code-block:: bash
 
-   pip install --index-url https://test.pypi.org/simple/ syng-bts
+   pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ syng-bts
 
 Generate synthetic data with :func:`~syng_bts.generate`:
 

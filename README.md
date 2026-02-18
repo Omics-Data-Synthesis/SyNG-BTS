@@ -28,12 +28,10 @@ These models are trained on a pilot dataset and can synthesize additional sample
 
 ### From PyPI (Recommended)
 
-*TODO: This is not yet possible — the package has not been uploaded to PyPI yet. Use the "From Source" installation below until a PyPI release is available.*
-
 ```bash
-# available after PyPI release
-pip install syng-bts
+pip install --index-url https://test.pypi.org/simple/ syng-bts
 ```
+*TODO: Update to main PyPI installation upon release.*
 
 ### From Source
 
@@ -105,8 +103,11 @@ pilot = pilot_study(
 run = pilot.runs[(50, 1)]  # (pilot_size, draw_index)
 print(run.generated_data.head())
 
-# Aggregate loss plot (one figure per loss column, all runs overlaid)
-figs = pilot.plot_loss(aggregate=True)  # dict[str, Figure]
+# All runs overlaid on one plot per loss column
+figs = pilot.plot_loss(style="overlay_runs")       # dict[str, Figure]
+
+# Mean ± std across runs
+figs = pilot.plot_loss(style="mean_band")  # dict[str, Figure]
 ```
 
 ### Transfer Learning

@@ -60,7 +60,7 @@ init-dev:
 	python -m venv .venv
 	@echo "Installing package with dev dependencies..."
 	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -e ".[dev]"
+	.venv/bin/pip install -e ".[all]"
 	@echo ""
 	@echo "Development environment ready!"
 	@echo "Activate with: source .venv/bin/activate"

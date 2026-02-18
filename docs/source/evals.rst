@@ -52,11 +52,14 @@ For pilot studies, plot all runs at once:
 
    pilot = pilot_study(data="SKCMPositive_4", pilot_size=[50, 100], model="VAE1-10")
 
-   # Per-run dicts of per-column figures
-   figs = pilot.plot_loss()
+   # All runs overlaid, one figure per loss column (default)
+   figs = pilot.plot_loss()                       # style="overlay_runs" (default)
 
-   # All runs overlaid, one figure per loss column
-   figs = pilot.plot_loss(aggregate=True)
+   # Per-run dicts of per-column figures
+   figs = pilot.plot_loss(style="per_run")
+
+   # Mean ± std across runs
+   figs = pilot.plot_loss(style="mean_band")
 
 .. _heatmap:
 

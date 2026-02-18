@@ -120,8 +120,9 @@ Plotting
 
    # For pilot studies
    pilot = pilot_study(data="SKCMPositive_4", pilot_size=[50, 100], ...)
-   figs = pilot.plot_loss()                   # dict[(pilot, draw)] -> dict[str, Figure]
-   figs = pilot.plot_loss(aggregate=True)     # dict[str, Figure], all runs overlaid
+   figs = pilot.plot_loss()                          # dict[(pilot, draw)] -> dict[str, Figure]
+   figs = pilot.plot_loss(style="overlay_runs")                # dict[str, Figure], all runs overlaid
+   figs = pilot.plot_loss(style="mean_band")          # dict[str, Figure], mean ± std
 
 Evaluation Functions
 --------------------

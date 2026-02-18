@@ -103,8 +103,11 @@ Examples
    run = pilot.runs[(100, 1)]  # (pilot_size, draw_index)
    print(run.generated_data.shape)
 
-   # Aggregate loss plots (one figure per loss column)
-   figs = pilot.plot_loss(aggregate=True)
+   # All runs overlaid (one figure per loss column)
+   figs = pilot.plot_loss(style="overlay_runs")
+
+   # Mean ± std across runs
+   figs = pilot.plot_loss(style="mean_band")
 
    # Save all results
    pilot.save("./pilot_output/")

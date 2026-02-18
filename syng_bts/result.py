@@ -771,35 +771,77 @@ class PilotResult:
 
     def plot_loss(
         self,
-        aggregate: bool = False,
+        style: str = "overlay_runs",
         running_average_window: int = 25,
         x_axis: str = "epochs",
+        truncate: bool = True,
     ) -> dict[tuple[int, int], dict[str, plt.Figure]] | dict[str, plt.Figure]:
-        """Plot loss curves for every run.
+        """Plot loss curves for every run in the pilot study.
 
         Parameters
         ----------
-        aggregate : bool
-            When ``True``, produce one figure per loss column with all
-            runs overlaid, colour-coded by ``(pilot_size, draw)``.
-            When ``False`` (default), return per-run dicts of per-column
-            figures.
+        style : str
+            Plotting style for loss trajectories.
+
+            - ``"per_run"`` (default): one figure per run per loss
+              column, delegating to :meth:`SyngResult.plot_loss`.
+            - ``"overlay_runs"``: overlay all runs on the same plot for each loss
+              column. Only the running-average line is drawn per run
+              (no raw trace) to keep the plot readable.
+            - ``"mean_band"``: plot the mean loss trajectory across all
+              runs for each loss column, with a shaded ±1 std band.
+              Mean and std are computed on raw loss values; the mean
+              line is then optionally smoothed with a running average.
+
+            For all styles, y-axis scaling is applied to reduce the effect
+            of large initial spikes (analogous to :meth:`SyngResult.plot_loss`).
+
         running_average_window : int
-            Window size for the running-average overlay (per-run mode
-            only). Must be > 0. Default: 25.
+            Window size for the running-average overlay. Must be > 0.
+            Default: 25.
         x_axis : str
             ``"epochs"`` (default) maps the x-axis to epoch space using
-            ``metadata["epochs_trained"]`` (must be present and > 0).
+            each run's ``metadata["epochs_trained"]``.
             ``"iterations"`` numbers data points 0…N-1.
-            In aggregate mode it controls the x-axis for each run overlay.
+        truncate : bool
+            Only relevant for ``style="mean_band"`` and ``style="overlay_runs"``.
+            - ``True`` (default): only plot epochs/iterations common to
+              **all** runs (truncate to the shortest run).
+            - ``False``: plot all epochs/iterations; statistics are
+              computed from whichever runs still have data at each point.
 
         Returns
         -------
         dict[tuple[int, int], dict[str, Figure]] or dict[str, Figure]
-            Per-run nested dict when ``aggregate=False``;
-            ``{column: Figure}`` when ``aggregate=True``.
+            ``style="per_run"``: nested dict keyed by
+            ``(pilot_size, draw)`` → ``{column: Figure}``.
+            ``style="overlay_runs"`` or ``style="mean_band"``: flat dict
+            ``{column: Figure}``.
+
+        Raises
+        ------
+        ValueError
+            If *style* is not one of the accepted values, if
+            *running_average_window* ≤ 0, or if *x_axis* is invalid.
+
+        Examples
+        --------
+        >>> figs = pilot_result.plot_loss(style="overlay_runs")
+        >>> figs = pilot_result.plot_loss(style="mean_band", truncate=False)
         """
-        if not aggregate:
+        # --- Input validation ---
+        valid_styles = ("per_run", "overlay_runs", "mean_band")
+        if style not in valid_styles:
+            raise ValueError(f"style must be one of {valid_styles!r}, got {style!r}")
+        if running_average_window <= 0:
+            raise ValueError(
+                f"running_average_window must be > 0, got {running_average_window}"
+            )
+        if x_axis not in ("iterations", "epochs"):
+            raise ValueError(f"x_axis must be 'iterations' or 'epochs', got {x_axis!r}")
+
+        # --- style="per_run": delegate to SyngResult.plot_loss() ---
+        if style == "per_run":
             return {
                 key: result.plot_loss(
                     running_average_window=running_average_window,
@@ -808,59 +850,248 @@ class PilotResult:
                 for key, result in sorted(self.runs.items())
             }
 
-        # --- Aggregate mode: one figure per loss column ---
-        # Collect all column names present across runs.
-        all_columns: list[str] = []
-        seen: set[str] = set()
-        for result in self.runs.values():
-            for col in result.loss.columns:
-                if col not in seen:
-                    all_columns.append(col)
-                    seen.add(col)
+        # --- Shared helpers for "overlay_runs" and "mean_band" ---
 
-        figures: dict[str, plt.Figure] = {}
-        cmap = plt.colormaps["tab10"]
+        def _collect_loss_columns() -> list[str]:
+            """Return the ordered union of loss column names across runs."""
+            cols: list[str] = []
+            seen: set[str] = set()
+            for result in self.runs.values():
+                for col in result.loss.columns:
+                    if col not in seen:
+                        cols.append(col)
+                        seen.add(col)
+            return cols
+
+        def _resolve_epochs(result: SyngResult, key: tuple[int, int]) -> float:
+            """Validate and return ``epochs_trained`` for a single run."""
+            raw = result.metadata.get("epochs_trained")
+            if raw is None or isinstance(raw, bool):
+                raise ValueError(
+                    f"x_axis='epochs' requires metadata['epochs_trained'] > 0 "
+                    f"for run {key}, got {raw!r}"
+                )
+            try:
+                val = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"x_axis='epochs' requires metadata['epochs_trained'] > 0 "
+                    f"for run {key}, got {raw!r}"
+                ) from exc
+            if val <= 0:
+                raise ValueError(
+                    f"x_axis='epochs' requires metadata['epochs_trained'] > 0 "
+                    f"for run {key}, got {raw!r}"
+                )
+            return val
+
+        def _build_x(length: int, num_epochs: float | None) -> np.ndarray:
+            """Build x-coordinate array."""
+            if x_axis == "epochs" and num_epochs is not None:
+                return np.linspace(0, num_epochs, length)
+            return np.arange(length)
+
+        def _apply_ylim_scaling(ax, values: np.ndarray) -> None:
+            """Set y-axis limits to suppress the initial spike."""
+            n = len(values)
+            skip = n // 2 if n < 1001 else 1000
+            if n > skip:
+                later_max = float(np.nanmax(values[skip:]))
+                if later_max > 0:
+                    ax.set_ylim([0, later_max * 1.5])
+
+        def _later_max_for_scaling(values: np.ndarray) -> float | None:
+            """Return post-spike max used for y-axis scaling, if available."""
+            n = len(values)
+            skip = n // 2 if n < 1001 else 1000
+            if n <= skip:
+                return None
+            later_max = float(np.nanmax(values[skip:]))
+            if later_max <= 0:
+                return None
+            return later_max
+
+        all_columns = _collect_loss_columns()
+
+        # --- style="overlay_runs": overlay running-average per run ---
+        if style == "overlay_runs":
+            figures: dict[str, plt.Figure] = {}
+            cmap = plt.colormaps["tab10"]
+            kernel = np.ones(running_average_window) / running_average_window
+
+            for col in all_columns:
+                fig, ax = plt.subplots()
+                colour_idx = 0
+                later_max_values: list[float] = []
+
+                eligible_runs: list[tuple[tuple[int, int], SyngResult]] = [
+                    (key, result)
+                    for key, result in sorted(self.runs.items())
+                    if col in result.loss.columns
+                ]
+
+                if not eligible_runs:
+                    ax.set_xlabel("Epochs" if x_axis == "epochs" else "Iterations")
+                    ax.set_ylabel("Loss")
+                    ax.set_title(f"{col} loss (overlay_runs)")
+                    fig.tight_layout()
+                    figures[col] = fig
+                    continue
+
+                # If truncating, use the common prefix length across runs.
+                truncate_len: int | None = None
+                common_epochs: float | None = None
+                if truncate:
+                    truncate_len = min(
+                        len(result.loss[col]) for _key, result in eligible_runs
+                    )
+                    if x_axis == "epochs":
+                        common_epochs = min(
+                            _resolve_epochs(result, key)
+                            for key, result in eligible_runs
+                        )
+
+                for (ps, draw), result in eligible_runs:
+                    values = result.loss[col].to_numpy()
+                    if truncate_len is not None:
+                        values = values[:truncate_len]
+
+                    num_epochs: float | None = None
+                    if x_axis == "epochs":
+                        if truncate and common_epochs is not None:
+                            num_epochs = common_epochs
+                        else:
+                            num_epochs = _resolve_epochs(result, (ps, draw))
+
+                    x_full = _build_x(len(values), num_epochs)
+
+                    colour = cmap(colour_idx % 10)
+                    colour_idx += 1
+
+                    # Only plot running-average values when possible; otherwise
+                    # fall back to raw values (short series).
+                    if running_average_window <= len(values):
+                        smoothed = np.convolve(values, kernel, mode="valid")
+                        offset = running_average_window - 1
+                        ax.plot(
+                            x_full[offset:],
+                            smoothed,
+                            alpha=0.7,
+                            color=colour,
+                            label=f"pilot={ps} draw={draw}",
+                        )
+                        later_max = _later_max_for_scaling(smoothed)
+                        if later_max is not None:
+                            later_max_values.append(later_max)
+                    else:
+                        ax.plot(
+                            x_full,
+                            values,
+                            alpha=0.7,
+                            color=colour,
+                            label=f"pilot={ps} draw={draw} (raw)",
+                        )
+                        later_max = _later_max_for_scaling(values)
+                        if later_max is not None:
+                            later_max_values.append(later_max)
+
+                ax.set_xlabel("Epochs" if x_axis == "epochs" else "Iterations")
+                ax.set_ylabel("Loss")
+                ax.set_title(f"{col} loss (overlay_runs)")
+                ax.legend(fontsize="x-small")
+
+                # Y-axis scaling: ignore each run's initial spike, then combine
+                if later_max_values:
+                    ax.set_ylim([0, max(later_max_values) * 1.5])
+
+                fig.tight_layout()
+                figures[col] = fig
+
+            return figures
+
+        # --- style="mean_band": mean ± std across runs ---
+        figures = {}
+        kernel = np.ones(running_average_window) / running_average_window
+
         for col in all_columns:
-            fig, ax = plt.subplots()
-            colour_idx = 0
+            # Gather raw loss arrays for this column
+            arrays: list[np.ndarray] = []
+            epoch_values: list[float] = []
             for (ps, draw), result in sorted(self.runs.items()):
                 if col not in result.loss.columns:
                     continue
-                values = result.loss[col].to_numpy()
+                arrays.append(result.loss[col].to_numpy())
                 if x_axis == "epochs":
-                    raw_num_epochs = result.metadata.get("epochs_trained")
-                    if raw_num_epochs is None or isinstance(raw_num_epochs, bool):
-                        raise ValueError(
-                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
-                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
-                        )
-                    try:
-                        num_epochs = float(raw_num_epochs)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(
-                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
-                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
-                        ) from exc
-                    if num_epochs <= 0:
-                        raise ValueError(
-                            "x_axis='epochs' requires metadata['epochs_trained'] > 0 "
-                            f"for run {(ps, draw)}, got {raw_num_epochs!r}"
-                        )
-                    x = np.linspace(0, num_epochs, len(values))
+                    epoch_values.append(_resolve_epochs(result, (ps, draw)))
+
+            if not arrays:
+                continue
+
+            # Determine target length and stack
+            lengths = [len(a) for a in arrays]
+            if truncate:
+                target_len = min(lengths)
+                stacked = np.array([a[:target_len] for a in arrays])
+            else:
+                target_len = max(lengths)
+                stacked = np.full((len(arrays), target_len), np.nan)
+                for i, a in enumerate(arrays):
+                    stacked[i, : len(a)] = a
+
+            mean_vals = np.nanmean(stacked, axis=0)
+            std_vals = np.nanstd(stacked, axis=0)
+
+            # Build x-coordinates
+            if x_axis == "epochs":
+                # Use the epoch range corresponding to the target length
+                if truncate:
+                    ref_epochs = min(epoch_values)
                 else:
-                    x = np.arange(len(values))
-                colour = cmap(colour_idx % 10)
-                colour_idx += 1
+                    ref_epochs = max(epoch_values)
+                x_full = np.linspace(0, ref_epochs, target_len)
+            else:
+                x_full = np.arange(target_len)
+
+            fig, ax = plt.subplots()
+
+            # Shaded std band (on raw values)
+            ax.fill_between(
+                x_full,
+                mean_vals - std_vals,
+                mean_vals + std_vals,
+                alpha=0.3,
+                color="tab:blue",
+                label="±1 std",
+            )
+
+            # Smoothed mean line
+            if running_average_window <= target_len:
+                smoothed_mean = np.convolve(mean_vals, kernel, mode="valid")
+                offset = running_average_window - 1
                 ax.plot(
-                    x,
-                    alpha=0.5,
-                    color=colour,
-                    label=f"pilot={ps} draw={draw}",
+                    x_full[offset:],
+                    smoothed_mean,
+                    color="tab:blue",
+                    label=f"mean (avg w={running_average_window})",
                 )
+            else:
+                # Window too large for smoothing; plot raw mean
+                ax.plot(
+                    x_full,
+                    mean_vals,
+                    color="tab:blue",
+                    label="mean",
+                )
+
             ax.set_xlabel("Epochs" if x_axis == "epochs" else "Iterations")
             ax.set_ylabel("Loss")
-            ax.set_title(f"{col} loss (aggregate)")
-            ax.legend(fontsize="x-small")
+            n_runs = stacked.shape[0]
+            ax.set_title(f"{col} loss (mean_band, n={n_runs})")
+            ax.legend()
+
+            # Y-axis scaling from mean values
+            _apply_ylim_scaling(ax, mean_vals)
+
             fig.tight_layout()
             figures[col] = fig
 

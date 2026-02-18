@@ -637,8 +637,24 @@ class TestPilotResult:
         assert "pilot10" in gen_path.name
         assert "draw1" in gen_path.name
 
-    def test_plot_loss_separate(self, pilot_result):
-        """Test plot_loss returns nested dict of per-column figures per run."""
+    def test_plot_loss_per_run(self, pilot_result):
+        """Test plot_loss(style='per_run') returns nested per-run figures."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = pilot_result.plot_loss(style="per_run")
+        assert isinstance(figs, dict)
+        assert len(figs) == 4  # 2 pilot sizes × 2 draws
+        for key, col_figs in figs.items():
+            assert isinstance(col_figs, dict), f"Expected dict for run {key}"
+            for col, fig in col_figs.items():
+                assert isinstance(fig, plt.Figure), f"Expected Figure for {key}/{col}"
+                plt.close(fig)
+
+    def test_plot_loss_overlay_runs_is_default(self, pilot_result):
+        """Test that default style is 'overlay_runs'."""
         import matplotlib
 
         matplotlib.use("Agg")
@@ -646,43 +662,272 @@ class TestPilotResult:
 
         figs = pilot_result.plot_loss()
         assert isinstance(figs, dict)
-        assert len(figs) == 4  # 2 pilot sizes × 2 draws
-        for key, col_figs in figs.items():
-            assert isinstance(col_figs, dict), f"Expected dict for run {key}"
-            # Each run should have per-column figures
-            for col, fig in col_figs.items():
-                assert isinstance(fig, plt.Figure), f"Expected Figure for {key}/{col}"
-                plt.close(fig)
-
-    def test_plot_loss_aggregate_per_column(self, pilot_result):
-        """Test plot_loss(aggregate=True) returns one figure per loss column."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        figs = pilot_result.plot_loss(aggregate=True)
-        assert isinstance(figs, dict)
-        # loss columns are "kl" and "recons"
+        # Default should now be overlay_runs, which returns flattened dict
         assert set(figs.keys()) == {"kl", "recons"}
-        for _col, fig in figs.items():
-            assert isinstance(fig, plt.Figure)
-            # Should have at least one axis
-            assert len(fig.get_axes()) >= 1
+        for fig in figs.values():
             plt.close(fig)
 
-    def test_plot_loss_aggregate_x_axis_epochs(self, pilot_result):
-        """Test aggregate plot_loss supports x_axis='epochs'."""
+    def test_plot_loss_overlay_runs(self, pilot_result):
+        """Test plot_loss(style='overlay_runs') overlays all runs per loss column."""
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        figs = pilot_result.plot_loss(aggregate=True, x_axis="epochs")
+        figs = pilot_result.plot_loss(style="overlay_runs")
+        assert isinstance(figs, dict)
+        assert set(figs.keys()) == {"kl", "recons"}
+        for col, fig in figs.items():
+            assert isinstance(fig, plt.Figure)
+            ax = fig.get_axes()[0]
+            # Should have 4 lines (one per run)
+            lines = ax.get_lines()
+            assert len(lines) == 4, f"Expected 4 lines for {col}, got {len(lines)}"
+            plt.close(fig)
+
+    def test_plot_loss_overlay_runs_x_axis_epochs(self, pilot_result):
+        """Test style='overlay_runs' with x_axis='epochs'."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = pilot_result.plot_loss(style="overlay_runs", x_axis="epochs")
         for fig in figs.values():
             ax = fig.get_axes()[0]
             assert ax.get_xlabel() == "Epochs"
             plt.close(fig)
+
+    def test_plot_loss_overlay_runs_x_axis_iterations(self, pilot_result):
+        """Test style='overlay_runs' with x_axis='iterations'."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = pilot_result.plot_loss(style="overlay_runs", x_axis="iterations")
+        for fig in figs.values():
+            ax = fig.get_axes()[0]
+            assert ax.get_xlabel() == "Iterations"
+            plt.close(fig)
+
+    def test_plot_loss_mean_band(self, pilot_result):
+        """Test plot_loss(style='mean_band') produces mean ± std plot."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import PolyCollection
+
+        figs = pilot_result.plot_loss(style="mean_band")
+        assert isinstance(figs, dict)
+        assert set(figs.keys()) == {"kl", "recons"}
+        for col, fig in figs.items():
+            assert isinstance(fig, plt.Figure)
+            ax = fig.get_axes()[0]
+            # Should have at least one line (smoothed mean)
+            assert len(ax.get_lines()) >= 1, f"No mean line for {col}"
+            # Should have a shaded band (PolyCollection from fill_between)
+            polys = [c for c in ax.get_children() if isinstance(c, PolyCollection)]
+            assert len(polys) >= 1, f"No shaded std band for {col}"
+            plt.close(fig)
+
+    def test_plot_loss_mean_band_x_axis_epochs(self, pilot_result):
+        """Test mean_band plot_loss supports x_axis='epochs'."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        figs = pilot_result.plot_loss(style="mean_band", x_axis="epochs")
+        for fig in figs.values():
+            ax = fig.get_axes()[0]
+            assert ax.get_xlabel() == "Epochs"
+            plt.close(fig)
+
+    def test_plot_loss_mean_band_truncate_true(self, sample_generated):
+        """Test mean_band with truncate=True uses shortest run length."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import PilotResult, SyngResult
+
+        # Create runs with different loss lengths
+        runs = {}
+        for draw, length in [(1, 100), (2, 50)]:
+            runs[(10, draw)] = SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": np.random.rand(length)}),
+                metadata={"model": "AE", "epochs_trained": length, "dataname": "t"},
+            )
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+        figs = pr.plot_loss(
+            style="mean_band",
+            truncate=True,
+            running_average_window=5,
+            x_axis="iterations",
+        )
+        ax = figs["loss"].get_axes()[0]
+        # The shaded band x-data should extend to min length (50)
+        for child in ax.get_children():
+            from matplotlib.collections import PolyCollection
+
+            if isinstance(child, PolyCollection):
+                paths = child.get_paths()
+                if paths:
+                    verts = paths[0].vertices
+                    assert verts[:, 0].max() <= 50
+                break
+        plt.close("all")
+
+    def test_plot_loss_mean_band_truncate_false(self, sample_generated):
+        """Test mean_band with truncate=False uses longest run length."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import PilotResult, SyngResult
+
+        runs = {}
+        for draw, length in [(1, 100), (2, 50)]:
+            runs[(10, draw)] = SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": np.random.rand(length)}),
+                metadata={"model": "AE", "epochs_trained": length, "dataname": "t"},
+            )
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+        figs = pr.plot_loss(
+            style="mean_band",
+            truncate=False,
+            running_average_window=5,
+            x_axis="iterations",
+        )
+        ax = figs["loss"].get_axes()[0]
+        # The shaded band x-data should extend to max length (100)
+        for child in ax.get_children():
+            from matplotlib.collections import PolyCollection
+
+            if isinstance(child, PolyCollection):
+                paths = child.get_paths()
+                if paths:
+                    verts = paths[0].vertices
+                    # x-coords should go up to ~99 (0-indexed)
+                    assert verts[:, 0].max() >= 90
+                break
+        plt.close("all")
+
+    def test_plot_loss_invalid_style(self, pilot_result):
+        """Test plot_loss raises ValueError for invalid style."""
+        with pytest.raises(ValueError, match="style must be one of"):
+            pilot_result.plot_loss(style="fancy")
+
+    def test_plot_loss_invalid_running_average_window(self, pilot_result):
+        """Test plot_loss raises ValueError when window <= 0."""
+        with pytest.raises(ValueError, match="running_average_window must be > 0"):
+            pilot_result.plot_loss(running_average_window=0)
+
+    def test_plot_loss_invalid_x_axis(self, pilot_result):
+        """Test plot_loss raises ValueError for invalid x_axis."""
+        with pytest.raises(ValueError, match="x_axis must be"):
+            pilot_result.plot_loss(x_axis="batches")
+
+    def test_plot_loss_individual_ylim_scaling(self, sample_generated):
+        """Test style='individual' applies y-axis spike suppression via SyngResult."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import PilotResult, SyngResult
+
+        vals = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            )
+        }
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+
+        figs = pr.plot_loss(style="per_run", running_average_window=10)
+        fig = figs[(10, 1)]["loss"]
+        ylim = fig.get_axes()[0].get_ylim()
+        assert ylim[1] < 100, (
+            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        )
+        plt.close(fig)
+
+    def test_plot_loss_all_ylim_scaling(self, sample_generated):
+        """Test style='overlay' applies y-axis scaling to ignore initial spikes."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import PilotResult, SyngResult
+
+        vals1 = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
+        vals2 = np.concatenate([np.array([900.0, 700.0]), np.random.rand(200) * 5])
+
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals1}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+            (10, 2): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals2}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+        }
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+
+        figs = pr.plot_loss(style="overlay_runs", running_average_window=10)
+        fig = figs["loss"]
+        ylim = fig.get_axes()[0].get_ylim()
+        assert ylim[1] < 100, (
+            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        )
+        plt.close(fig)
+
+    def test_plot_loss_mean_band_ylim_scaling(self, sample_generated):
+        """Test style='aggregate' applies y-axis scaling to ignore initial spikes."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        from syng_bts import PilotResult, SyngResult
+
+        vals1 = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
+        vals2 = np.concatenate([np.array([900.0, 700.0]), np.random.rand(200) * 5])
+
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals1}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+            (10, 2): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals2}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+        }
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+
+        figs = pr.plot_loss(style="mean_band", running_average_window=10)
+        fig = figs["loss"]
+        ylim = fig.get_axes()[0].get_ylim()
+        assert ylim[1] < 100, (
+            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        )
+        plt.close(fig)
 
 
 class TestSaveLoadRoundtrip:

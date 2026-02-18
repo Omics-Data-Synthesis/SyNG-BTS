@@ -143,105 +143,6 @@ class TestDataLoading:
         assert isinstance(data, pd.DataFrame)
 
 
-class TestOutputDirectory:
-    """Test output directory management."""
-
-    def test_get_output_dir_default(self):
-        """Test default output directory is current working directory."""
-        from syng_bts import get_output_dir
-        from syng_bts.data_utils import set_default_output_dir
-
-        # Reset to default
-        set_default_output_dir(None)
-
-        output_dir = get_output_dir()
-        assert output_dir == Path.cwd()
-
-    def test_set_default_output_dir(self, temp_dir):
-        """Test setting default output directory."""
-        from syng_bts import get_output_dir, set_default_output_dir
-
-        set_default_output_dir(temp_dir)
-        output_dir = get_output_dir()
-
-        assert output_dir == temp_dir
-
-        # Reset to default
-        set_default_output_dir(None)
-
-    def test_get_output_dir_with_explicit(self, temp_dir):
-        """Test explicit output directory overrides default."""
-        from syng_bts import get_output_dir, set_default_output_dir
-
-        default_dir = temp_dir / "default"
-        explicit_dir = temp_dir / "explicit"
-
-        set_default_output_dir(default_dir)
-        output_dir = get_output_dir(explicit_dir)
-
-        assert output_dir == explicit_dir
-
-        # Reset
-        set_default_output_dir(None)
-
-
-class TestDirectoryCreation:
-    """Test output directory creation logic."""
-
-    def test_ensure_dir_creates_directory(self, temp_dir):
-        """Test ensure_dir creates the directory."""
-        from syng_bts.data_utils import ensure_dir
-
-        new_dir = temp_dir / "new_subdir" / "nested"
-        assert not new_dir.exists()
-
-        result = ensure_dir(new_dir)
-
-        assert new_dir.exists()
-        assert new_dir.is_dir()
-        assert result == new_dir
-
-    def test_ensure_dir_existing(self, temp_dir):
-        """Test ensure_dir works with existing directory."""
-        from syng_bts.data_utils import ensure_dir
-
-        # Directory already exists
-        result = ensure_dir(temp_dir)
-
-        assert temp_dir.exists()
-        assert result == temp_dir
-
-    def test_get_output_path_creates_subdirectory(self, temp_dir):
-        """Test get_output_path creates subdirectory."""
-        from syng_bts.data_utils import get_output_path
-
-        output_path = get_output_path(
-            output_dir=temp_dir,
-            subdir="GeneratedData",
-            filename="test_output.csv",
-            create_dir=True,
-        )
-
-        expected_dir = temp_dir / "GeneratedData"
-        assert expected_dir.exists()
-        assert output_path == expected_dir / "test_output.csv"
-
-    def test_get_output_path_no_create(self, temp_dir):
-        """Test get_output_path without creating directory."""
-        from syng_bts.data_utils import get_output_path
-
-        output_path = get_output_path(
-            output_dir=temp_dir,
-            subdir="NonExistent",
-            filename="test.csv",
-            create_dir=False,
-        )
-
-        expected_dir = temp_dir / "NonExistent"
-        assert not expected_dir.exists()
-        assert output_path == expected_dir / "test.csv"
-
-
 class TestDataLoadingEdgeCases:
     """Test edge cases and error handling in data loading."""
 
@@ -275,46 +176,6 @@ class TestDataLoadingEdgeCases:
         # Test with Path object
         data2, _g2 = resolve_data(csv_path)
         assert len(data2) == 20
-
-
-class TestOutputPathEdgeCases:
-    """Test edge cases in output path handling."""
-
-    def test_ensure_dir_with_string_path(self, temp_dir):
-        """Test ensure_dir works with string paths."""
-        from syng_bts.data_utils import ensure_dir
-
-        new_dir = str(temp_dir / "string_path_test")
-        ensure_dir(new_dir)
-
-        assert Path(new_dir).exists()
-
-    def test_get_output_path_nested_subdirs(self, temp_dir):
-        """Test get_output_path with deeply nested subdirectories."""
-        from syng_bts.data_utils import get_output_path
-
-        output_path = get_output_path(
-            output_dir=temp_dir,
-            subdir="level1/level2/level3",
-            filename="deep.csv",
-            create_dir=True,
-        )
-
-        expected_dir = temp_dir / "level1" / "level2" / "level3"
-        assert expected_dir.exists()
-        assert output_path == expected_dir / "deep.csv"
-
-    def test_set_output_dir_with_string(self, temp_dir):
-        """Test set_default_output_dir works with string paths."""
-        from syng_bts import get_output_dir, set_default_output_dir
-
-        set_default_output_dir(str(temp_dir))
-        output_dir = get_output_dir()
-
-        assert output_dir == temp_dir
-
-        # Reset
-        set_default_output_dir(None)
 
 
 # ---------------------------------------------------------------------------
@@ -360,71 +221,81 @@ class TestResolveDataEdgeCases:
         assert len(df) == 20
         assert groups is None
 
+    def test_unsupported_file_type_raises(self, temp_dir):
+        """Unsupported file extensions raise ValueError."""
+        from syng_bts.data_utils import _read_user_file
+
+        txt_file = temp_dir / "data.txt"
+        txt_file.write_text("col1,col2\n1,2\n")
+
+        with pytest.raises(ValueError, match="Unsupported file type"):
+            _read_user_file(txt_file)
+
 
 # ---------------------------------------------------------------------------
-# derive_dataname()
+# _derive_dataname()
 # ---------------------------------------------------------------------------
 class TestDeriveDataname:
-    """Test the derive_dataname() helper."""
+    """Test the _derive_dataname() helper."""
 
     def test_explicit_name_wins(self, sample_data):
         """Explicit name parameter takes priority."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
-        result = derive_dataname(sample_data, name="override")
+        result = _derive_dataname(sample_data, name="override")
         assert result == "override"
 
     def test_from_file_path_string(self):
         """Derive name from a string file path."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
-        result = derive_dataname("/some/path/MyDataset.csv")
+        result = _derive_dataname("/some/path/MyDataset.csv")
         assert result == "MyDataset"
 
     def test_from_file_path_object(self):
         """Derive name from a Path object."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
-        result = derive_dataname(Path("/some/path/MyDataset.csv"))
+        result = _derive_dataname(Path("/some/path/MyDataset.csv"))
         assert result == "MyDataset"
 
     def test_from_bundled_name(self):
         """Derive name from a plain bundled name string."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
-        result = derive_dataname("SKCMPositive_4")
+        result = _derive_dataname("SKCMPositive_4")
         assert result == "SKCMPositive_4"
 
     def test_from_dataframe_with_attrs(self):
         """Derive name from a DataFrame with .attrs['name']."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
         df = pd.DataFrame({"a": [1, 2]})
         df.attrs["name"] = "my_dataset"
-        result = derive_dataname(df)
+        result = _derive_dataname(df)
         assert result == "my_dataset"
 
     def test_from_dataframe_without_attrs(self):
         """DataFrame without attrs falls back to 'data'."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
         df = pd.DataFrame({"a": [1, 2]})
-        result = derive_dataname(df)
+        result = _derive_dataname(df)
         assert result == "data"
 
     def test_explicit_name_overrides_dataframe_attrs(self, sample_data):
         """Explicit name overrides DataFrame attrs."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
         sample_data.attrs["name"] = "from_attrs"
-        result = derive_dataname(sample_data, name="explicit")
+        result = _derive_dataname(sample_data, name="explicit")
         assert result == "explicit"
 
     def test_name_from_string_without_extension(self):
         """Plain string without extension used as-is."""
-        from syng_bts import derive_dataname
+        from syng_bts.data_utils import _derive_dataname
 
-        result = derive_dataname("BRCASubtypeSel_train")
+        result = _derive_dataname("BRCASubtypeSel_train")
         assert result == "BRCASubtypeSel_train"
 
 

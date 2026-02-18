@@ -207,7 +207,6 @@ def training_iter(
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
                 skip_epoch_stats=True,
-                logging_interval=50,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -267,7 +266,6 @@ def training_iter(
                 skip_epoch_stats=True,
                 reconstruction_term_weight=1,
                 kl_weight=kl_weight,
-                logging_interval=50,
                 verbose=verbose,
             )
             final_model = best_model if early_stop else model
@@ -396,7 +394,6 @@ def training_AEs(
             skip_epoch_stats=True,
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
-            logging_interval=50,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -413,7 +410,6 @@ def training_AEs(
             skip_epoch_stats=True,
             reconstruction_term_weight=1,
             kl_weight=kl_weight,
-            logging_interval=50,
             scheduler=scheduler,
             verbose=verbose,
         )
@@ -428,7 +424,6 @@ def training_AEs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             skip_epoch_stats=True,
-            logging_interval=50,
             verbose=verbose,
         )
 
@@ -511,7 +506,6 @@ def training_GANs(
             train_loader=train_loader,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            logging_interval=100,
             verbose=verbose,
         )
     elif modelname == "WGAN":
@@ -524,7 +518,6 @@ def training_GANs(
             train_loader=train_loader,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
-            logging_interval=100,
             verbose=verbose,
         )
     elif modelname == "WGANGP":
@@ -538,7 +531,6 @@ def training_GANs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             discr_iter_per_generator_iter=5,
-            logging_interval=100,
             gradient_penalty=True,
             gradient_penalty_weight=10,
             verbose=verbose,

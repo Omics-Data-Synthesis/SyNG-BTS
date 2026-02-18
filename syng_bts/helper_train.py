@@ -164,7 +164,6 @@ def train_AE(
     early_stop,
     early_stop_num,
     loss_fn="MSE",
-    logging_interval=100,
     skip_epoch_stats=False,
     verbose=VerbosityLevel.MINIMAL,
 ):
@@ -301,7 +300,6 @@ def train_VAE(
     early_stop,
     early_stop_num,
     loss_fn="MSE",
-    logging_interval=100,
     skip_epoch_stats=False,
     reconstruction_term_weight=1,
     kl_weight=1,
@@ -476,7 +474,6 @@ def train_CVAE(
     early_stop,
     early_stop_num,
     loss_fn="MSE",
-    logging_interval=100,
     skip_epoch_stats=False,
     reconstruction_term_weight=1,
     kl_weight=1,
@@ -656,7 +653,6 @@ def train_GAN(
     train_loader,
     early_stop=None,
     early_stop_num=None,  # loss for GAN are not meaningful, so early stopping rule is not applied.
-    logging_interval=100,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -779,7 +775,6 @@ def train_WGAN(
     train_loader,
     early_stop,
     early_stop_num,
-    logging_interval=100,
     verbose=VerbosityLevel.MINIMAL,
 ):
 
@@ -948,7 +943,6 @@ def train_WGANGP(
     early_stop,
     early_stop_num,
     discr_iter_per_generator_iter=5,
-    logging_interval=100,
     gradient_penalty=True,
     gradient_penalty_weight=10,
     verbose=VerbosityLevel.MINIMAL,

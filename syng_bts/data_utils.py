@@ -1,8 +1,7 @@
-"""
-Data loading and path utilities for SyNG-BTS.
+"""Data loading and validation utilities for SyNG-BTS.
 
-This module provides functions for loading bundled data files and managing
-output directories in a cross-platform compatible way.
+This module provides helpers for loading bundled/user data, resolving flexible
+input forms (DataFrame, path, bundled name), and validating feature matrices.
 """
 
 from pathlib import Path
@@ -14,97 +13,6 @@ try:
     from importlib.resources import as_file, files
 except ImportError:
     from importlib_resources import as_file, files
-
-# Default output directory
-_DEFAULT_OUTPUT_DIR: Path | None = None
-
-
-def set_default_output_dir(path: str | Path | None) -> None:
-    """
-    Set the default output directory for all SyNG-BTS operations.
-
-    Parameters
-    ----------
-    path : str, Path, or None
-        The default output directory. If None, uses current working directory.
-    """
-    global _DEFAULT_OUTPUT_DIR
-    if path is None:
-        _DEFAULT_OUTPUT_DIR = None
-    else:
-        _DEFAULT_OUTPUT_DIR = Path(path)
-
-
-def get_output_dir(output_dir: str | Path | None = None) -> Path:
-    """
-    Get the output directory to use for saving files.
-
-    Parameters
-    ----------
-    output_dir : str, Path, or None
-        Explicit output directory. If None, uses the default or current working directory.
-
-    Returns
-    -------
-    Path
-        The resolved output directory path.
-    """
-    if output_dir is not None:
-        return Path(output_dir)
-    if _DEFAULT_OUTPUT_DIR is not None:
-        return _DEFAULT_OUTPUT_DIR
-    return Path.cwd()
-
-
-def ensure_dir(path: str | Path) -> Path:
-    """
-    Ensure a directory exists, creating it if necessary.
-
-    Parameters
-    ----------
-    path : str or Path
-        The directory path to ensure exists.
-
-    Returns
-    -------
-    Path
-        The path as a Path object.
-    """
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def get_output_path(
-    output_dir: str | Path | None,
-    subdir: str,
-    filename: str,
-    create_dir: bool = True,
-) -> Path:
-    """
-    Get a full output path, optionally creating the directory.
-
-    Parameters
-    ----------
-    output_dir : str, Path, or None
-        Base output directory. If None, uses default.
-    subdir : str
-        Subdirectory name (e.g., "GeneratedData", "Loss").
-    filename : str
-        The filename.
-    create_dir : bool
-        Whether to create the directory if it doesn't exist.
-
-    Returns
-    -------
-    Path
-        The full output path.
-    """
-    base_dir = get_output_dir(output_dir)
-    full_dir = base_dir / subdir
-    if create_dir:
-        ensure_dir(full_dir)
-    return full_dir / filename
 
 
 def load_bundled_data(
@@ -239,10 +147,22 @@ def list_bundled_datasets() -> list:
 
 
 def _read_user_file(path: Path) -> pd.DataFrame:
-    """Read a user-provided CSV or Parquet file."""
-    if path.suffix.lower() == ".parquet":
+    """Read a user-provided CSV or Parquet file.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not ``.csv`` or ``.parquet``.
+    """
+    ext = path.suffix.lower()
+    if ext == ".parquet":
         return pd.read_parquet(path, engine="pyarrow")
-    return pd.read_csv(path, header=0)
+    if ext == ".csv":
+        return pd.read_csv(path, header=0)
+    raise ValueError(
+        f"Unsupported file type '{ext}' for '{path.name}'. "
+        "Only .csv and .parquet are supported."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +312,7 @@ def resolve_data(
     )
 
 
-def derive_dataname(
+def _derive_dataname(
     data: "pd.DataFrame | str | Path",
     name: "str | None" = None,
 ) -> str:

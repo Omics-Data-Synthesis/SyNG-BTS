@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .data_utils import _validate_feature_data, derive_dataname, resolve_data
+from .data_utils import _derive_dataname, _validate_feature_data, resolve_data
 from .helper_train import VerbosityLevel, _resolve_verbose
 from .helper_training import (
     TrainedModel,
@@ -165,7 +165,7 @@ def _prepare_data(
                 stacklevel=2,
             )
 
-    dataname = derive_dataname(data, name)
+    dataname = _derive_dataname(data, name)
 
     colnames = list(df.columns)
     oridata = torch.from_numpy(df.to_numpy().copy()).to(torch.float32)

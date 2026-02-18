@@ -81,25 +81,10 @@ resolve_data
 
 .. autofunction:: syng_bts.resolve_data
 
-derive_dataname
-~~~~~~~~~~~~~~~
-
-.. autofunction:: syng_bts.derive_dataname
-
 list_bundled_datasets
 ~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: syng_bts.list_bundled_datasets
-
-set_default_output_dir
-~~~~~~~~~~~~~~~~~~~~~~
-
-.. autofunction:: syng_bts.set_default_output_dir
-
-get_output_dir
-~~~~~~~~~~~~~~
-
-.. autofunction:: syng_bts.get_output_dir
 
 Model Classes
 -------------

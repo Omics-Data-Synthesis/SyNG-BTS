@@ -55,11 +55,8 @@ from .core import (
     transfer,
 )
 from .data_utils import (
-    derive_dataname,
-    get_output_dir,
     list_bundled_datasets,
     resolve_data,
-    set_default_output_dir,
 )
 from .evaluations import (
     UMAP_eval,
@@ -100,10 +97,7 @@ __all__ = [
     "GAN",
     # Data utilities
     "list_bundled_datasets",
-    "set_default_output_dir",
-    "get_output_dir",
     "resolve_data",
-    "derive_dataname",
     # Result objects
     "SyngResult",
     "PilotResult",

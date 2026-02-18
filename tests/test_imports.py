@@ -51,18 +51,12 @@ class TestPackageImports:
     def test_import_data_utils(self):
         """Test data utility functions are importable."""
         from syng_bts import (
-            derive_dataname,
-            get_output_dir,
             list_bundled_datasets,
             resolve_data,
-            set_default_output_dir,
         )
 
         assert callable(list_bundled_datasets)
-        assert callable(set_default_output_dir)
-        assert callable(get_output_dir)
         assert callable(resolve_data)
-        assert callable(derive_dataname)
 
     def test_import_model_classes(self):
         """Test model classes are importable."""
@@ -97,10 +91,7 @@ class TestPackageImports:
             "CVAE",
             "GAN",
             "list_bundled_datasets",
-            "set_default_output_dir",
-            "get_output_dir",
             "resolve_data",
-            "derive_dataname",
             "SyngResult",
             "PilotResult",
         ]
@@ -118,6 +109,9 @@ class TestPackageImports:
             "TransferExperiment",
             "Transfer",
             "load_dataset",
+            "set_default_output_dir",
+            "get_output_dir",
+            "derive_dataname",
         ]:
             assert name not in syng_bts.__all__, f"{name} should not be in __all__"
 
@@ -137,6 +131,15 @@ class TestPackageImports:
 
         with pytest.raises(ImportError):
             from syng_bts import load_dataset  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import set_default_output_dir  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import get_output_dir  # noqa: F401
+
+        with pytest.raises(ImportError):
+            from syng_bts import derive_dataname  # noqa: F401
 
 
 class TestDynamicVersion:

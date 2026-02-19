@@ -58,6 +58,17 @@ class SyngResult:
     metadata : dict
         Run parameters and summary statistics, e.g. model name,
         kl_weight, seed, epoch count, input data dimensions.
+    original_groups : pd.Series or None
+        Group labels for the original input data. Populated when
+        groups were provided or bundled with the dataset.
+    generated_groups : pd.Series or None
+        Group labels for the generated data, derived from the
+        label column produced during generation and mapped back
+        to the original group values.
+    reconstructed_groups : pd.Series or None
+        Group labels for the reconstructed data (AE/VAE/CVAE only),
+        derived from the label column and mapped back to original
+        group values.
 
     Examples
     --------
@@ -73,6 +84,9 @@ class SyngResult:
     original_data: pd.DataFrame | None = None
     model_state: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    original_groups: pd.Series | None = None
+    generated_groups: pd.Series | None = None
+    reconstructed_groups: pd.Series | None = None
 
     # Non-serialized lazy model cache (excluded from dataclass init)
     _cached_model: nn.Module | None = field(
@@ -210,8 +224,9 @@ class SyngResult:
         modelname = arch_params.get("modelname", "")
         gen_labels: pd.Series | None = None
 
-        # CVAE: strip the appended label column
-        if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+        # Strip the appended label/blur-label column when the generated
+        # tensor has more columns than the original feature set.
+        if gen_np.shape[1] > len(colnames):
             gen_labels = pd.Series(gen_np[:, -1], name="label")
             gen_np = gen_np[:, :-1]
 
@@ -229,6 +244,16 @@ class SyngResult:
             from .helper_utils import inverse_log2
 
             gen_df = inverse_log2(gen_df)
+
+        # Derive generated_groups from labels + group_mapping
+        group_mapping = self.metadata.get("group_mapping")
+        new_gen_groups: pd.Series | None = None
+        if group_mapping is not None and gen_labels is not None:
+            from .core import _labels_to_groups
+
+            new_gen_groups = _labels_to_groups(
+                gen_labels, group_mapping, modelname=modelname
+            )
 
         def _as_series_or_none(value: Any) -> pd.Series | None:
             if value is None:
@@ -260,10 +285,22 @@ class SyngResult:
                 ),
                 model_state=self.model_state,
                 metadata=new_metadata,
+                original_groups=(
+                    self.original_groups.copy()
+                    if self.original_groups is not None
+                    else None
+                ),
+                generated_groups=new_gen_groups,
+                reconstructed_groups=(
+                    self.reconstructed_groups.copy()
+                    if self.reconstructed_groups is not None
+                    else None
+                ),
             )
         elif mode == "overwrite":
             self.generated_data = gen_df
             self.metadata["generated_labels"] = gen_labels
+            self.generated_groups = new_gen_groups
             return self
         else:  # append
             self.generated_data = pd.concat(
@@ -280,6 +317,16 @@ class SyngResult:
                     self.metadata["generated_labels"] = pd.concat(
                         [old_labels, gen_labels], ignore_index=True
                     )
+
+            # Append generated groups
+            if new_gen_groups is None:
+                self.generated_groups = None
+            elif self.generated_groups is None:
+                self.generated_groups = new_gen_groups
+            else:
+                self.generated_groups = pd.concat(
+                    [self.generated_groups, new_gen_groups], ignore_index=True
+                )
             return self
 
     # ------------------------------------------------------------------
@@ -347,6 +394,22 @@ class SyngResult:
             orig_path = out / f"{stem}_original.csv"
             self.original_data.to_csv(orig_path, index=True)
             paths["original"] = orig_path
+
+        # Group attributes
+        if self.original_groups is not None:
+            og_path = out / f"{stem}_original_groups.csv"
+            self.original_groups.to_frame().to_csv(og_path, index=False)
+            paths["original_groups"] = og_path
+
+        if self.generated_groups is not None:
+            gg_path = out / f"{stem}_generated_groups.csv"
+            self.generated_groups.to_frame().to_csv(gg_path, index=False)
+            paths["generated_groups"] = gg_path
+
+        if self.reconstructed_groups is not None:
+            rg_path = out / f"{stem}_reconstructed_groups.csv"
+            self.reconstructed_groups.to_frame().to_csv(rg_path, index=False)
+            paths["reconstructed_groups"] = rg_path
 
         # Model state dict
         if self.model_state is not None:
@@ -567,6 +630,9 @@ class SyngResult:
         if self.original_data is not None:
             r, c = self.original_data.shape
             parts.append(f"Original data: {r} rows × {c} cols")
+        if self.original_groups is not None:
+            n_classes = self.original_groups.nunique()
+            parts.append(f"Groups: {n_classes} classes")
         if "seed" in meta:
             parts.append(f"Random seed: {meta['seed']}")
         return " | ".join(parts)
@@ -577,13 +643,15 @@ class SyngResult:
         has_recon = self.reconstructed_data is not None
         has_original = self.original_data is not None
         has_model = self.model_state is not None
+        has_groups = self.original_groups is not None
         return (
             f"SyngResult(model={model!r}, "
             f"generated={n_gen}×{n_feat}, "
             f"loss_cols={list(self.loss.columns)}, "
             f"has_reconstructed={has_recon}, "
             f"has_original={has_original}, "
-            f"has_model_state={has_model})"
+            f"has_model_state={has_model}, "
+            f"has_groups={has_groups})"
         )
 
     # ------------------------------------------------------------------
@@ -672,12 +740,31 @@ class SyngResult:
             torch.load(model_path, weights_only=False) if model_path.exists() else None
         )
 
+        # --- Group sidecar files ---
+        def _load_groups(suffix: str) -> pd.Series | None:
+            path = d / f"{stem}_{suffix}.csv"
+            if not path.exists():
+                return None
+            df = pd.read_csv(path)
+            return df.iloc[:, 0].rename("group")
+
+        original_groups = _load_groups("original_groups")
+        generated_groups = _load_groups("generated_groups")
+        reconstructed_groups = _load_groups("reconstructed_groups")
+
         meta_path = d / f"{stem}_metadata.json"
         if meta_path.exists():
             metadata = json.loads(meta_path.read_text(encoding="utf-8"))
             # Restore tuples that were serialised as lists
             if "input_shape" in metadata and isinstance(metadata["input_shape"], list):
                 metadata["input_shape"] = tuple(metadata["input_shape"])
+            # Restore group_mapping keys from JSON strings to ints
+            if "group_mapping" in metadata and isinstance(
+                metadata["group_mapping"], dict
+            ):
+                metadata["group_mapping"] = {
+                    int(k): v for k, v in metadata["group_mapping"].items()
+                }
         else:
             metadata = {}
 
@@ -688,6 +775,9 @@ class SyngResult:
             original_data=original_data,
             model_state=model_state,
             metadata=metadata,
+            original_groups=original_groups,
+            generated_groups=generated_groups,
+            reconstructed_groups=reconstructed_groups,
         )
 
 

@@ -1,4 +1,4 @@
-"""Tests for syng_bts.synthesize — Phase 1 (legacy API baseline).
+"""Tests for syng_bts.synthesize (legacy API baseline).
 
 These tests verify the ported SyntheSize functions ``eval_classifier`` and
 ``vis_classifier`` using bundled BRCA datasets and small synthetic data.
@@ -29,9 +29,9 @@ def brca_test_data() -> tuple[pd.DataFrame, pd.Series]:
 
 
 @pytest.fixture
-def brca_train_data() -> tuple[pd.DataFrame, pd.Series]:
-    """Load BRCASubtypeSel_train bundled dataset."""
-    df, groups = resolve_data("BRCASubtypeSel_train")
+def brca_generated_data() -> tuple[pd.DataFrame, pd.Series]:
+    """Load bundled generated BRCA dataset."""
+    df, groups = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
     assert groups is not None
     return df, groups
 
@@ -173,9 +173,9 @@ class TestEvalClassifier:
         assert (result["auc"] > 0.5).all()
 
     @pytest.mark.slow
-    def test_brca_train_data_baseline(self, brca_train_data):
-        """Baseline test with real BRCA train data and a single classifier."""
-        data, groups = brca_train_data
+    def test_brca_generated_data_baseline(self, brca_generated_data):
+        """Baseline test with bundled generated BRCA data and one classifier."""
+        data, groups = brca_generated_data
         result = eval_classifier(
             whole_generated=data,
             whole_groups=groups,
@@ -189,10 +189,10 @@ class TestEvalClassifier:
         assert result["auc"].iloc[0] > 0.5
 
     @pytest.mark.slow
-    def test_brca_eval_and_vis_integration(self, brca_test_data, brca_train_data):
+    def test_brca_eval_and_vis_integration(self, brca_test_data, brca_generated_data):
         """Run BRCA eval on real+generated datasets and visualize both curves."""
         real_data, real_groups = brca_test_data
-        generated_data, generated_groups = brca_train_data
+        generated_data, generated_groups = brca_generated_data
 
         # >= 3 sample sizes needed for 3-parameter curve fitting in vis_classifier
         sample_sizes = [40, 80, 120]

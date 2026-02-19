@@ -100,6 +100,11 @@ BUNDLED_DATASETS: dict[str, tuple[str, str, str | None]] = {
         "BRCASubtypeSel_train.parquet",
         "BRCASubtypeSel_train_groups.parquet",
     ),
+    "BRCASubtypeSel_train_epoch285_CVAE1-20_generated": (
+        "case/brca_subtype",
+        "BRCASubtypeSel_train_epoch285_CVAE1-20_generated.parquet",
+        "BRCASubtypeSel_train_epoch285_CVAE1-20_generated_groups.parquet",
+    ),
     # LIHC subtype case study
     "LIHCSubtypeFamInd": (
         "case/lihc_subtype",

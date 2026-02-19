@@ -29,8 +29,8 @@ class TestBundledDatasets:
         from syng_bts import list_bundled_datasets
 
         datasets = list_bundled_datasets()
-        # Should have 12 datasets total
-        assert len(datasets) == 12
+        # Should have 13 datasets total
+        assert len(datasets) == 13
 
     def test_resolve_bundled_dataset_skcm(self):
         """Test loading SKCMPositive_4 bundled dataset via resolve_data."""
@@ -78,6 +78,24 @@ class TestBundledDatasets:
         assert groups is not None
         assert isinstance(groups, pd.Series)
         assert len(groups) == len(data)
+
+    def test_resolve_bundled_dataset_brca_generated(self):
+        """Test loading CVAE-generated BRCA training data."""
+        from syng_bts import resolve_data
+
+        data, groups = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
+
+        assert isinstance(data, pd.DataFrame)
+        assert len(data) == 1000
+        assert len(data.columns) == 47
+        # Generated data has groups sidecar
+        assert groups is not None
+        assert isinstance(groups, pd.Series)
+        assert len(groups) == len(data)
+        assert set(groups.unique()) == {
+            "Infiltrating Lobular Carcinoma",
+            "Infiltrating Ductal Carcinoma",
+        }
 
     def test_resolve_all_bundled_datasets(self):
         """Test that all bundled datasets can be loaded via resolve_data."""

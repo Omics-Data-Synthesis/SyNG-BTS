@@ -223,7 +223,7 @@ def _fit_curve(
     n_target: int | list | None = None,
     plot: bool = True,
     ax: plt.Axes | None = None,
-    annotation: tuple[str, str] = ("Metric", ""),
+    annotation: str = "",
 ) -> plt.Axes | None:
     """Fit an inverse power-law curve to evaluation metrics.
 
@@ -239,62 +239,71 @@ def _fit_curve(
         Whether to create a plot.
     ax : matplotlib Axes or None
         Axes to draw on; a new figure is created when ``None``.
-    annotation : tuple[str, str]
-        ``(metric_label, title_suffix)`` used for the subplot title.
+    annotation : str
+        Subplot title.
 
     Returns
     -------
     matplotlib Axes or None
     """
+    acc_table = acc_table.copy()
     initial_params = [0, 1, -0.5]
     max_iterations = 50000
+    fit_ok = False
 
-    popt, pcov = curve_fit(
-        _power_law,
-        acc_table["n"],
-        acc_table[metric_name],
-        p0=initial_params,
-        maxfev=max_iterations,
-    )
+    try:
+        popt, pcov = curve_fit(
+            _power_law,
+            acc_table["n"],
+            acc_table[metric_name],
+            p0=initial_params,
+            maxfev=max_iterations,
+        )
 
-    acc_table["predicted"] = _power_law(acc_table["n"], *popt)
+        acc_table["predicted"] = _power_law(acc_table["n"], *popt)
 
-    # Confidence intervals via delta method
-    epsilon = np.sqrt(np.finfo(float).eps)
-    jacobian = np.empty((len(acc_table["n"]), len(popt)))
-    for i, x in enumerate(acc_table["n"]):
-        jacobian[i] = approx_fprime([x], lambda x_: _power_law(x_[0], *popt), epsilon)
-    pred_var = np.sum((jacobian @ pcov) * jacobian, axis=1)
-    pred_std = np.sqrt(pred_var)
-    t = norm.ppf(0.975)
-    acc_table["ci_low"] = acc_table["predicted"] - t * pred_std
-    acc_table["ci_high"] = acc_table["predicted"] + t * pred_std
+        # Confidence intervals via delta method
+        epsilon = np.sqrt(np.finfo(float).eps)
+        jacobian = np.empty((len(acc_table["n"]), len(popt)))
+        for i, x in enumerate(acc_table["n"]):
+            jacobian[i] = approx_fprime(
+                [x], lambda x_: _power_law(x_[0], *popt), epsilon
+            )
+        pred_var = np.sum((jacobian @ pcov) * jacobian, axis=1)
+        pred_std = np.sqrt(pred_var)
+        t = norm.ppf(0.975)
+        acc_table["ci_low"] = acc_table["predicted"] - t * pred_std
+        acc_table["ci_high"] = acc_table["predicted"] + t * pred_std
+        fit_ok = True
+    except RuntimeError:
+        fit_ok = False
 
     if plot:
         if ax is None:
             _, ax = plt.subplots(figsize=(10, 6))
 
-        ax.plot(
-            acc_table["n"],
-            acc_table["predicted"],
-            label="Fitted",
-            color="blue",
-            linestyle="--",
-        )
         ax.scatter(
             acc_table["n"],
             acc_table[metric_name],
             label="Actual Data",
             color="red",
         )
-        ax.fill_between(
-            acc_table["n"],
-            acc_table["ci_low"],
-            acc_table["ci_high"],
-            color="blue",
-            alpha=0.2,
-            label="95% CI",
-        )
+        if fit_ok:
+            ax.plot(
+                acc_table["n"],
+                acc_table["predicted"],
+                label="Fitted",
+                color="blue",
+                linestyle="--",
+            )
+            ax.fill_between(
+                acc_table["n"],
+                acc_table["ci_low"],
+                acc_table["ci_high"],
+                color="blue",
+                alpha=0.2,
+                label="95% CI",
+            )
         ax.set_xlabel("Sample Size")
         ax.legend(loc="best")
         ax.set_title(annotation)
@@ -500,7 +509,7 @@ def vis_classifier(
             n_target=n_target,
             plot=True,
             ax=axs[i, 0],
-            annotation=(metric_name, f"{method}: Real"),
+            annotation=f"{method}: Real ({metric_name})",
         )
 
         if metric_generated is not None:
@@ -512,7 +521,7 @@ def vis_classifier(
                 n_target=n_target,
                 plot=True,
                 ax=axs[i, 1],
-                annotation=(metric_name, f"{method}: Generated"),
+                annotation=f"{method}: Generated ({metric_name})",
             )
 
     plt.tight_layout()

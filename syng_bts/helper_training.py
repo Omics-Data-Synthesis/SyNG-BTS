@@ -44,7 +44,8 @@ def training_AEs(
     val_ratio=0.2,  # validation ratio
     pre_model=None,  # load pre-trained model from transfer learning
     save_model=None,  # save model for transfer learning
-    kl_weight=1,  # specify for VAE and CVAE
+    reconstruction_term_weight=1,  # weight for reconstruction loss, from model string xxxx-yyyy
+    kl_weight=1,  # weight for KL divergence, from model string xxxx-yyyy
     early_stop=True,  # whether or not using early stopping rule: best loss does not get improved in the future early_stop_num epochs.
     early_stop_num=30,  # stop training if loss does not improve for early_stop_num epochs
     cap=False,  # whether capping the new samples
@@ -56,6 +57,7 @@ def training_AEs(
     use_scheduler=False,  # scheduler parameters
     step_size=10,
     gamma=0.5,
+    data_type="miRNA",  # "miRNA" or "RNA", CVAE uses wider encoder when data_type is "RNA"
 ):
 
     set_all_seeds(random_seed)
@@ -71,7 +73,8 @@ def training_AEs(
         col_sd = None
 
     if modelname == "CVAE":
-        model = CVAE(num_features, num_classes)
+        use_wide_encoder = data_type == "RNA"
+        model = CVAE(num_features, num_classes, wide_encoder=use_wide_encoder)
         colnames = list(colnames)
         colnames.append("groups")
     elif modelname == "VAE":
@@ -116,7 +119,7 @@ def training_AEs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             skip_epoch_stats=True,
-            reconstruction_term_weight=1,
+            reconstruction_term_weight=reconstruction_term_weight,
             kl_weight=kl_weight,
             logging_interval=50,
             save_model=save_model,
@@ -202,7 +205,7 @@ def training_AEs(
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             skip_epoch_stats=True,
-            reconstruction_term_weight=1,
+            reconstruction_term_weight=reconstruction_term_weight,
             kl_weight=kl_weight,
             logging_interval=50,
             save_model=save_model,

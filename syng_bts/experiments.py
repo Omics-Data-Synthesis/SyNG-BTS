@@ -112,15 +112,25 @@ def PilotExperiment(
     # also create blurlabels.
     orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
 
-    # get model name and kl_weight if modelname is some autoencoder
-    if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
-        kl_weight = int(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[4])
-        modelname = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[1]
+    # get model name and loss weights if modelname has "xxxx-yyyy" format (recon:kl ratio)
+    match = re.match(r"^([A-Z]+)(\d+)([-+])(\d+)$", model)
+    if match:
+        modelname = match.group(1)
+        reconstruction_term_weight = int(match.group(2))
+        kl_weight = int(match.group(4))
     else:
         modelname = model
+        reconstruction_term_weight = 1
         kl_weight = 1
 
-    print("2. Determine the model is " + model + " with kl-weight = " + str(kl_weight))
+    print(
+        "2. Determine the model is "
+        + model
+        + " with recon:kl = "
+        + str(reconstruction_term_weight)
+        + ":"
+        + str(kl_weight)
+    )
 
     # decide batch fraction in file name
     model = "batch" + str(batch_frac).replace(".", "") + "_" + model
@@ -309,10 +319,11 @@ def PilotExperiment(
                     colnames=colnames,
                     batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
                     random_seed=random_seed,
-                    modelname=modelname,  # choose from "VAE", "AE"
+                    modelname=modelname,  # choose from "VAE", "AE", "CVAE"
                     num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
                     learning_rate=learning_rate,
-                    kl_weight=kl_weight,  # only take effect if model name is VAE, default value is
+                    reconstruction_term_weight=reconstruction_term_weight,
+                    kl_weight=kl_weight,
                     early_stop=early_stop,  # whether use early stopping rule
                     early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
                     pre_model=pre_model,  # load pre-trained model from transfer learning
@@ -423,6 +434,7 @@ def ApplyExperiment(
     random_seed: int = 123,
     data_dir: Optional[Union[str, Path]] = None,
     output_dir: Optional[Union[str, Path]] = None,
+    data_type: str = "miRNA",  # "miRNA" or "RNA", CVAE uses wider encoder when data_type is "RNA"
 ):
     r"""
     Train deep generative models and generate new samples.
@@ -477,6 +489,8 @@ def ApplyExperiment(
                Directory to read input data from. If None, will attempt to load the dataset from the package's bundled data or from the current working directory.
     output_dir : str, Path, or None
                  Directory to write output files (reconstructed data, generated samples, loss logs, etc.). If None, the current working directory is used.
+    data_type : str, default="miRNA"
+        Data type: "miRNA" or "RNA". When "RNA" and model is CVAE, a wider encoder is used.
     """
     # Handle path parameter for backward compatibility
     if output_dir is None and path is not None:
@@ -523,15 +537,25 @@ def ApplyExperiment(
 
     orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
 
-    # get model name and kl_weight if modelname is some autoencoder
-    if len(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)) > 1:
-        kl_weight = int(re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[4])
-        modelname = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)[1]
+    # get model name and loss weights if modelname has "xxxx-yyyy" format (recon:kl ratio)
+    match = re.match(r"^([A-Z]+)(\d+)([-+])(\d+)$", model)
+    if match:
+        modelname = match.group(1)
+        reconstruction_term_weight = int(match.group(2))
+        kl_weight = int(match.group(4))
     else:
         modelname = model
+        reconstruction_term_weight = 1
         kl_weight = 1
 
-    print("2. Determine the model is " + model + " with kl-weight = " + str(kl_weight))
+    print(
+        "2. Determine the model is "
+        + model
+        + " with recon:kl = "
+        + str(reconstruction_term_weight)
+        + ":"
+        + str(kl_weight)
+    )
 
     rawdata = oridata
     rawlabels = orilabels
@@ -627,7 +651,16 @@ def ApplyExperiment(
         rawlabels = feed_labels
         print("AEhead added.")
 
-    print("3. Training starts ......")
+    # Output data type and encoder dimensions before training
+    if "AE" in modelname:
+        if modelname == "CVAE" and data_type == "RNA":
+            encoder_dims = "(512, 256, 128)"
+        else:
+            encoder_dims = "(256, 128, 64)"
+        print("4. Data type: " + data_type + " ; Encoder dimensions: " + encoder_dims)
+    else:
+        print("4. Data type: " + data_type)
+    print("5. Training starts ......")
     # Training
     if "GAN" in modelname:
         log_dict = training_GANs(
@@ -670,11 +703,12 @@ def ApplyExperiment(
             colnames=colnames,  # colnames saved
             batch_size=round(rawdata.shape[0] * batch_frac),  # batch size
             random_seed=random_seed,
-            modelname=modelname,  # choose from "VAE", "AE"
+            modelname=modelname,  # choose from "VAE", "AE", "CVAE"
             num_epochs=num_epochs,  # maximum number of epochs if early stop is not triggered
             learning_rate=learning_rate,
             val_ratio=val_ratio,  # validation set ratio
-            kl_weight=kl_weight,  # only take effect if model name is VAE, default value is
+            reconstruction_term_weight=reconstruction_term_weight,
+            kl_weight=kl_weight,
             early_stop=early_stop,  # whether use early stopping rule
             early_stop_num=early_stop_num,  # stop training if loss does not improve for early_stop_num epochs
             pre_model=pre_model,  # load pre-trained model from transfer learning
@@ -688,6 +722,7 @@ def ApplyExperiment(
             use_scheduler=use_scheduler,
             step_size=step_size,
             gamma=gamma,
+            data_type=data_type,  # "miRNA" or "RNA", CVAE uses wider encoder when data_type is "RNA"
         )  # whether plot reconstructed samples' heatmap
 
         print("VAEs model training finished.")

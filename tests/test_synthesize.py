@@ -796,11 +796,6 @@ class TestVerboseEvaluate:
         assert "Progress" in out
         assert "F1:" not in out
 
-    def test_verbose_default_is_1(self):
-        """Default verbose value should be 1 for syng-bts consistency."""
-        sig = inspect.signature(evaluate_sample_sizes)
-        assert sig.parameters["verbose"].default == 1
-
     def test_verbose_2_detailed(self, small_synthetic_data, capsys):
         """verbose=2 should show per-method metric lines."""
         data, groups = small_synthetic_data

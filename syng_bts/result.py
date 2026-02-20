@@ -895,10 +895,10 @@ class PilotResult:
             ``"iterations"`` numbers data points 0…N-1.
         truncate : bool
             Only relevant for ``style="mean_band"`` and ``style="overlay_runs"``.
-            - ``True`` (default): only plot epochs/iterations common to
-              **all** runs (truncate to the shortest run).
-            - ``False``: plot all epochs/iterations; statistics are
-              computed from whichever runs still have data at each point.
+            When ``True`` (default), only epochs/iterations common to
+            **all** runs are plotted (truncated to the shortest run).
+            When ``False``, all epochs/iterations are plotted; statistics
+            are computed from whichever runs still have data at each point.
 
         Returns
         -------

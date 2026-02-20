@@ -57,14 +57,22 @@ autodoc_mock_imports = [
     "torch.utils.data",
     "scipy",
     "scipy.stats",
+    "scipy.optimize",
     "sklearn",
     "sklearn.decomposition",
+    "sklearn.ensemble",
+    "sklearn.linear_model",
+    "sklearn.metrics",
+    "sklearn.model_selection",
+    "sklearn.neighbors",
     "sklearn.preprocessing",
+    "sklearn.svm",
     "umap",
     "tensorboardX",
     "matplotlib",
     "matplotlib.pyplot",
     "seaborn",
+    "xgboost",
 ]
 
 # Napoleon settings for Google/NumPy style docstrings

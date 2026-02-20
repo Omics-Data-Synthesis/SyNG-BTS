@@ -7,6 +7,8 @@ BRCA datasets, method aliases, validation, and ``apply_log`` semantics.
 
 from __future__ import annotations
 
+import inspect
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -157,15 +159,23 @@ class TestEvaluateSampleSizesDataFrame:
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
 
-    def test_apply_log_false_is_default(self, small_synthetic_data):
-        """Default apply_log=False means no transform is applied."""
+    def test_apply_log_true_is_default(self, small_synthetic_data):
+        """Default apply_log=True; users can explicitly opt out."""
+        assert (
+            inspect.signature(evaluate_sample_sizes)
+            .parameters["apply_log"]
+            .default
+            is True
+        )
+
         data, groups = small_synthetic_data
-        # Both calls should succeed; we're just verifying defaults
+        # Explicit opt-out path remains supported.
         result = evaluate_sample_sizes(
             data=data,
             sample_sizes=[50],
             groups=groups,
             n_draws=1,
+            apply_log=False,
             methods=["LOGIS"],
         )
         assert isinstance(result, pd.DataFrame)

@@ -476,7 +476,7 @@ def evaluate_sample_sizes(
     groups: np.ndarray | pd.Series | list | None = None,
     which: str = "generated",
     n_draws: int = 5,
-    apply_log: bool = False,
+    apply_log: bool = True,
     methods: list[str] | None = None,
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
@@ -502,7 +502,7 @@ def evaluate_sample_sizes(
         ``"generated"``, ``"original"``, or ``"reconstructed"``.
     n_draws : int, default 5
         Number of resampling repetitions for each sample size.
-    apply_log : bool, default False
+    apply_log : bool, default True
         When ``True``, a ``log2(x + 1)`` transform is applied to the data
         before evaluation.
     methods : list[str] or None

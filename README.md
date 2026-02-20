@@ -22,6 +22,7 @@ These models are trained on a pilot dataset and can synthesize additional sample
 - **Rich Result Objects**: `SyngResult` / `PilotResult` with built-in plotting and export
 - **In-Memory Pipeline**: No disk I/O by default — results stay in memory until you choose to save
 - **Built-in Evaluation**: Heatmap and UMAP visualization functions
+- **Sample-Size Evaluation**: Integrated [SyntheSize](https://github.com/LXQin/SyntheSize) methodology for classifier learning curves
 - **Bundled Datasets**: Example TCGA datasets included for immediate experimentation
 
 ## Installation
@@ -161,6 +162,45 @@ fig_heatmap = heatmap_eval(real_data=real_data.head(50), generated_data=result.g
 fig_umap = UMAP_eval(real_data=real_data, generated_data=result.generated_data, random_seed=42)
 ```
 
+### Sample-Size Evaluation (SyntheSize)
+
+Evaluate how classifier performance scales with sample size using the integrated
+[SyntheSize](https://github.com/LXQin/SyntheSize) methodology
+([R version](https://github.com/LXQin/SyntheSize),
+[Python version](https://github.com/LXQin/SyntheSize_py)):
+
+```python
+from syng_bts import evaluate_sample_sizes, plot_sample_sizes, resolve_data
+
+# Load real data with group labels
+data, groups = resolve_data("BRCASubtypeSel_test")
+
+# Evaluate classifiers at increasing sample sizes
+metrics = evaluate_sample_sizes(
+    data=data,
+    sample_sizes=[50, 100, 150],
+    groups=groups,
+    n_draws=5,
+    methods=["LOGIS", "RF", "XGB"],
+)
+
+# Plot inverse power-law learning curves
+fig = plot_sample_sizes(metrics, n_target=200)
+fig.savefig("learning_curves.png")
+```
+
+`evaluate_sample_sizes` applies `log2(x + 1)` by default (`apply_log=True`).
+Set `apply_log=False` if your inputs are already log-transformed.
+
+You can also pass a `SyngResult` directly — groups are auto-resolved:
+
+```python
+from syng_bts import generate, evaluate_sample_sizes
+
+result = generate(data="BRCASubtypeSel_train", model="CVAE1-20", epoch=50)
+metrics = evaluate_sample_sizes(result, sample_sizes=[50, 100], which="generated")
+```
+
 ### List Available Datasets
 
 ```python
@@ -190,6 +230,8 @@ SyNG-BTS requires Python 3.10+ and the following packages:
 - scipy (>=1.9.0)
 - matplotlib (>=3.6.0)
 - seaborn (>=0.12.0)
+- scikit-learn (>=1.3.0)
+- xgboost (>=2.0.0)
 - tensorboardX (>=2.6.0)
 - umap-learn (>=0.5.6)
 - pyarrow (>=14.0.0)

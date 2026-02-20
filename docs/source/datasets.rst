@@ -80,6 +80,38 @@ BRCA Subtype Case Study
    * - ``BRCASubtypeSel_test``
      - Test split of BRCASubtypeSel
 
+SyntheSize Evaluation Datasets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These datasets are used for classifier-based sample-size evaluation with
+:func:`~syng_bts.evaluate_sample_sizes` (see :doc:`synthesize`).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Dataset Name
+     - Description
+   * - ``BRCASubtypeSel_test``
+     - Real BRCA subtype test data (200 rows × 47 features, ILC/IDC groups)
+   * - ``BRCASubtypeSel_train_epoch285_CVAE1-20_generated``
+     - CVAE-generated BRCA data (1000 rows × 47 features, string group labels, count scale)
+
+These can be used together to compare real vs. generated learning curves:
+
+.. code-block:: python
+
+   from syng_bts import evaluate_sample_sizes, plot_sample_sizes, resolve_data
+
+   real, groups_real = resolve_data("BRCASubtypeSel_test")
+   gen, groups_gen = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
+
+   metrics_real = evaluate_sample_sizes(real, [50, 100], groups=groups_real)
+   metrics_gen = evaluate_sample_sizes(gen, [50, 100], groups=groups_gen)
+
+   fig = plot_sample_sizes(metrics_real, n_target=200, metric_generated=metrics_gen)
+  fig.savefig("brca_learning_curves.png")
+
 LIHC Subtype Case Study
 ~~~~~~~~~~~~~~~~~~~~~~~
 

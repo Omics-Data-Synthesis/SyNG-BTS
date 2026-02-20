@@ -19,6 +19,7 @@ References
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from numbers import Integral
 from typing import TYPE_CHECKING
@@ -53,15 +54,25 @@ def _logis(
     test_labels: np.ndarray,
 ) -> dict[str, float]:
     """Ridge (L2-penalised) logistic regression classifier."""
-    model = LogisticRegressionCV(
-        Cs=10,
-        cv=5,
-        penalty="l2",
-        solver="liblinear",
-        scoring="accuracy",
-        random_state=0,
-        max_iter=1000,
-    )
+    model_kwargs: dict[str, object] = {
+        "Cs": 10,
+        "cv": 5,
+        "solver": "liblinear",
+        "scoring": "accuracy",
+        "random_state": 0,
+        "max_iter": 1000,
+    }
+
+    lr_params = inspect.signature(LogisticRegressionCV).parameters
+    if "l1_ratios" in lr_params:
+        model_kwargs["l1_ratios"] = (0,)
+    elif "penalty" in lr_params:
+        model_kwargs["penalty"] = "l2"
+
+    if "use_legacy_attributes" in lr_params:
+        model_kwargs["use_legacy_attributes"] = False
+
+    model = LogisticRegressionCV(**model_kwargs)
     model.fit(train_data, train_labels)
 
     predictions_proba = model.predict_proba(test_data)

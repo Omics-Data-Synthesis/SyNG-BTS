@@ -75,6 +75,9 @@ from .helper_models import (
 # Import result objects
 from .result import PilotResult, SyngResult
 
+# Import synthesize (sample-size evaluation)
+from .synthesize import evaluate_sample_sizes, plot_sample_sizes
+
 # Define public API
 __all__ = [
     # Version info
@@ -90,6 +93,9 @@ __all__ = [
     "heatmap_eval",
     "UMAP_eval",
     "evaluation",
+    # Sample-size evaluation (SyntheSize)
+    "evaluate_sample_sizes",
+    "plot_sample_sizes",
     # Model classes (for advanced usage)
     "AE",
     "VAE",

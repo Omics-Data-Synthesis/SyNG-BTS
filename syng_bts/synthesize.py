@@ -39,6 +39,8 @@ from sklearn.svm import SVC
 from xgboost import DMatrix
 from xgboost import train as xgb_train
 
+from .helper_train import VerbosityLevel, _resolve_verbose
+
 if TYPE_CHECKING:
     from .result import SyngResult
 
@@ -235,6 +237,34 @@ _METHOD_ALIASES: dict[str, str] = {
     "XGB": "XGB",
     "XGBOOST": "XGB",
 }
+
+
+def _print_eval_progress(
+    step: int,
+    total_steps: int,
+    size_index: int,
+    n_sizes: int,
+    n: int,
+    draw: int,
+    method: str,
+) -> None:
+    """Print a single ``\\r``-overwritten progress line (MINIMAL verbosity).
+
+    Format::
+
+        Progress |████░░░░░░░░░░░░░░░░| 3/10 size=1/3 (n=50), draw=1, method=RF
+    """
+    pct = step / total_steps
+    bar_len = 20
+    filled = int(bar_len * pct)
+    bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+    print(
+        f"\rProgress |{bar}| {step}/{total_steps} "
+        f"size={size_index + 1}/{n_sizes} (n={n}), "
+        f"draw={draw}, method={method}",
+        end="",
+        flush=True,
+    )
 
 
 def _resolve_methods(methods: list[str] | None) -> list[str]:
@@ -483,12 +513,13 @@ def _fit_curve(
 
 def evaluate_sample_sizes(
     data: pd.DataFrame | SyngResult,
-    sample_sizes: list[int],
+    sample_sizes: list[int] | np.ndarray | pd.Series | int,
     groups: np.ndarray | pd.Series | list | None = None,
     which: str = "generated",
     n_draws: int = 5,
     apply_log: bool = True,
     methods: list[str] | None = None,
+    verbose: int | str = "minimal",
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
 
@@ -502,8 +533,12 @@ def evaluate_sample_sizes(
         The dataset to evaluate. When a :class:`~syng_bts.result.SyngResult`
         is provided, the *which* parameter selects the data attribute and
         groups are auto-resolved from the corresponding ``*_groups`` field.
-    sample_sizes : list[int]
-        Candidate sample sizes to evaluate.
+    sample_sizes : list[int], np.ndarray, pd.Series, or int
+        Candidate sample sizes to evaluate.  Accepts a list, numpy array,
+        or pandas Series of positive integers.  When a **single int** is
+        provided it is interpreted as the *number* of equidistant sizes to
+        create — the maximum equals the number of data rows.  For example,
+        ``sample_sizes=3`` with 15-row data produces ``[5, 10, 15]``.
     groups : array-like or None
         Class labels corresponding to the rows of *data*. **Required**
         when *data* is a ``pd.DataFrame``. When provided alongside a
@@ -521,6 +556,12 @@ def evaluate_sample_sizes(
         (``'LOGIS'``, ``'SVM'``, ``'KNN'``, ``'RF'``, ``'XGB'``) and
         common aliases (``'LOGISTIC'``, ``'LR'``, ``'RANDOM_FOREST'``,
         ``'XGBOOST'``). Defaults to all five classifiers.
+    verbose : int or str, default "minimal"
+        Controls output verbosity.  Accepts ``0`` / ``"silent"`` (no
+        output), ``1`` / ``"minimal"`` (one dynamic overall progress bar
+        across all sample sizes, draws, and methods), or ``2`` /
+        ``"detailed"`` (per-draw/method metric
+        lines).
 
     Returns
     -------
@@ -552,6 +593,9 @@ def evaluate_sample_sizes(
     >>> sr = generate(data="BRCASubtypeSel_test", model="CVAE1-20", epoch=10)
     >>> result = evaluate_sample_sizes(sr, sample_sizes=[50], which="generated")
     """
+    # --- Resolve verbose level ---
+    verbose_level = _resolve_verbose(verbose)
+
     # --- Resolve data and groups ---
     resolved_data, resolved_groups = _resolve_data_and_groups(data, groups, which)
 
@@ -586,7 +630,20 @@ def evaluate_sample_sizes(
     # --- Resolve and validate methods ---
     resolved_methods = _resolve_methods(methods)
 
-    # --- Validate sample_sizes ---
+    # --- Normalise sample_sizes to list[int] ---
+    n_rows = len(resolved_data)
+
+    if isinstance(sample_sizes, (np.ndarray, pd.Series)):
+        sample_sizes = sample_sizes.tolist()  # type: ignore[assignment]
+
+    if isinstance(sample_sizes, (int, np.integer)) and not isinstance(
+        sample_sizes, bool
+    ):
+        k = int(sample_sizes)
+        if k <= 0:
+            raise ValueError(f"'sample_sizes' as int must be positive, got {k}.")
+        sample_sizes = np.round(np.linspace(n_rows / k, n_rows, k)).astype(int).tolist()
+
     if not sample_sizes:
         raise ValueError("'sample_sizes' must be a non-empty list of integers.")
     normalized_sample_sizes: list[int] = []
@@ -595,7 +652,6 @@ def evaluate_sample_sizes(
             raise ValueError(f"All sample sizes must be positive integers, got {s!r}.")
         normalized_sample_sizes.append(int(s))
 
-    n_rows = len(resolved_data)
     for s in normalized_sample_sizes:
         if s > n_rows:
             raise ValueError(f"Sample size {s} exceeds available rows ({n_rows}).")
@@ -638,12 +694,15 @@ def evaluate_sample_sizes(
             )
 
     results: list[dict] = []
+    total_steps_overall = len(normalized_sample_sizes) * n_draws * len(resolved_methods)
+    overall_step_counter = 0
 
     for n_index, n in enumerate(normalized_sample_sizes):
-        print(
-            f"\nRunning sample size index "
-            f"{n_index + 1}/{len(normalized_sample_sizes)} (n = {n})\n"
-        )
+        if verbose_level >= VerbosityLevel.DETAILED:
+            print(
+                f"\nRunning sample size index "
+                f"{n_index + 1}/{len(normalized_sample_sizes)} (n = {n})\n"
+            )
         for draw in range(n_draws):
             # Stratified subsample
             indices: list[int] = []
@@ -687,11 +746,23 @@ def evaluate_sample_sizes(
                 mean_f1 = float(np.mean(metrics[method]["f1"]))
                 mean_acc = float(np.mean(metrics[method]["accuracy"]))
                 mean_auc = float(np.mean(metrics[method]["auc"]))
-                print(
-                    f"[n={n}, draw={draw}, method={method}] "
-                    f"F1: {mean_f1:.4f}, Acc: {mean_acc:.4f}, "
-                    f"AUC: {mean_auc:.4f}"
-                )
+                overall_step_counter += 1
+                if verbose_level == VerbosityLevel.MINIMAL:
+                    _print_eval_progress(
+                        step=overall_step_counter,
+                        total_steps=total_steps_overall,
+                        size_index=n_index,
+                        n_sizes=len(normalized_sample_sizes),
+                        n=n,
+                        draw=draw,
+                        method=method,
+                    )
+                elif verbose_level >= VerbosityLevel.DETAILED:
+                    print(
+                        f"[n={n}, draw={draw}, method={method}] "
+                        f"F1: {mean_f1:.4f}, Acc: {mean_acc:.4f}, "
+                        f"AUC: {mean_auc:.4f}"
+                    )
                 results.append(
                     {
                         "total_size": n,
@@ -702,6 +773,8 @@ def evaluate_sample_sizes(
                         "auc": mean_auc,
                     }
                 )
+    if verbose_level == VerbosityLevel.MINIMAL:
+        print()  # move past final \r line
 
     return pd.DataFrame(results)
 

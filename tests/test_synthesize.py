@@ -162,9 +162,7 @@ class TestEvaluateSampleSizesDataFrame:
     def test_apply_log_true_is_default(self, small_synthetic_data):
         """Default apply_log=True; users can explicitly opt out."""
         assert (
-            inspect.signature(evaluate_sample_sizes)
-            .parameters["apply_log"]
-            .default
+            inspect.signature(evaluate_sample_sizes).parameters["apply_log"].default
             is True
         )
 
@@ -720,6 +718,293 @@ class TestPlotSampleSizes:
                 metric_real=metric_real,
                 n_target=100,
                 metric_generated=metric_generated,
+            )
+
+
+# ---------------------------------------------------------------------------
+# evaluate_sample_sizes — Verbose parameter
+# ---------------------------------------------------------------------------
+
+
+class TestVerboseEvaluate:
+    """Tests for the verbose parameter of evaluate_sample_sizes."""
+
+    def test_verbose_0_silent(self, small_synthetic_data, capsys):
+        """verbose=0 should produce no stdout output."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert out == ""
+
+    def test_verbose_silent_string(self, small_synthetic_data, capsys):
+        """verbose='silent' should produce no stdout output."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose="silent",
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert out == ""
+
+    def test_verbose_1_minimal(self, small_synthetic_data, capsys):
+        """verbose=1 should show one overall progress line, not metrics."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=1,
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        # Should contain bar characters
+        assert "\u2588" in out or "\u2591" in out
+        assert "Progress" in out
+        assert "size=1/1" in out
+        # Should NOT contain per-method metric lines
+        assert "F1:" not in out
+
+    def test_verbose_minimal_string(self, small_synthetic_data, capsys):
+        """verbose='minimal' should behave like verbose=1."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose="minimal",
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert "\u2588" in out or "\u2591" in out
+        assert "Progress" in out
+        assert "F1:" not in out
+
+    def test_verbose_default_is_1(self):
+        """Default verbose value should be 1 for syng-bts consistency."""
+        sig = inspect.signature(evaluate_sample_sizes)
+        assert sig.parameters["verbose"].default == 1
+
+    def test_verbose_2_detailed(self, small_synthetic_data, capsys):
+        """verbose=2 should show per-method metric lines."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=2,
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert "F1:" in out
+        assert "Acc:" in out
+        assert "AUC:" in out
+
+    def test_verbose_detailed_string(self, small_synthetic_data, capsys):
+        """verbose='detailed' should behave like verbose=2."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[50],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose="detailed",
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert "F1:" in out
+
+    def test_verbose_invalid_raises(self, small_synthetic_data):
+        """Invalid verbose values should raise ValueError."""
+        data, groups = small_synthetic_data
+        with pytest.raises(ValueError):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=3,
+            )
+        with pytest.raises(ValueError):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose="loud",
+            )
+
+    def test_minimal_multiple_sizes_draws(self, small_synthetic_data, capsys):
+        """Minimal mode tracks overall progress across sizes/draws/methods."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[40, 60],
+            groups=groups,
+            n_draws=2,
+            methods=["LOGIS", "RF"],
+            verbose=1,
+        )
+        out = capsys.readouterr().out
+        assert isinstance(result, pd.DataFrame)
+        assert "Progress" in out
+        assert "8/8" in out
+        assert "size=1/2" in out
+        assert "size=2/2" in out
+
+
+# ---------------------------------------------------------------------------
+# evaluate_sample_sizes — sample_sizes input types
+# ---------------------------------------------------------------------------
+
+
+class TestSampleSizesInput:
+    """Tests for expanded sample_sizes input types."""
+
+    def test_numpy_array(self, small_synthetic_data):
+        """numpy array of ints is accepted."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=np.array([40, 60]),
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert set(result["total_size"]) == {40, 60}
+
+    def test_numpy_arange(self, small_synthetic_data):
+        """numpy arange is accepted."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=np.arange(40, 80, 20),
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert set(result["total_size"]) == {40, 60}
+
+    def test_pandas_series(self, small_synthetic_data):
+        """pandas Series of ints is accepted."""
+        data, groups = small_synthetic_data
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=pd.Series([40, 60]),
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert set(result["total_size"]) == {40, 60}
+
+    def test_single_int(self, small_synthetic_data):
+        """Single int creates equidistant sizes up to n_rows."""
+        data, groups = small_synthetic_data  # 100 rows
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=3,
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        assert isinstance(result, pd.DataFrame)
+        sizes = sorted(result["total_size"].unique())
+        assert len(sizes) == 3
+        assert sizes[-1] == 100  # max = n_rows
+
+    def test_single_int_equidistant(self):
+        """Verify equidistant pattern for single int input."""
+        data = pd.DataFrame(np.random.rand(90, 5), columns=[f"g{i}" for i in range(5)])
+        groups = np.array(["A"] * 45 + ["B"] * 45)
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=3,
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        sizes = sorted(result["total_size"].unique())
+        assert sizes == [30, 60, 90]
+
+    def test_single_int_1(self, small_synthetic_data):
+        """sample_sizes=1 should produce [n_rows]."""
+        data, groups = small_synthetic_data  # 100 rows
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=1,
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+        assert list(result["total_size"].unique()) == [100]
+
+    def test_single_int_zero_raises(self, small_synthetic_data):
+        """sample_sizes=0 should raise ValueError."""
+        data, groups = small_synthetic_data
+        with pytest.raises(ValueError, match="positive"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=0,
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=0,
+            )
+
+    def test_single_int_negative_raises(self, small_synthetic_data):
+        """sample_sizes=-1 should raise ValueError."""
+        data, groups = small_synthetic_data
+        with pytest.raises(ValueError, match="positive"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=-1,
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=0,
+            )
+
+    def test_float_list_raises(self, small_synthetic_data):
+        """Float sample sizes should be rejected."""
+        data, groups = small_synthetic_data
+        with pytest.raises(ValueError, match="positive integers"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[40.5, 60.5],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=0,
             )
 
 

@@ -42,6 +42,7 @@ Evaluate a DataFrame
 
 .. code-block:: python
 
+   import numpy as np
    import pandas as pd
    from syng_bts import evaluate_sample_sizes, plot_sample_sizes, resolve_data
 
@@ -51,7 +52,7 @@ Evaluate a DataFrame
    # Evaluate classifiers across sample sizes
    metrics = evaluate_sample_sizes(
        data=data,
-       sample_sizes=[50, 100, 150],
+       sample_sizes=np.arange(25, 201, 25),
        groups=groups,
        n_draws=5,
    )
@@ -69,12 +70,8 @@ from a CVAE run), you can pass it directly and groups are auto-resolved:
 
 .. code-block:: python
 
-  from syng_bts import (
-     generate,
-     evaluate_sample_sizes,
-     plot_sample_sizes,
-     resolve_data,
-  )
+   import numpy as np
+   from syng_bts import generate, evaluate_sample_sizes, plot_sample_sizes
 
    # Generate synthetic data with a conditional model
    result = generate(
@@ -87,16 +84,15 @@ from a CVAE run), you can pass it directly and groups are auto-resolved:
    # Evaluate the generated data — groups are auto-resolved from result
    metrics_gen = evaluate_sample_sizes(
        data=result,
-       sample_sizes=[50, 100, 200],
+       sample_sizes=np.arange(25, 201, 25),
        which="generated",
    )
 
    # Compare real vs generated learning curves
-   real_data, real_groups = resolve_data("BRCASubtypeSel_test")
    metrics_real = evaluate_sample_sizes(
-       data=real_data,
-       sample_sizes=[50, 100, 150],
-       groups=real_groups,
+       data=data,
+       sample_sizes=np.arange(25, 201, 25),
+       which="original",
    )
 
    fig = plot_sample_sizes(
@@ -162,6 +158,54 @@ By default, :func:`~syng_bts.evaluate_sample_sizes` applies a
 ``log2(x + 1)`` transform (``apply_log=True``). Set ``apply_log=False``
 when your input data is already log-transformed. The default behavior matches
 the preprocessing convention used in SyNG-BTS training.
+
+Verbosity
+---------
+
+The ``verbose`` parameter of :func:`~syng_bts.evaluate_sample_sizes` controls
+console output during evaluation. It accepts the same levels used by the
+training functions (:func:`~syng_bts.generate`, :func:`~syng_bts.pilot_study`,
+:func:`~syng_bts.transfer`):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 15 75
+
+   * - Level
+     - Name
+     - Behaviour
+   * - ``0``
+     - ``"silent"``
+     - No output.
+   * - ``1``
+     - ``"minimal"``
+     - One dynamically updated overall progress-bar line across all
+       sample sizes, draws, and methods (default), while showing current
+       size index/``n``, draw, and method.
+   * - ``2``
+     - ``"detailed"``
+     - Per-draw / per-method metric lines (previous default behaviour).
+
+Example:
+
+.. code-block:: python
+
+   # Detailed logging
+   metrics = evaluate_sample_sizes(data, sample_sizes=[50, 100],
+                                   groups=groups, verbose="detailed")
+
+Sample-Size Shortcuts
+---------------------
+
+``sample_sizes`` accepts a **list**, **numpy array**, **pandas Series**, or a
+**single integer**.  When a single integer *k* is provided it is interpreted as
+the desired *number* of equidistant sizes — the maximum equals the number of
+rows in the input data.
+
+.. code-block:: python
+
+   # Equivalent to sample_sizes=[5, 10, 15] for 15-row data
+   metrics = evaluate_sample_sizes(data, sample_sizes=3, groups=groups)
 
 API Reference
 -------------

@@ -40,7 +40,7 @@ try:
     __version__ = version("syng-bts")
 except PackageNotFoundError:
     # Package is not installed (running from source)
-    __version__ = "3.2.1"
+    __version__ = "3.3.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
@@ -75,6 +75,9 @@ from .helper_models import (
 # Import result objects
 from .result import PilotResult, SyngResult
 
+# Import synthesize (sample-size evaluation)
+from .synthesize import evaluate_sample_sizes, plot_sample_sizes
+
 # Define public API
 __all__ = [
     # Version info
@@ -90,6 +93,9 @@ __all__ = [
     "heatmap_eval",
     "UMAP_eval",
     "evaluation",
+    # Sample-size evaluation (SyntheSize)
+    "evaluate_sample_sizes",
+    "plot_sample_sizes",
     # Model classes (for advanced usage)
     "AE",
     "VAE",

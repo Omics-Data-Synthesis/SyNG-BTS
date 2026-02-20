@@ -91,12 +91,12 @@ class TestExperimentImports:
         assert "save_model" not in sig.parameters
 
     def test_generate_signature_removes_pre_model(self):
-        """generate() no longer exposes a pre_model parameter (Phase 2)."""
+        """generate() no longer exposes a pre_model parameter."""
         sig = inspect.signature(generate)
         assert "pre_model" not in sig.parameters
 
     def test_pilot_study_signature_removes_pre_model(self):
-        """pilot_study() no longer exposes a pre_model parameter (Phase 2)."""
+        """pilot_study() no longer exposes a pre_model parameter."""
         sig = inspect.signature(pilot_study)
         assert "pre_model" not in sig.parameters
 
@@ -1499,3 +1499,157 @@ class TestSlowTraining:
         assert isinstance(result, SyngResult)
         assert output_dir.exists()
         assert output_dir.is_dir()
+
+
+# =========================================================================
+# Group propagation tests
+# =========================================================================
+
+
+class TestGroupPropagation:
+    """Test that group info is threaded through generate/pilot/transfer."""
+
+    def test_generate_no_groups_result_has_none(self, sample_data):
+        """generate() without groups produces None group attributes."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            apply_log=False,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        assert result.original_groups is None
+        assert result.generated_groups is None
+        assert result.reconstructed_groups is None
+        assert result.metadata.get("group_mapping") is None
+
+    def test_generate_with_groups_populates_original_groups(self, sample_data):
+        """generate() with explicit groups populates original_groups."""
+        import numpy as np
+
+        groups = np.array(["X"] * 10 + ["Y"] * 10)
+        result = generate(
+            data=sample_data,
+            groups=groups,
+            model="VAE1-10",
+            apply_log=False,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        assert result.original_groups is not None
+        assert len(result.original_groups) == 20
+        assert set(result.original_groups.unique()) == {"X", "Y"}
+
+    def test_generate_with_groups_stores_group_mapping(self, sample_data):
+        """generate() stores group_mapping in metadata."""
+        import numpy as np
+
+        groups = np.array(["X"] * 10 + ["Y"] * 10)
+        result = generate(
+            data=sample_data,
+            groups=groups,
+            model="VAE1-10",
+            apply_log=False,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        mapping = result.metadata.get("group_mapping")
+        assert mapping is not None
+        # Base group (groups[0] = "X") maps to label 0
+        assert mapping[0] == "X"
+        assert mapping[1] == "Y"
+
+    def test_generate_cvae_with_groups_populates_generated_groups(self, sample_data):
+        """CVAE generate() with groups produces generated_groups."""
+        import numpy as np
+
+        groups = np.array(["X"] * 10 + ["Y"] * 10)
+        result = generate(
+            data=sample_data,
+            groups=groups,
+            model="CVAE1-10",
+            apply_log=False,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        assert result.generated_groups is not None
+        assert len(result.generated_groups) == result.generated_data.shape[0]
+        assert set(result.generated_groups.unique()).issubset({"X", "Y"})
+
+    def test_prepare_data_group_mapping_consistency(self):
+        """group_mapping preserves create_labels base-group convention."""
+        import numpy as np
+
+        from syng_bts.core import _prepare_data
+
+        df = pd.DataFrame(np.random.rand(10, 5), columns=[f"g{i}" for i in range(5)])
+        groups = np.array(["B", "B", "B", "B", "B", "A", "A", "A", "A", "A"])
+
+        prep = _prepare_data(data=df, name=None, groups=groups, apply_log=False)
+
+        # Base group = groups[0] = "B" → label 0
+        assert prep.group_mapping is not None
+        assert prep.group_mapping[0] == "B"
+        assert prep.group_mapping[1] == "A"
+
+    def test_generate_ae_with_groups_strips_blur_label(self, sample_data):
+        """AE with groups: blur label column is stripped from generated data."""
+        import numpy as np
+
+        groups = np.array(["X"] * 10 + ["Y"] * 10)
+        result = generate(
+            data=sample_data,
+            groups=groups,
+            model="AE1-1",
+            apply_log=False,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        # Generated data should have same number of columns as input
+        assert result.generated_data.shape[1] == sample_data.shape[1]
+        assert list(result.generated_data.columns) == list(sample_data.columns)
+
+    @pytest.mark.slow
+    def test_generate_bundled_brca_groups_populated(self):
+        """generate() with BRCASubtypeSel_test (bundled groups) populates groups."""
+        result = generate(
+            data="BRCASubtypeSel_test",
+            model="VAE1-10",
+            apply_log=True,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+        assert result.original_groups is not None
+        assert len(result.original_groups) == result.original_data.shape[0]
+
+    @pytest.mark.slow
+    def test_generate_cvae_bundled_brca_original_groups_match_input(self):
+        """CVAE generate() preserves bundled input groups in original_groups."""
+        _, input_groups = resolve_data("BRCASubtypeSel_test")
+        assert input_groups is not None
+
+        result = generate(
+            data="BRCASubtypeSel_test",
+            model="CVAE1-10",
+            apply_log=True,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            random_seed=42,
+        )
+
+        assert result.original_groups is not None
+        assert len(result.original_groups) == len(input_groups)
+        assert result.original_groups.tolist() == input_groups.tolist()

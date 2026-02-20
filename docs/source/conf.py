@@ -22,8 +22,8 @@ try:
     version = __version__
     release = __version__
 except ImportError:
-    version = "3.2.1"
-    release = "3.2.1"
+    version = "3.3.0"
+    release = "3.3.0"
 
 # -- General configuration ---------------------------------------------------
 
@@ -57,14 +57,22 @@ autodoc_mock_imports = [
     "torch.utils.data",
     "scipy",
     "scipy.stats",
+    "scipy.optimize",
     "sklearn",
     "sklearn.decomposition",
+    "sklearn.ensemble",
+    "sklearn.linear_model",
+    "sklearn.metrics",
+    "sklearn.model_selection",
+    "sklearn.neighbors",
     "sklearn.preprocessing",
+    "sklearn.svm",
     "umap",
     "tensorboardX",
     "matplotlib",
     "matplotlib.pyplot",
     "seaborn",
+    "xgboost",
 ]
 
 # Napoleon settings for Google/NumPy style docstrings

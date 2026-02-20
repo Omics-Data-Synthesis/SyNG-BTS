@@ -76,6 +76,11 @@ class PreparedData:
     effective_groups: np.ndarray | None
     """Resolved group array (explicit > bundled > ``None``)."""
 
+    group_mapping: dict[int, object] | None
+    """Maps numeric label (0, 1) back to original group values.
+    Built from the same logic as :func:`create_labels` so round-trip
+    is consistent.  ``None`` when no groups are present."""
+
     apply_log: bool
     """Whether ``log2(x + 1)`` was applied to *oridata*."""
 
@@ -187,6 +192,18 @@ def _prepare_data(
         groups=effective_groups,
     )
 
+    # Build group_mapping: maps numeric label → original group value.
+    # Uses the same convention as create_labels (base = groups[0] → 0).
+    group_mapping: dict[int, object] | None = None
+    if effective_groups is not None:
+        unique_vals = list(dict.fromkeys(effective_groups))  # order-preserving unique
+        base = effective_groups[0]
+        group_mapping = {0: base}
+        for v in unique_vals:
+            if v != base:
+                group_mapping[1] = v
+                break
+
     return PreparedData(
         df=df,
         colnames=colnames,
@@ -196,6 +213,7 @@ def _prepare_data(
         oriblurlabels=oriblurlabels,
         dataname=dataname,
         effective_groups=effective_groups,
+        group_mapping=group_mapping,
         apply_log=apply_log,
     )
 
@@ -566,6 +584,41 @@ def _compute_new_size(
     return new_size
 
 
+def _labels_to_groups(
+    labels: pd.Series,
+    group_mapping: dict[int, object],
+    *,
+    modelname: str,
+) -> pd.Series:
+    """Map numeric labels back to original group values.
+
+    Parameters
+    ----------
+    labels : pd.Series
+        Raw label column stripped from generated or reconstructed data.
+        For CVAE these are integer class indices (0, 1, …).
+        For non-CVAE models they are blur-labels (0–1 for group 0,
+        9–10 for group 1).
+    group_mapping : dict[int, object]
+        ``{0: base_group_value, 1: other_group_value}`` produced by
+        :func:`_prepare_data`.
+    modelname : str
+        Short model name — determines the conversion strategy.
+
+    Returns
+    -------
+    pd.Series
+        Group values with ``name="group"``.
+    """
+    if modelname == "CVAE":
+        int_labels = labels.round().astype(int)
+    else:
+        # Blur-label ranges: [0, 1] → group 0, [9, 10] → group 1.
+        # Threshold at 5 cleanly separates the two ranges.
+        int_labels = (labels >= 5).astype(int)
+    return int_labels.map(group_mapping).rename("group")
+
+
 def _assemble_result(
     *,
     gen_data: torch.Tensor,
@@ -583,13 +636,16 @@ def _assemble_result(
     early_stop_num: int,
     apply_log: bool,
     original_data: pd.DataFrame,
+    original_groups: pd.Series | None = None,
+    group_mapping: dict[int, object] | None = None,
     extra_metadata: dict | None = None,
 ) -> SyngResult:
     """Assemble a :class:`SyngResult` from training/inference outputs.
 
-    Centralises CVAE label stripping, DataFrame construction, inverse
-    log transform, column-order validation, loss assembly, metadata
-    assembly, and ``SyngResult`` construction.
+    Centralises label stripping (for CVAE conditioning labels and
+    non-CVAE blur-labels), DataFrame construction, inverse log
+    transform, column-order validation, group derivation, loss
+    assembly, metadata assembly, and ``SyngResult`` construction.
 
     Parameters
     ----------
@@ -623,6 +679,12 @@ def _assemble_result(
         Whether ``log2(x + 1)`` preprocessing was applied.
     original_data : pd.DataFrame
         Original data subset to attach to the result.
+    original_groups : pd.Series or None
+        Group labels for the original data.
+    group_mapping : dict[int, object] or None
+        Maps numeric labels (0, 1) back to original group values.
+        When provided, generated and reconstructed groups are derived
+        from the stripped label columns.
     extra_metadata : dict or None
         Additional metadata entries (e.g. ``pilot_size``, ``draw``,
         ``pilot_indices``).
@@ -633,10 +695,12 @@ def _assemble_result(
     """
     gen_np = gen_data.detach().numpy()
 
-    # For CVAE, strip the appended label column — it is the conditioning
-    # input, not a generated feature.  Store it in metadata instead.
+    # Strip the appended label/blur-label column when the generated
+    # tensor has more columns than the original feature set.  This
+    # handles both CVAE conditioning labels and non-CVAE blur-labels
+    # appended during training for two-group data.
     gen_labels = None
-    if modelname == "CVAE" and gen_np.shape[1] > len(colnames):
+    if gen_np.shape[1] > len(colnames):
         gen_labels = pd.Series(gen_np[:, -1], name="label")
         gen_np = gen_np[:, :-1]
 
@@ -647,7 +711,7 @@ def _assemble_result(
     if recon_data is not None:
         recon_np = recon_data.detach().numpy()
 
-        if modelname == "CVAE" and recon_np.shape[1] > len(colnames):
+        if recon_np.shape[1] > len(colnames):
             recon_labels = pd.Series(recon_np[:, -1], name="label")
             recon_np = recon_np[:, :-1]
 
@@ -671,6 +735,19 @@ def _assemble_result(
             "This is an internal error; please report it."
         )
 
+    # --- Derive group Series from labels + mapping -----------------------
+    generated_groups: pd.Series | None = None
+    reconstructed_groups: pd.Series | None = None
+    if group_mapping is not None:
+        if gen_labels is not None:
+            generated_groups = _labels_to_groups(
+                gen_labels, group_mapping, modelname=modelname
+            )
+        if recon_labels is not None:
+            reconstructed_groups = _labels_to_groups(
+                recon_labels, group_mapping, modelname=modelname
+            )
+
     loss_df = _build_loss_df(trained.log_dict, modelname)
 
     metadata: dict = {
@@ -687,6 +764,7 @@ def _assemble_result(
         "generated_labels": gen_labels,
         "reconstructed_labels": recon_labels,
         "apply_log": apply_log,
+        "group_mapping": group_mapping,
         "arch_params": {
             k: v for k, v in trained.arch_params.items() if not k.startswith("_")
         },
@@ -708,6 +786,9 @@ def _assemble_result(
         original_data=original_data,
         model_state=trained.model_state,
         metadata=metadata,
+        original_groups=original_groups,
+        generated_groups=generated_groups,
+        reconstructed_groups=reconstructed_groups,
     )
 
 
@@ -1003,6 +1084,12 @@ def generate(
     )
 
     # --- 6. Assemble SyngResult ------------------------------------------
+    original_groups: pd.Series | None = None
+    if prep.effective_groups is not None:
+        original_groups = pd.Series(prep.effective_groups, name="group").reset_index(
+            drop=True
+        )
+
     result = _assemble_result(
         gen_data=gen_data,
         recon_data=recon_data,
@@ -1019,6 +1106,8 @@ def generate(
         early_stop_num=ctx.early_stop_num,
         apply_log=prep.apply_log,
         original_data=prep.df.copy(),
+        original_groups=original_groups,
+        group_mapping=prep.group_mapping,
     )
 
     if output_dir is not None:
@@ -1178,6 +1267,12 @@ def pilot_study(
             # -- Assemble SyngResult for this run -------------------------
             pilot_original = prep.df.iloc[pilot_indices.numpy()].copy()
 
+            pilot_groups: pd.Series | None = None
+            if prep.effective_groups is not None:
+                pilot_groups = pd.Series(
+                    prep.effective_groups[pilot_indices.numpy()], name="group"
+                ).reset_index(drop=True)
+
             runs[(n_pilot, rand_pilot)] = _assemble_result(
                 gen_data=gen_data,
                 recon_data=recon_data,
@@ -1194,6 +1289,8 @@ def pilot_study(
                 early_stop_num=ctx.early_stop_num,
                 apply_log=prep.apply_log,
                 original_data=pilot_original,
+                original_groups=pilot_groups,
+                group_mapping=prep.group_mapping,
                 extra_metadata={
                     "pilot_size": n_pilot,
                     "draw": rand_pilot,
@@ -1386,6 +1483,12 @@ def transfer(
     )
 
     # --- 6. Assemble SyngResult ------------------------------------------
+    target_original_groups: pd.Series | None = None
+    if target_prep.effective_groups is not None:
+        target_original_groups = pd.Series(
+            target_prep.effective_groups, name="group"
+        ).reset_index(drop=True)
+
     result = _assemble_result(
         gen_data=gen_data,
         recon_data=recon_data,
@@ -1402,6 +1505,8 @@ def transfer(
         early_stop_num=target_ctx.early_stop_num,
         apply_log=target_prep.apply_log,
         original_data=target_prep.df.copy(),
+        original_groups=target_original_groups,
+        group_mapping=target_prep.group_mapping,
     )
 
     if output_dir is not None:

@@ -91,6 +91,7 @@ Contents
 
    methods
    evals
+   synthesize
    datasets
    configuration
 

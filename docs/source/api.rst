@@ -71,6 +71,22 @@ evaluation
 
 .. autofunction:: syng_bts.evaluation
 
+Sample-Size Evaluation (SyntheSize)
+-----------------------------------
+
+Classifier-based sample-size evaluation using inverse power-law learning
+curves. See :doc:`synthesize` for full usage guide.
+
+evaluate_sample_sizes
+~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.evaluate_sample_sizes
+
+plot_sample_sizes
+~~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.plot_sample_sizes
+
 Data Utilities
 --------------
 

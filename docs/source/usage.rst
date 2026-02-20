@@ -193,10 +193,51 @@ Visualize generated data using :meth:`~syng_bts.SyngResult.plot_heatmap`
    heatmap_eval(real_data=real_data, generated_data=result.generated_data)
    UMAP_eval(real_data=real_data, generated_data=result.generated_data)
 
+Sample-Size Evaluation (SyntheSize)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Evaluate how classifier performance scales with sample size using
+:func:`~syng_bts.evaluate_sample_sizes` and
+:func:`~syng_bts.plot_sample_sizes` (see :doc:`synthesize` for full details):
+
+By default, :func:`~syng_bts.evaluate_sample_sizes` applies
+``log2(x + 1)`` (``apply_log=True``). Set ``apply_log=False`` when input
+data is already log-transformed.
+
+.. code-block:: python
+
+   from syng_bts import evaluate_sample_sizes, plot_sample_sizes, resolve_data
+
+   # Load real data with group labels
+   data, groups = resolve_data("BRCASubtypeSel_test")
+
+   # Evaluate classifiers at different sample sizes
+   metrics = evaluate_sample_sizes(
+       data=data,
+       sample_sizes=[50, 100, 150],
+       groups=groups,
+       n_draws=5,
+   )
+
+   # Plot inverse power-law learning curves
+   fig = plot_sample_sizes(metrics, n_target=200)
+   fig.savefig("learning_curves.png")
+
+You can also pass a :class:`~syng_bts.SyngResult` directly — groups are
+auto-resolved from the result object:
+
+.. code-block:: python
+
+   from syng_bts import generate, evaluate_sample_sizes
+
+   result = generate(data="BRCASubtypeSel_train", model="CVAE1-20", epoch=10)
+   metrics = evaluate_sample_sizes(result, sample_sizes=[50, 100], which="generated")
+
 Next Steps
 ----------
 
 - See :doc:`methods` for all synthetic data generation methods
+- See :doc:`synthesize` for sample-size evaluation with SyntheSize
 - See :doc:`configuration` for all available parameters
 - See :doc:`api` for the complete API reference
 - See :doc:`datasets` for information about bundled datasets

@@ -1426,3 +1426,146 @@ class TestGenerateNewSamples:
         labels_2 = second.metadata.get("generated_labels")
         assert isinstance(labels_2, pd.Series)
         assert len(labels_2) == second.generated_data.shape[0]
+
+
+# =========================================================================
+# Group attributes tests
+# =========================================================================
+
+
+class TestGroupAttributes:
+    """Test group fields on SyngResult: original_groups, generated_groups, etc."""
+
+    @pytest.fixture
+    def sample_groups(self):
+        """Binary group Series matching sample_data (20 rows)."""
+        return pd.Series(["A"] * 10 + ["B"] * 10, name="group")
+
+    @pytest.fixture
+    def sample_result_with_groups(self, sample_generated, sample_loss, sample_groups):
+        """SyngResult populated with all three group attributes."""
+        return SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={
+                "model": "VAE1-10",
+                "dataname": "test_groups",
+                "seed": 42,
+                "epochs_trained": 50,
+                "group_mapping": {0: "A", 1: "B"},
+            },
+            original_groups=sample_groups.copy(),
+            generated_groups=sample_groups.copy(),
+            reconstructed_groups=sample_groups.copy(),
+        )
+
+    def test_default_groups_are_none(self, sample_generated, sample_loss):
+        """SyngResult group attributes default to None."""
+        result = SyngResult(generated_data=sample_generated, loss=sample_loss)
+        assert result.original_groups is None
+        assert result.generated_groups is None
+        assert result.reconstructed_groups is None
+
+    def test_groups_set_on_construction(self, sample_result_with_groups):
+        """Group attributes are populated when provided."""
+        result = sample_result_with_groups
+        assert result.original_groups is not None
+        assert result.generated_groups is not None
+        assert result.reconstructed_groups is not None
+        assert len(result.original_groups) == 20
+        assert set(result.original_groups.unique()) == {"A", "B"}
+
+    def test_repr_shows_has_groups_true(self, sample_result_with_groups):
+        """__repr__ shows has_groups=True when groups are present."""
+        r = repr(sample_result_with_groups)
+        assert "has_groups=True" in r
+
+    def test_repr_shows_has_groups_false(self, sample_generated, sample_loss):
+        """__repr__ shows has_groups=False when no groups are set."""
+        result = SyngResult(generated_data=sample_generated, loss=sample_loss)
+        r = repr(result)
+        assert "has_groups=False" in r
+
+    def test_summary_includes_group_info(self, sample_result_with_groups):
+        """summary() mentions group classes when groups are present."""
+        s = sample_result_with_groups.summary()
+        assert "Groups" in s
+        assert "2 classes" in s
+
+    def test_summary_no_group_info_when_none(self, sample_generated, sample_loss):
+        """summary() does not mention groups when they are None."""
+        result = SyngResult(
+            generated_data=sample_generated, loss=sample_loss, metadata={}
+        )
+        assert "Groups" not in result.summary()
+
+    def test_save_writes_group_csvs(self, sample_result_with_groups, temp_dir):
+        """save() writes group sidecar CSVs."""
+        paths = sample_result_with_groups.save(temp_dir)
+        assert "original_groups" in paths
+        assert "generated_groups" in paths
+        assert "reconstructed_groups" in paths
+        for key in ("original_groups", "generated_groups", "reconstructed_groups"):
+            assert paths[key].exists()
+
+    def test_save_no_group_csvs_when_none(
+        self, sample_generated, sample_loss, temp_dir
+    ):
+        """save() does not write group CSVs when groups are None."""
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "test"},
+        )
+        paths = result.save(temp_dir)
+        assert "original_groups" not in paths
+        assert "generated_groups" not in paths
+        assert "reconstructed_groups" not in paths
+
+    def test_load_restores_groups(self, sample_result_with_groups, temp_dir):
+        """load() restores group attributes from sidecar CSVs."""
+        sample_result_with_groups.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        assert loaded.original_groups is not None
+        pd.testing.assert_series_equal(
+            loaded.original_groups,
+            sample_result_with_groups.original_groups,
+            check_names=False,
+        )
+        assert loaded.generated_groups is not None
+        assert loaded.reconstructed_groups is not None
+
+    def test_load_no_groups_returns_none(self, sample_generated, sample_loss, temp_dir):
+        """load() sets groups to None when no sidecar CSVs exist."""
+        result = SyngResult(
+            generated_data=sample_generated,
+            loss=sample_loss,
+            metadata={"dataname": "test"},
+        )
+        result.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        assert loaded.original_groups is None
+        assert loaded.generated_groups is None
+        assert loaded.reconstructed_groups is None
+
+    def test_group_mapping_persisted_in_metadata(
+        self, sample_result_with_groups, temp_dir
+    ):
+        """group_mapping is serialised to metadata JSON and restored on load."""
+        sample_result_with_groups.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+        mapping = loaded.metadata.get("group_mapping")
+        assert mapping is not None
+        assert mapping == {0: "A", 1: "B"}
+
+    def test_save_load_roundtrip_group_values(
+        self, sample_result_with_groups, temp_dir
+    ):
+        """Group values are preserved exactly through save/load."""
+        sample_result_with_groups.save(temp_dir)
+        loaded = SyngResult.load(temp_dir)
+
+        orig_vals = sample_result_with_groups.original_groups.tolist()
+        loaded_vals = loaded.original_groups.tolist()
+        assert orig_vals == loaded_vals

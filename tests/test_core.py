@@ -577,18 +577,57 @@ class TestComputeNewSize:
         labels = torch.zeros(20)
         assert _compute_new_size(labels, 20, 500) == 500
 
-    def test_already_list(self):
+    def test_list_with_groups(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        assert _compute_new_size(labels, 20, [300, 200]) == [300, 200]
+
+    def test_list_without_groups_raises(self):
         labels = torch.zeros(20)
-        assert _compute_new_size(labels, 20, [100, 200]) == [100, 200]
+        with pytest.raises(ValueError, match="requires grouped data"):
+            _compute_new_size(labels, 20, [100, 200])
+
+    def test_list_wrong_length_raises(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        with pytest.raises(ValueError, match="list length"):
+            _compute_new_size(labels, 20, [100, 200, 300])
 
     def test_unbalanced_two_groups(self):
         labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        result = _compute_new_size(labels, 20, 500, repli=5)
-        assert result == [12, 8, 5]
+        result = _compute_new_size(labels, 20, 500)
+        assert result == [300, 200]
 
     def test_balanced_two_groups(self):
         labels = torch.tensor([0.0] * 10 + [1.0] * 10)
-        assert _compute_new_size(labels, 20, 500) == 500
+        assert _compute_new_size(labels, 20, 500) == [250, 250]
+
+    def test_rounding_indivisible(self):
+        """When new_size cannot be evenly split, total still equals new_size."""
+        labels = torch.tensor([0.0] * 7 + [1.0] * 3)
+        result = _compute_new_size(labels, 10, 11)
+        assert isinstance(result, list)
+        assert sum(result) == 11  # total preserved exactly
+        # 7/10 * 11 = 7.7 → round → 8; 11 - 8 = 3
+        assert result == [8, 3]
+
+    def test_int_bool_raises(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        with pytest.raises(TypeError, match=r"must be an int or list\[int\]"):
+            _compute_new_size(labels, 20, True)
+
+    def test_int_negative_raises(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        with pytest.raises(ValueError, match="must be non-negative"):
+            _compute_new_size(labels, 20, -1)
+
+    def test_list_non_integer_raises(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        with pytest.raises(TypeError, match="list values must be integers"):
+            _compute_new_size(labels, 20, [100, 100.5])
+
+    def test_list_negative_raises(self):
+        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
+        with pytest.raises(ValueError, match="list values must be non-negative"):
+            _compute_new_size(labels, 20, [100, -1])
 
 
 # =========================================================================
@@ -939,6 +978,80 @@ class TestGenerate:
         )
         assert result2.metadata["generated_labels"] is None
 
+    def test_generate_grouped_int_new_size_row_count(self, sample_data):
+        """generate() with grouped data + int new_size returns exactly new_size rows."""
+        groups = pd.Series([0] * 12 + [1] * 8)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=100,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.generated_data) == 100
+
+    def test_generate_grouped_list_new_size_row_count(self, sample_data):
+        """generate() with grouped data + list new_size returns sum(list) rows."""
+        groups = pd.Series([0] * 12 + [1] * 8)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=[60, 40],
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.generated_data) == 100
+
+    def test_generate_grouped_vae_int_new_size_row_count(self, sample_data):
+        """generate() with non-CVAE grouped data + int new_size returns exactly new_size."""
+        groups = pd.Series([0] * 12 + [1] * 8)
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=50,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert len(result.generated_data) == 50
+
+    def test_generate_grouped_vae_int_new_size_group_counts(self, sample_data):
+        """Grouped int new_size maps to requested per-group counts for non-CVAE."""
+        groups = pd.Series([0] * 12 + [1] * 8)
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=50,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        counts = result.generated_groups.value_counts()
+        assert counts.loc[0] == 30
+        assert counts.loc[1] == 20
+
+    def test_generate_grouped_vae_list_new_size_group_counts(self, sample_data):
+        """Grouped list new_size maps to explicit per-group counts for non-CVAE."""
+        groups = pd.Series([0] * 12 + [1] * 8)
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=[60, 40],
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        counts = result.generated_groups.value_counts()
+        assert counts.loc[0] == 60
+        assert counts.loc[1] == 40
+
 
 # =========================================================================
 # pilot_study()
@@ -1200,6 +1313,75 @@ class TestPilotStudy:
         )
         assert len(result.runs) == 1
         assert (10, 1) in result.runs
+
+    def test_pilot_new_size_uses_pilot_labels(self, sample_data, monkeypatch):
+        """pilot_study computes grouped new_size from pilot-draw labels."""
+        import torch.nn as nn
+
+        import syng_bts.core as exp
+        from syng_bts.core import TrainingContext
+
+        fake_model = nn.Linear(NUM_FEATURES, NUM_FEATURES)
+        groups = pd.Series([0] * 12 + [1] * 8)
+
+        def fake_orchestrate(*args, **kwargs):
+            rawdata = kwargs["rawdata"]
+            rawlabels = kwargs["rawlabels"]
+            trained = TrainedModel(
+                model=fake_model,
+                model_state=fake_model.state_dict(),
+                arch_params={
+                    "family": "ae",
+                    "modelname": "AE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 64,
+                },
+                log_dict={
+                    "train_loss_per_batch": [1.0],
+                    "val_loss_per_batch": [1.0],
+                },
+                epochs_trained=1,
+            )
+            ctx = TrainingContext(
+                random_seed=123,
+                val_ratio=0.2,
+                batch_size=1,
+                num_epochs=2,
+                early_stop=False,
+                early_stop_num=30,
+                rawdata=rawdata,
+                rawlabels=rawlabels,
+            )
+            return trained, ctx
+
+        def fake_infer(trained, *, new_size, ctx, cap=False):
+            n = int(new_size) if isinstance(new_size, int) else int(sum(new_size))
+            gen = torch.zeros((n, NUM_FEATURES), dtype=torch.float32)
+            recon = torch.zeros((10, NUM_FEATURES), dtype=torch.float32)
+            return gen, recon
+
+        def checking_compute(orilabels, n_samples, new_size):
+            # If this uses full-dataset labels, these assertions fail.
+            assert int(orilabels.shape[0]) == 16
+            assert n_samples == 16
+            return new_size
+
+        monkeypatch.setattr(exp, "orchestrate_training", fake_orchestrate)
+        monkeypatch.setattr(exp, "_infer_from_trained", fake_infer)
+        monkeypatch.setattr(exp, "_compute_new_size", checking_compute)
+
+        result = pilot_study(
+            data=sample_data,
+            groups=groups,
+            pilot_size=[8],
+            n_draws=1,
+            model="VAE1-10",
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+
+        assert isinstance(result, PilotResult)
 
     @pytest.mark.parametrize("n_draws", [0, -1, 1.5, True])
     def test_n_draws_invalid_raises(self, sample_data, n_draws):

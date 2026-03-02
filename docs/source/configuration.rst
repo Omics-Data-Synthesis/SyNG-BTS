@@ -107,7 +107,15 @@ Generation Parameters
      - Description
    * - ``new_size``
      - int or list[int]
-     - Number of synthetic samples to generate (default: 500).
+     - Generation size (default: 500).
+
+       - ``int``: exact total sample count. For grouped data,
+         counts are split by the input group ratio and rounded.
+       - ``list[int]``: explicit grouped counts
+         ``[n_group_0, n_group_1]``.
+
+       ``group_0`` is the first group value encountered in input data;
+       ``group_1`` is the other group.
    * - ``pilot_size``
      - list[int]
      - Sample sizes to evaluate (only for ``pilot_study()``).

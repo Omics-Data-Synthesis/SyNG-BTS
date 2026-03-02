@@ -518,17 +518,17 @@ class TestGenerateSamples:
         assert result.shape == (10, 50)
 
     def test_cvae_multi_group(self, cvae_model):
-        """CVAE multi-group generation with replicate factor."""
+        """CVAE multi-group generation with per-group counts."""
         from syng_bts.helper_utils import generate_samples
 
         result = generate_samples(
             model=cvae_model,
             modelname="CVAE",
             latent_size=32,
-            num_images=[5, 5, 2],
+            num_images=[5, 7],
         )
         assert isinstance(result, torch.Tensor)
-        assert result.shape[0] == 20  # (5+5) * 2
+        assert result.shape[0] == 12  # 5 + 7
         assert result.shape[1] == 51  # 50 features + 1 label
 
 

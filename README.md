@@ -70,6 +70,11 @@ result = generate(
     learning_rate=0.0005,    # learning rate
 )
 
+# Grouped-size controls
+# - int: exact total sample count (grouped data is split by input ratio)
+# - list[int]: explicit grouped counts [n_group_0, n_group_1]
+#   where group_0 is the first group value encountered in input data.
+
 # Access results in memory
 print(result.generated_data.shape)   # (500, n_features)
 print(result.loss.columns.tolist())  # ['kl', 'recons']

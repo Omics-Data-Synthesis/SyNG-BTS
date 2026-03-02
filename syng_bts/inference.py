@@ -37,7 +37,8 @@ def run_generation(
         Output from a training wrapper.
     num_samples : int or list[int]
         Number of samples to generate.  For CVAE with multiple groups,
-        pass ``[n_group_0, n_group_1, ..., replicate_factor]``.
+        pass ``[n_group_0, n_group_1]`` where ``group_0`` maps to label 0
+        and ``group_1`` maps to label 1.
     col_max : torch.Tensor or None
         Per-feature maximum values for capping (optional).
     col_sd : torch.Tensor or None

@@ -399,7 +399,8 @@ def generate_samples(
         Dimensionality of the latent space.
     num_images : int or list[int]
         Number of samples to generate.  For CVAE with multiple groups,
-        pass ``[n_group_0, n_group_1, ..., replicate_factor]``.
+        pass ``[n_group_0, n_group_1]`` where ``group_0`` maps to label 0
+        and ``group_1`` maps to label 1.
     col_max : torch.Tensor or None
         Per-feature maximum values for capping (optional).
     col_sd : torch.Tensor or None
@@ -449,19 +450,16 @@ def generate_samples(
             else:
                 raise ValueError(f"Unsupported modelname for generation: {modelname!r}")
         else:
-            # Multi-group: num_images = [n_for_0, ..., n_for_(K-1), replicate]
-            counts = num_images[:-1]
-            repli = num_images[-1]
-            num_images_repe = sum(counts)
-            total = num_images_repe * repli
+            # Multi-group: num_images = [n_for_group_0, n_for_group_1]
+            counts = num_images
+            total = sum(counts)
             rand_features = torch.randn(total, latent_size)
             if modelname == "CVAE":
                 labels_list = []
                 for class_id, n_c in enumerate(counts):
                     ids = torch.full((n_c,), fill_value=class_id, dtype=torch.float32)
                     labels_list.append(ids)
-                one_group_labels = torch.cat(labels_list)
-                labels = one_group_labels.repeat(repli).unsqueeze(1)
+                labels = torch.cat(labels_list).unsqueeze(1)
 
                 rand_features = torch.cat((rand_features, labels), dim=1)
                 new_images = model.decoder(rand_features)
@@ -482,6 +480,23 @@ def generate_samples(
                 new_images = model.sample(total)
             else:
                 raise ValueError(f"Unsupported modelname for generation: {modelname!r}")
+
+            # For non-CVAE grouped training, the final column is a blur-label.
+            # Encode requested group counts explicitly so downstream
+            # _labels_to_groups() maps to the requested group split.
+            if modelname != "CVAE":
+                device = new_images.device
+                label_parts = []
+                for group_id, n_c in enumerate(counts):
+                    if group_id == 0:
+                        vals = torch.rand(n_c, device=device)
+                    else:
+                        vals = 9 + torch.rand(n_c, device=device)
+                    label_parts.append(vals)
+                blur_labels = torch.cat(label_parts)
+                perm = torch.randperm(total, device=device)
+                blur_labels = blur_labels[perm]
+                new_images[:, -1] = blur_labels
 
         # Cap: threshold outliers to col_max + noise
         if (col_max is not None) and (col_sd is not None):

@@ -128,6 +128,15 @@ synthetic samples (see :ref:`generate` in :doc:`methods`):
    from syng_bts import SyngResult
    loaded = SyngResult.load("./my_output/")
 
+For grouped datasets, ``new_size`` supports two forms:
+
+- ``int``: exact total generated sample count. Group counts follow the
+   input group ratio (rounded).
+- ``list[int]``: explicit grouped counts ``[n_group_0, n_group_1]``.
+
+Here, ``group_0`` is the first group value encountered in the input
+group labels, and ``group_1`` is the other group.
+
 Run a Pilot Study
 ~~~~~~~~~~~~~~~~~
 

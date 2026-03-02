@@ -566,21 +566,61 @@ def _compute_new_size(
     orilabels: torch.Tensor,
     n_samples: int,
     new_size: int | list[int],
-    repli: int = 5,
 ) -> int | list[int]:
     """Compute the generation size, honouring group balance.
 
-    For a simple (single-group) dataset the returned value is just
-    *new_size* as-is.  For a two-group dataset where the groups are
-    unbalanced and *new_size* is not already a list, returns
-    ``[n_class_0, n_class_1, repli]``.
+    - If *new_size* is a ``list``, it is returned as-is after validation
+      (must match the number of groups).
+    - If *new_size* is an ``int`` and the data has groups, returns
+      ``[n_group_0, n_group_1]`` preserving the original group ratio and
+      summing to *new_size*.
+    - If *new_size* is an ``int`` and the data has no groups, returns
+      *new_size* unchanged.
+
+    Notes
+    -----
+    For grouped data, ``group_0`` is the base group used by
+    :func:`create_labels` (the first group value encountered in the input),
+    and ``group_1`` is the other group.
     """
+    if isinstance(new_size, bool):
+        raise TypeError("new_size must be an int or list[int], got bool.")
+
+    n_groups = len(torch.unique(orilabels))
+    has_groups = n_groups > 1
+
     if isinstance(new_size, list):
+        if not has_groups:
+            raise ValueError(
+                "new_size as a list requires grouped data, but the dataset "
+                "has only a single group."
+            )
+        if len(new_size) != n_groups:
+            raise ValueError(
+                f"new_size list length ({len(new_size)}) must match the "
+                f"number of groups ({n_groups})."
+            )
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in new_size):
+            raise TypeError("new_size list values must be integers.")
+        if any(v < 0 for v in new_size):
+            raise ValueError("new_size list values must be non-negative.")
         return new_size
-    if (len(torch.unique(orilabels)) > 1) and (
-        int(sum(orilabels == 0)) != int(sum(orilabels == 1))
-    ):
-        return [int(sum(orilabels == 0)), int(sum(orilabels == 1)), repli]
+
+    if not isinstance(new_size, int):
+        raise TypeError(
+            f"new_size must be an int or list[int], got {type(new_size).__name__}."
+        )
+    if new_size < 0:
+        raise ValueError("new_size must be non-negative.")
+
+    if has_groups:
+        n0 = int((orilabels == 0).sum())
+        n1 = int((orilabels == 1).sum())
+        total = n0 + n1
+        new_n0 = round(new_size * n0 / total)
+        new_n1 = new_size - new_n0
+        return [new_n0, new_n1]
+
     return new_size
 
 
@@ -977,7 +1017,17 @@ def generate(
         Optional binary group labels. When provided, these labels take
         precedence over bundled dataset groups.
     new_size : int or list[int]
-        Number of synthetic samples to generate.
+                Generation size.
+
+                - If ``int``: generate exactly ``new_size`` samples.
+                    For grouped data, counts are split by the input group ratio
+                    and rounded to integers.
+                - If ``list[int]``: explicit grouped counts
+                    ``[n_group_0, n_group_1]``.
+
+                For grouped data, ``group_0`` is the base group used by
+                :func:`create_labels` (first encountered group value) and
+                ``group_1`` is the other group.
     model : str
         Model specification, e.g. ``"VAE1-10"`` (parsed into model type
         and kl_weight).
@@ -1204,9 +1254,6 @@ def pilot_study(
     modelname, kl_weight = _parse_model_spec(model)
 
     # --- 3. Pilot loop ---------------------------------------------------
-    # new_size = n_draws × pilot (per group if unbalanced)
-    repli = n_draws
-
     runs: dict[tuple[int, int], SyngResult] = {}
     last_ctx: TrainingContext | None = None
 
@@ -1236,7 +1283,9 @@ def pilot_study(
 
             # new_size for this pilot (group-balanced if needed)
             effective_new_size = _compute_new_size(
-                prep.orilabels, prep.n_samples, repli * n_pilot, repli=repli
+                rawlabels,
+                int(rawdata.shape[0]),
+                n_draws * n_pilot,
             )
 
             # Train (orchestrate: early-stop, blur-label, aug, dispatch)
@@ -1377,7 +1426,17 @@ def transfer(
     target_groups : pd.Series, np.ndarray, or None
         Optional binary groups for the target dataset.
     new_size : int or list[int]
-        Number of samples to generate from the fine-tuned model.
+                Generation size for the fine-tuned target model.
+
+                - If ``int``: generate exactly ``new_size`` samples.
+                    For grouped data, counts are split by the target input group
+                    ratio and rounded to integers.
+                - If ``list[int]``: explicit grouped counts
+                    ``[n_group_0, n_group_1]``.
+
+                For grouped data, ``group_0`` is the base group used by
+                :func:`create_labels` (first encountered group value) and
+                ``group_1`` is the other group.
     model : str
         Model specification.
     apply_log : bool

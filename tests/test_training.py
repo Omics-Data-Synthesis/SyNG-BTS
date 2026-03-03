@@ -237,6 +237,34 @@ class TestTrainingAEs:
         figs_after = plt.get_fignums()
         assert figs_before == figs_after
 
+    def test_reconstruction_weight_forwarded_to_vae(
+        self, raw_data, raw_labels, monkeypatch
+    ):
+        captured: dict[str, int] = {}
+
+        def fake_train_vae(*args, **kwargs):
+            captured["reconstruction_term_weight"] = kwargs[
+                "reconstruction_term_weight"
+            ]
+            return {"train_combined_loss_per_batch": [0.0]}, kwargs["model"]
+
+        monkeypatch.setattr("syng_bts.helper_training.ht.train_VAE", fake_train_vae)
+
+        training_AEs(
+            rawdata=raw_data,
+            rawlabels=raw_labels,
+            batch_size=BATCH_SIZE,
+            random_seed=42,
+            modelname="VAE",
+            num_epochs=1,
+            learning_rate=0.001,
+            reconstruction_term_weight=2,
+            kl_weight=5,
+            early_stop=False,
+        )
+
+        assert captured["reconstruction_term_weight"] == 2
+
 
 # ===========================================================================
 # training_GANs

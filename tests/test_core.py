@@ -108,19 +108,27 @@ class TestParseModelSpec:
     """Unit tests for _parse_model_spec."""
 
     def test_vae_with_kl(self):
-        assert _parse_model_spec("VAE1-10") == ("VAE", 10)
+        assert _parse_model_spec("VAE1-10") == ("VAE", 1, 10)
 
     def test_ae_with_kl(self):
-        assert _parse_model_spec("AE1-1") == ("AE", 1)
+        assert _parse_model_spec("AE1-1") == ("AE", 1, 1)
 
     def test_cvae_with_kl(self):
-        assert _parse_model_spec("CVAE1-20") == ("CVAE", 20)
+        assert _parse_model_spec("CVAE1-20") == ("CVAE", 1, 20)
 
     def test_plain_model(self):
-        assert _parse_model_spec("GAN") == ("GAN", 1)
+        assert _parse_model_spec("GAN") == ("GAN", 1, 1)
 
     def test_flow_model(self):
-        assert _parse_model_spec("maf") == ("maf", 1)
+        assert _parse_model_spec("maf") == ("maf", 1, 1)
+
+    def test_recon_weight_parsed(self):
+        """Reconstruction term weight (middle digit) is extracted."""
+        assert _parse_model_spec("VAE2-5") == ("VAE", 2, 5)
+
+    def test_cvae_recon_weight(self):
+        """CVAE with non-default reconstruction weight."""
+        assert _parse_model_spec("CVAE3-10") == ("CVAE", 3, 10)
 
 
 # =========================================================================
@@ -745,6 +753,21 @@ class TestGenerate:
         )
         assert result.metadata["modelname"] == "VAE"
         assert result.metadata["kl_weight"] == 10
+        assert result.metadata["reconstruction_term_weight"] == 1
+
+    def test_recon_weight_in_metadata(self, sample_data):
+        """Non-default reconstruction_term_weight appears in metadata."""
+        result = generate(
+            data=sample_data,
+            model="VAE2-5",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+        )
+        assert result.metadata["modelname"] == "VAE"
+        assert result.metadata["reconstruction_term_weight"] == 2
+        assert result.metadata["kl_weight"] == 5
 
     def test_epochs_trained_metadata_within_bounds(self, sample_data):
         result = generate(

@@ -218,18 +218,24 @@ def _prepare_data(
     )
 
 
-def _parse_model_spec(model: str) -> tuple[str, int]:
-    """Parse a model string like ``'VAE1-10'`` into (modelname, kl_weight).
+def _parse_model_spec(model: str) -> tuple[str, int, int]:
+    """Parse a model string like ``'VAE1-10'`` into components.
+
+    The model string format is ``<NAME><recon_weight>-<kl_weight>``
+    where ``recon_weight`` and ``kl_weight`` specify the ratio of
+    reconstruction loss to KL divergence (e.g. ``'VAE1-10'`` means
+    ``recon_weight=1, kl_weight=10``, i.e. a 1:10 ratio).
 
     Returns
     -------
-    tuple[str, int]
-        ``(modelname, kl_weight)`` — e.g. ``("VAE", 10)``.
+    tuple[str, int, int]
+        ``(modelname, reconstruction_term_weight, kl_weight)``
+        — e.g. ``("VAE", 1, 10)``.
     """
     parts = re.split(r"([A-Z]+)(\d)([-+])(\d+)", model)
     if len(parts) > 1:
-        return parts[1], int(parts[4])
-    return model, 1
+        return parts[1], int(parts[2]), int(parts[4])
+    return model, 1, 1
 
 
 def _build_loss_df(log_dict: dict, modelname: str) -> pd.DataFrame:
@@ -292,6 +298,7 @@ def orchestrate_training(
     oriblurlabels: torch.Tensor,
     modelname: str,
     kl_weight: int = 1,
+    reconstruction_term_weight: int = 1,
     batch_frac: float = 0.1,
     random_seed: int = 123,
     epoch: int | None = None,
@@ -317,7 +324,8 @@ def orchestrate_training(
     training wrapper.
 
     Model parsing is **external** — the caller passes ``modelname``
-    and ``kl_weight`` (see :func:`_parse_model_spec`).
+    ``kl_weight``, and ``reconstruction_term_weight``
+    (see :func:`_parse_model_spec`).
 
     Parameters
     ----------
@@ -331,6 +339,8 @@ def orchestrate_training(
         Short model name (``"AE"``, ``"VAE"``, ``"GAN"``, etc.).
     kl_weight : int
         KL divergence weight (VAE/CVAE only).
+    reconstruction_term_weight : int
+        Reconstruction loss weight (VAE/CVAE only).
     batch_frac : float
         Batch size as a fraction of sample count.
     random_seed : int
@@ -439,6 +449,7 @@ def orchestrate_training(
             learning_rate=learning_rate,
             val_ratio=val_ratio,
             kl_weight=kl_weight,
+            reconstruction_term_weight=reconstruction_term_weight,
             early_stop=early_stop,
             early_stop_num=early_stop_num,
             model_state=model_state,
@@ -672,6 +683,7 @@ def _assemble_result(
     num_epochs: int,
     random_seed: int,
     kl_weight: int,
+    reconstruction_term_weight: int,
     early_stop: bool,
     early_stop_num: int,
     apply_log: bool,
@@ -711,6 +723,8 @@ def _assemble_result(
         Random seed used.
     kl_weight : int
         KL weight used.
+    reconstruction_term_weight : int
+        Reconstruction loss weight used.
     early_stop : bool
         Whether early stopping was enabled.
     early_stop_num : int
@@ -798,6 +812,7 @@ def _assemble_result(
         "epochs_trained": trained.epochs_trained,
         "seed": random_seed,
         "kl_weight": kl_weight,
+        "reconstruction_term_weight": reconstruction_term_weight,
         "input_shape": (n_samples, len(colnames)),
         "early_stop": early_stop,
         "early_stop_patience": early_stop_num,
@@ -1096,7 +1111,7 @@ def generate(
     prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
     # --- 2. Parse model spec ---------------------------------------------
-    modelname, kl_weight = _parse_model_spec(model)
+    modelname, recon_weight, kl_weight = _parse_model_spec(model)
 
     # --- 3. Compute new_size (group-balanced if needed) ------------------
     effective_new_size = _compute_new_size(prep.orilabels, prep.n_samples, new_size)
@@ -1108,6 +1123,7 @@ def generate(
         oriblurlabels=prep.oriblurlabels,
         modelname=modelname,
         kl_weight=kl_weight,
+        reconstruction_term_weight=recon_weight,
         batch_frac=batch_frac,
         random_seed=random_seed,
         epoch=epoch,
@@ -1152,6 +1168,7 @@ def generate(
         num_epochs=ctx.num_epochs,
         random_seed=random_seed,
         kl_weight=kl_weight,
+        reconstruction_term_weight=recon_weight,
         early_stop=ctx.early_stop,
         early_stop_num=ctx.early_stop_num,
         apply_log=prep.apply_log,
@@ -1251,7 +1268,7 @@ def pilot_study(
     prep = _prepare_data(data=data, name=name, groups=groups, apply_log=apply_log)
 
     # --- 2. Parse model spec ---------------------------------------------
-    modelname, kl_weight = _parse_model_spec(model)
+    modelname, recon_weight, kl_weight = _parse_model_spec(model)
 
     # --- 3. Pilot loop ---------------------------------------------------
     runs: dict[tuple[int, int], SyngResult] = {}
@@ -1295,6 +1312,7 @@ def pilot_study(
                 oriblurlabels=rawblurlabels,
                 modelname=modelname,
                 kl_weight=kl_weight,
+                reconstruction_term_weight=recon_weight,
                 batch_frac=batch_frac,
                 random_seed=random_seed,
                 epoch=epoch,
@@ -1334,6 +1352,7 @@ def pilot_study(
                 num_epochs=ctx.num_epochs,
                 random_seed=random_seed,
                 kl_weight=kl_weight,
+                reconstruction_term_weight=recon_weight,
                 early_stop=ctx.early_stop,
                 early_stop_num=ctx.early_stop_num,
                 apply_log=prep.apply_log,
@@ -1488,7 +1507,7 @@ def transfer(
     )
 
     # --- 2. Parse model spec ---------------------------------------------
-    modelname, kl_weight = _parse_model_spec(model)
+    modelname, recon_weight, kl_weight = _parse_model_spec(model)
 
     # --- 3. Pre-train on source ------------------------------------------
     source_trained, _source_ctx = orchestrate_training(
@@ -1497,6 +1516,7 @@ def transfer(
         oriblurlabels=source_prep.oriblurlabels,
         modelname=modelname,
         kl_weight=kl_weight,
+        reconstruction_term_weight=recon_weight,
         batch_frac=batch_frac,
         random_seed=random_seed,
         epoch=epoch,
@@ -1522,6 +1542,7 @@ def transfer(
         oriblurlabels=target_prep.oriblurlabels,
         modelname=modelname,
         kl_weight=kl_weight,
+        reconstruction_term_weight=recon_weight,
         batch_frac=batch_frac,
         random_seed=random_seed,
         epoch=epoch,
@@ -1560,6 +1581,7 @@ def transfer(
         num_epochs=target_ctx.num_epochs,
         random_seed=random_seed,
         kl_weight=kl_weight,
+        reconstruction_term_weight=recon_weight,
         early_stop=target_ctx.early_stop,
         early_stop_num=target_ctx.early_stop_num,
         apply_log=target_prep.apply_log,

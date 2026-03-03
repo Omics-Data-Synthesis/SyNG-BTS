@@ -92,6 +92,7 @@ def _assert_metadata_schema(result: SyngResult, *, model_str: str):
         "epochs_trained",
         "seed",
         "kl_weight",
+        "reconstruction_term_weight",
         "input_shape",
         "early_stop",
         "early_stop_patience",
@@ -661,7 +662,7 @@ class TestModelReconstructionParity:
         n_samples = oridata.shape[0]
 
         orilabels, oriblurlabels = create_labels(n_samples=n_samples, groups=groups)
-        modelname, kl_weight = _parse_model_spec(model)
+        modelname, recon_weight, kl_weight = _parse_model_spec(model)
 
         trained, _ctx = orchestrate_training(
             rawdata=oridata,
@@ -669,6 +670,7 @@ class TestModelReconstructionParity:
             oriblurlabels=oriblurlabels,
             modelname=modelname,
             kl_weight=kl_weight,
+            reconstruction_term_weight=recon_weight,
             batch_frac=BATCH_FRAC,
             random_seed=SEED,
             epoch=FAST_EPOCHS,

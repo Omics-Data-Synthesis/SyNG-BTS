@@ -630,6 +630,20 @@ def _compute_new_size(
         total = n0 + n1
         new_n0 = round(new_size * n0 / total)
         new_n1 = new_size - new_n0
+
+        if n0 != n1:
+            import warnings
+
+            warnings.warn(
+                "Grouped generation with integer new_size preserves the original "
+                "class ratio and may remain imbalanced. "
+                f"Input groups are ({n0}, {n1}), so new_size={new_size} "
+                f"becomes [{new_n0}, {new_n1}]. "
+                "Pass an explicit list (for example [500, 500]) to control "
+                "per-group counts.",
+                UserWarning,
+                stacklevel=3,
+            )
         return [new_n0, new_n1]
 
     return new_size

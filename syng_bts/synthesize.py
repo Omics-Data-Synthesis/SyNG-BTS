@@ -666,6 +666,11 @@ def evaluate_sample_sizes(
     if apply_log:
         resolved_data = np.log2(resolved_data + 1)
 
+    # Ensure float64 before sklearn scaling to avoid float32 numerical-warning
+    # spam on high-range expression data.
+    if (resolved_data.dtypes == np.float32).any():
+        resolved_data = resolved_data.astype(np.float64)
+
     # Encode groups as integer labels
     group_arr = np.array([str(item) for item in group_arr])
     unique_groups = np.unique(group_arr)

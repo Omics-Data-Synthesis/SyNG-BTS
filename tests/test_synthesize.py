@@ -8,6 +8,7 @@ BRCA datasets, method aliases, validation, and ``apply_log`` semantics.
 from __future__ import annotations
 
 import inspect
+import warnings
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -177,6 +178,25 @@ class TestEvaluateSampleSizesDataFrame:
             methods=["LOGIS"],
         )
         assert isinstance(result, pd.DataFrame)
+
+    def test_float32_input_no_scaling_warning(self, brca_generated_data):
+        """float32 feature matrices should not emit sklearn scaling warnings."""
+        data, groups = brca_generated_data
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = evaluate_sample_sizes(
+                data=data.astype("float32"),
+                sample_sizes=[100],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                apply_log=True,
+                verbose="silent",
+            )
+
+        assert isinstance(result, pd.DataFrame)
+        assert len(caught) == 0
 
 
 # ---------------------------------------------------------------------------

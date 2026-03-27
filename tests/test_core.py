@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import inspect
+import warnings
 
 import pandas as pd
 import pytest
@@ -601,12 +602,20 @@ class TestComputeNewSize:
 
     def test_unbalanced_two_groups(self):
         labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        result = _compute_new_size(labels, 20, 500)
+        with pytest.warns(UserWarning, match="preserves the original class ratio"):
+            result = _compute_new_size(labels, 20, 500)
         assert result == [300, 200]
 
     def test_balanced_two_groups(self):
         labels = torch.tensor([0.0] * 10 + [1.0] * 10)
-        assert _compute_new_size(labels, 20, 500) == [250, 250]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = _compute_new_size(labels, 20, 500)
+
+        assert result == [250, 250]
+        assert not any(
+            "preserves the original class ratio" in str(w.message) for w in caught
+        )
 
     def test_rounding_indivisible(self):
         """When new_size cannot be evenly split, total still equals new_size."""

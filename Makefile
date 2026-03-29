@@ -118,7 +118,7 @@ publish: build
 		echo "Publish aborted."; \
 		exit 1; \
 	fi; \
-	@echo "Publishing to PyPI..."
+	echo "Publishing to PyPI..."
 	$(PYTHON) -m twine upload dist/*
 
 publish-test: build

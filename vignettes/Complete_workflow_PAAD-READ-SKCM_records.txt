@@ -8,3 +8,6 @@ PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-50-miRNA-success|2026-03-31 18:32:05|0:
 PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-100-miRNA-success|2026-03-31 18:33:50|0:01:45|0.4%|4/1080
 PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-200-miRNA-success|2026-03-31 18:36:12|0:02:21|0.5%|5/1080
 PAAD_5-2-raw-batch2-offaug_none-CVAE1-50-miRNA-success|2026-03-31 18:36:36|0:00:23|0.6%|6/1080
+PAAD_5-2-raw-batch2-offaug_none-CVAE1-100-miRNA-success|2026-03-31 18:36:55|0:00:18|0.6%|7/1080
+PAAD_5-2-raw-batch2-offaug_none-CVAE1-200-miRNA-success|2026-03-31 18:37:12|0:00:16|0.7%|8/1080
+PAAD_5-2-raw-batch2-offaug_AE_head-CVAE1-50-miRNA-success|2026-03-31 18:39:19|0:02:07|0.8%|9/1080

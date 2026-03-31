@@ -171,6 +171,6 @@ syng_bts/data/case/COAD_test/
 syng_bts/data/case/LAML_test/
 syng_bts/data/case/PAAD_test/
 
-syng_bts/data/case
+syng_bts/data/case/Augmentation*/
 
 evaluations/*/

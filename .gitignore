@@ -166,3 +166,11 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+syng_bts/data/case/COAD_test/
+syng_bts/data/case/LAML_test/
+syng_bts/data/case/PAAD_test/
+
+syng_bts/data/case
+
+evaluations/*/

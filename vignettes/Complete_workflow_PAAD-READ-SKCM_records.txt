@@ -1,0 +1,10 @@
+PAAD-READ-SKCM 增强实验记录 (SyNG-BTS 2.6)
+格式: case_id-标准化-batch-off_aug-模型-data_type-状态|时间戳|耗时|完成比例|已完成/总数
+========================================================================================================================
+PAAD_5-2-raw-batch1-offaug_none-CVAE1-50-miRNA-success|2026-03-31 18:29:52|0:00:21|0.0%|0/1080
+PAAD_5-2-raw-batch1-offaug_none-CVAE1-100-miRNA-success|2026-03-31 18:30:06|0:00:13|0.1%|1/1080
+PAAD_5-2-raw-batch1-offaug_none-CVAE1-200-miRNA-success|2026-03-31 18:30:20|0:00:13|0.2%|2/1080
+PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-50-miRNA-success|2026-03-31 18:32:05|0:01:45|0.3%|3/1080
+PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-100-miRNA-success|2026-03-31 18:33:50|0:01:45|0.4%|4/1080
+PAAD_5-2-raw-batch1-offaug_AE_head-CVAE1-200-miRNA-success|2026-03-31 18:36:12|0:02:21|0.5%|5/1080
+PAAD_5-2-raw-batch2-offaug_none-CVAE1-50-miRNA-success|2026-03-31 18:36:36|0:00:23|0.6%|6/1080

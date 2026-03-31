@@ -395,6 +395,8 @@ def training_GANs(
     set_all_seeds(random_seed)
     num_features = rawdata.shape[1]
     data = TensorDataset(rawdata, rawlabels)
+    # 防止 batch_size 计算为 0（例如 rawdata 样本太少时 round(...) 结果可能为 0）
+    batch_size = max(1, int(batch_size))
     train_loader = DataLoader(data, batch_size=batch_size, shuffle=True, drop_last=True)
     latent_dim = 32
 
@@ -544,12 +546,18 @@ def training_iter(
             feed_loader = DataLoader(
                 feed_set, batch_size=batch_size, shuffle=True, drop_last=True
             )
+            # train_AE/train_VAE 在函数开头会无条件读取 val_loader 的第一个 batch
+            # 因此这里必须提供非空的 val_loader。
+            val_loader = DataLoader(
+                feed_set, batch_size=batch_size, shuffle=False, drop_last=False
+            )
             log_dict, best_model = ht.train_AE(
                 num_epochs=num_epochs,
                 model=model,
                 loss_fn=loss_fn,
                 optimizer=optimizer,
                 train_loader=feed_loader,
+                val_loader=val_loader,
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
                 skip_epoch_stats=True,
@@ -611,9 +619,12 @@ def training_iter(
         feed_data = rawdata
         feed_set = data
         for i in range(iter_times):
-            batch_size = round(feed_data.shape[0] * 0.1)
+            batch_size = max(1, int(round(feed_data.shape[0] * 0.1)))
             feed_loader = DataLoader(
                 feed_set, batch_size=batch_size, shuffle=True, drop_last=True
+            )
+            val_loader = DataLoader(
+                feed_set, batch_size=batch_size, shuffle=False, drop_last=False
             )
             log_dict, best_model = ht.train_VAE(
                 num_epochs=num_epochs,
@@ -621,6 +632,7 @@ def training_iter(
                 loss_fn=loss_fn,
                 optimizer=optimizer,
                 train_loader=feed_loader,
+                val_loader=val_loader,
                 early_stop=early_stop,
                 early_stop_num=early_stop_num,
                 skip_epoch_stats=True,

@@ -1,0 +1,23 @@
+# 定义cancer类型和对应的group variable
+CANCER_CONFIG = {
+    'COAD': {
+        'gv_file': '/Users/yanjiechen/Documents/Github/Lixuan_local/data/preprocessed_group_variables/COADPatientFilter.csv',
+        'target_gv': 'tumor_status'
+    },
+    'LAML': {
+        'gv_file': '/Users/yanjiechen/Documents/Github/Lixuan_local/data/preprocessed_group_variables/LAMLPatientFilter.csv',
+        'target_gv': 'blast_count'
+    },
+    'READ': {
+        'gv_file': '/Users/yanjiechen/Documents/Github/Lixuan_local/data/preprocessed_group_variables/READPatientFilter.csv',
+        'target_gv': 'ajcc_tumor_pathologic_pt'
+    },
+    'SKCM': {
+        'gv_file': '/Users/yanjiechen/Documents/Github/Lixuan_local/data/preprocessed_group_variables/SKCMPatientFilter.csv',
+        'target_gv': 'breslow_thickness_at_diagnosis'
+    },
+    'PAAD': {
+        'gv_file': '/Users/yanjiechen/Documents/Github/Lixuan_local/data/preprocessed_group_variables/PAADPatientFilter.csv',
+        'target_gv': 'ajcc_nodes_pathologic_pn'
+    }
+}

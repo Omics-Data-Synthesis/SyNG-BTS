@@ -314,6 +314,7 @@ def orchestrate_training(
     use_scheduler: bool = False,
     step_size: int = 10,
     gamma: float = 0.5,
+    CVAE_wide_network: bool = False,
     verbose: int = 1,
 ) -> tuple[TrainedModel, TrainingContext]:
     """Centralized training orchestrator.
@@ -372,6 +373,9 @@ def orchestrate_training(
         Scheduler step size.
     gamma : float
         Scheduler gamma.
+    CVAE_wide_network : bool
+        Use wider encoder/decoder for CVAE (512→256→128→64
+        instead of 256→128→64).  Ignored for non-CVAE models.
     verbose : int
         Verbosity level.
 
@@ -458,6 +462,7 @@ def orchestrate_training(
             use_scheduler=use_scheduler,
             step_size=step_size,
             gamma=gamma,
+            wide_network=CVAE_wide_network,
             verbose=verbose,
         )
     elif modelname in ("maf", "realnvp", "glow", "maf-split", "maf-split-glow"):
@@ -1025,6 +1030,7 @@ def generate(
     gamma: float = 0.5,
     cap: bool = False,
     random_seed: int = 123,
+    CVAE_wide_network: bool = False,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
 ) -> SyngResult:
@@ -1101,6 +1107,10 @@ def generate(
         Cap generated values to observed range.
     random_seed : int
         Random seed for reproducibility.
+    CVAE_wide_network : bool
+        Use wider encoder/decoder for CVAE (512→256→128→64 instead of
+        256→128→64).  Suitable for high-dimensional data like RNA.
+        Ignored for non-CVAE models (default: ``False``).
     output_dir : str, Path, or None
         If set, automatically save results to this directory.
     verbose : int or str
@@ -1152,6 +1162,7 @@ def generate(
         use_scheduler=use_scheduler,
         step_size=step_size,
         gamma=gamma,
+        CVAE_wide_network=CVAE_wide_network,
         verbose=verbose_level,
     )
 
@@ -1214,6 +1225,7 @@ def pilot_study(
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
     random_seed: int = 123,
+    CVAE_wide_network: bool = False,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
 ) -> PilotResult:
@@ -1263,6 +1275,8 @@ def pilot_study(
         Fold multiplier for Gaussian-head augmentation.
     random_seed : int
         Base random seed for reproducibility.
+    CVAE_wide_network : bool
+        Use wider encoder/decoder for CVAE — see :func:`generate`.
     output_dir : str, Path, or None
         If set, automatically save results to this directory.
     verbose : int or str
@@ -1335,6 +1349,7 @@ def pilot_study(
                 off_aug=off_aug,
                 AE_head_num=AE_head_num,
                 Gaussian_head_num=Gaussian_head_num,
+                CVAE_wide_network=CVAE_wide_network,
                 verbose=verbose_level,
             )
             last_ctx = ctx
@@ -1433,6 +1448,7 @@ def transfer(
     AE_head_num: int = 2,
     Gaussian_head_num: int = 9,
     random_seed: int = 123,
+    CVAE_wide_network: bool = False,
     output_dir: str | Path | None = None,
     verbose: int | str = "minimal",
 ) -> SyngResult:
@@ -1493,6 +1509,8 @@ def transfer(
         Fold multiplier for Gaussian-head augmentation.
     random_seed : int
         Random seed.
+    CVAE_wide_network : bool
+        Use wider encoder/decoder for CVAE — see :func:`generate`.
     output_dir : str, Path, or None
         If set, save results here.
     verbose : int or str
@@ -1539,6 +1557,7 @@ def transfer(
         off_aug=off_aug,
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
+        CVAE_wide_network=CVAE_wide_network,
         verbose=verbose_level,
     )
     source_model_state = source_trained.model_state
@@ -1565,6 +1584,7 @@ def transfer(
         off_aug=off_aug,
         AE_head_num=AE_head_num,
         Gaussian_head_num=Gaussian_head_num,
+        CVAE_wide_network=CVAE_wide_network,
         model_state=source_model_state,
         verbose=verbose_level,
     )

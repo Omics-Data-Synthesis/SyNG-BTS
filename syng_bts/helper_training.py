@@ -68,6 +68,7 @@ def _build_arch_params_ae(
     modelname: str,
     num_features: int,
     num_classes: int | None = None,
+    wide_network: bool = False,
 ) -> dict[str, Any]:
     """Build ``arch_params`` for AE / VAE / CVAE.
 
@@ -79,6 +80,8 @@ def _build_arch_params_ae(
         Number of input features.
     num_classes : int or None
         Number of classes (required for CVAE, ignored otherwise).
+    wide_network : bool
+        Use wider encoder/decoder for CVAE (ignored for AE/VAE).
 
     Returns
     -------
@@ -95,6 +98,7 @@ def _build_arch_params_ae(
         if num_classes is None:
             raise ValueError("num_classes is required for CVAE arch_params")
         params["num_classes"] = num_classes
+        params["wide_network"] = wide_network
     return params
 
 
@@ -332,6 +336,7 @@ def training_AEs(
     use_scheduler=False,
     step_size=10,
     gamma=0.5,
+    wide_network=False,
     verbose=VerbosityLevel.MINIMAL,
 ) -> TrainedModel:
     """Train an AE, VAE, or CVAE and return training artifacts only.
@@ -352,7 +357,7 @@ def training_AEs(
     data = TensorDataset(rawdata, rawlabels)
 
     if modelname == "CVAE":
-        model = CVAE(num_features, num_classes)
+        model = CVAE(num_features, num_classes, wide_network=wide_network)
     elif modelname == "VAE":
         model = VAE(num_features)
     elif modelname == "AE":
@@ -445,6 +450,7 @@ def training_AEs(
         modelname=modelname,
         num_features=num_features,
         num_classes=num_classes if modelname == "CVAE" else None,
+        wide_network=wide_network if modelname == "CVAE" else False,
     )
 
     return TrainedModel(

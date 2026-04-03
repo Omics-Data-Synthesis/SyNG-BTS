@@ -169,6 +169,78 @@ class TestCVAEForwardPass:
 
 
 # ===========================================================================
+# CVAE Wide Network
+# ===========================================================================
+class TestCVAEWideNetwork:
+    """Test CVAE wide_network architecture option."""
+
+    def test_standard_encoder_layer_count(self):
+        """wide_network=False → 3 hidden layers (256, 128, 64)."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=False)
+        # 3 hidden layers × 3 modules each (Linear + BN + ReLU) = 9
+        assert len(model.encoder) == 9
+
+    def test_wide_encoder_layer_count(self):
+        """wide_network=True → 4 hidden layers (512, 256, 128, 64)."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=True)
+        # 4 hidden layers × 3 modules each = 12
+        assert len(model.encoder) == 12
+
+    def test_standard_decoder_layer_count(self):
+        """wide_network=False → decoder has 3 hidden + 1 output + 1 ReLU = 11."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=False)
+        # 3 hidden × 3 (Linear+BN+ReLU) + Linear + ReLU = 11
+        assert len(model.decoder) == 11
+
+    def test_wide_decoder_layer_count(self):
+        """wide_network=True → decoder has 4 hidden + 1 output + 1 ReLU = 14."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=True)
+        # 4 hidden × 3 + Linear + ReLU = 14
+        assert len(model.decoder) == 14
+
+    def test_standard_encoder_first_linear_dim(self):
+        """wide_network=False → first Linear is (num_features+1, 256)."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=False)
+        first_linear = model.encoder[0]
+        assert first_linear.in_features == 51
+        assert first_linear.out_features == 256
+
+    def test_wide_encoder_first_linear_dim(self):
+        """wide_network=True → first Linear is (num_features+1, 512)."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=True)
+        first_linear = model.encoder[0]
+        assert first_linear.in_features == 51
+        assert first_linear.out_features == 512
+
+    def test_wide_network_forward_pass(self):
+        """Forward pass works with wide_network=True."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=True)
+        model.eval()
+        x = torch.randn(5, 50)
+        y = torch.randint(0, 2, (5, 1)).float()
+        with torch.no_grad():
+            encoded, z_mean, z_log_var, decoded = model(x, y, deterministic=True)
+        assert encoded.shape == (5, 32)
+        assert z_mean.shape == (5, 32)
+        assert z_log_var.shape == (5, 32)
+        assert decoded.shape == (5, 50)
+
+    def test_wide_network_attribute(self):
+        """wide_network attribute is stored on the model."""
+        model_std = CVAE(num_features=50, num_classes=2, wide_network=False)
+        model_wide = CVAE(num_features=50, num_classes=2, wide_network=True)
+        assert model_std.wide_network is False
+        assert model_wide.wide_network is True
+
+    def test_default_is_standard(self):
+        """Default (no wide_network arg) matches wide_network=False."""
+        model_default = CVAE(num_features=50, num_classes=2)
+        model_std = CVAE(num_features=50, num_classes=2, wide_network=False)
+        assert len(model_default.encoder) == len(model_std.encoder)
+        assert len(model_default.decoder) == len(model_std.decoder)
+
+
+# ===========================================================================
 # GAN
 # ===========================================================================
 class TestGANForwardPass:

@@ -74,7 +74,8 @@ def _rebuild_ae(
         model = VAE(num_features)
     elif modelname == "CVAE":
         num_classes = arch_params["num_classes"]
-        model = CVAE(num_features, num_classes)
+        wide_network = arch_params.get("wide_network", False)
+        model = CVAE(num_features, num_classes, wide_network=wide_network)
     else:
         raise ValueError(f"Unknown AE-family model: {modelname!r}")
 

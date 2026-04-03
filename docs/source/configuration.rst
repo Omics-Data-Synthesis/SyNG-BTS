@@ -171,6 +171,24 @@ Advanced Parameters (``generate`` only)
      - bool
      - Cap generated values to observed range (default: ``False``).
 
+Model Architecture Parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Parameter
+     - Type
+     - Description
+   * - ``CVAE_wide_network``
+     - bool
+     - Use a wider encoder/decoder for the CVAE model (default: ``False``).
+       When ``True``, the encoder uses layers 512 → 256 → 128 → 64
+       instead of the standard 256 → 128 → 64.  The decoder is symmetric.
+       Suitable for high-dimensional data such as RNA expression.
+       Ignored for non-CVAE models.
+
 ``generate()`` Parameters
 -------------------------
 

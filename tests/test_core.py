@@ -1867,3 +1867,56 @@ class TestGroupPropagation:
         assert result.original_groups is not None
         assert len(result.original_groups) == len(input_groups)
         assert result.original_groups.tolist() == input_groups.tolist()
+
+
+# =========================================================================
+# CVAE Wide Network Integration
+# =========================================================================
+class TestCVAEWideNetwork:
+    """Integration tests for the CVAE_wide_network parameter."""
+
+    def test_generate_cvae_wide_network(self, sample_data):
+        """generate() with CVAE_wide_network=True produces a valid result."""
+        groups = pd.Series([0] * 10 + [1] * 10)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=10,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            CVAE_wide_network=True,
+        )
+        assert isinstance(result, SyngResult)
+        assert result.generated_data.shape == (10, sample_data.shape[1])
+        assert result.metadata["arch_params"]["wide_network"] is True
+
+    def test_generate_cvae_standard_network_metadata(self, sample_data):
+        """generate() with CVAE_wide_network=False stores False in arch_params."""
+        groups = pd.Series([0] * 10 + [1] * 10)
+        result = generate(
+            data=sample_data,
+            model="CVAE1-10",
+            new_size=10,
+            groups=groups,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            CVAE_wide_network=False,
+        )
+        assert result.metadata["arch_params"]["wide_network"] is False
+
+    def test_generate_non_cvae_wide_network_ignored(self, sample_data):
+        """CVAE_wide_network is accepted but ignored for non-CVAE models."""
+        result = generate(
+            data=sample_data,
+            model="VAE1-10",
+            new_size=10,
+            epoch=FAST_EPOCHS,
+            batch_frac=BATCH_FRAC,
+            learning_rate=LR,
+            CVAE_wide_network=True,
+        )
+        assert isinstance(result, SyngResult)
+        assert "wide_network" not in result.metadata["arch_params"]

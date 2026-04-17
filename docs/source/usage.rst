@@ -17,12 +17,11 @@ Installation
 From PyPI (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-*TODO: Not implemented yet.* Will be available in the future.
 Install SyNG-BTS using pip:
 
 .. code-block:: console
 
-   $ pip install syng-bts  # TODO: Not implemented yet
+   $ pip install syng-bts
 
 From Source
 ~~~~~~~~~~~

@@ -1,7 +1,7 @@
 API Reference
 =============
 
-This page documents the complete public API of SyNG-BTS v3.1.
+This page documents the complete public API of SyNG-BTS.
 
 .. contents:: Table of Contents
    :local:
@@ -41,7 +41,7 @@ SyngResult
 
 .. autoclass:: syng_bts.SyngResult
    :members:
-   :exclude-members: __init__, generated_data, loss, reconstructed_data, original_data, model_state, metadata
+   :exclude-members: __init__, generated_data, loss, reconstructed_data, original_data, model_state, metadata, original_groups, generated_groups, reconstructed_groups
 
 PilotResult
 ~~~~~~~~~~~

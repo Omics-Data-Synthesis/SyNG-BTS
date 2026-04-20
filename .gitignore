@@ -8,6 +8,7 @@ ExtendData/
 Loss/
 TestOutput/
 runs/
+full_data/
 
 # Generated output files (can appear anywhere)
 *.csvplot

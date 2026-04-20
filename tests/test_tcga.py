@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import urllib.error
 from pathlib import Path
 
@@ -316,3 +317,93 @@ class TestFixtureBuilder:
         import os
 
         assert os.environ["SYNG_BTS_CACHE_DIR"] == str(cache_root)
+
+
+class TestFetchManifest:
+    def test_default_url_first_call_downloads_and_caches(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        # Arrange: fixture file + manifest, served via the network stub
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        # Act
+        result = tcga._fetch_manifest(None)
+
+        # Assert
+        assert result == manifest
+        assert network_stub.calls == [FIXTURE_MANIFEST_URL]
+        cached_path = cache_root / "tcga" / "1.0" / "manifest.json"
+        assert cached_path.exists()
+        assert json.loads(cached_path.read_text()) == manifest
+
+        index_path = cache_root / "tcga" / ".url_index.json"
+        assert index_path.exists()
+        assert json.loads(index_path.read_text()) == {FIXTURE_MANIFEST_URL: "1.0"}
+
+    def test_default_url_second_call_uses_cache(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        tcga._fetch_manifest(None)
+        n_first = len(network_stub.calls)
+
+        result = tcga._fetch_manifest(None)
+        n_second = len(network_stub.calls)
+
+        assert result == manifest
+        assert n_first == 1
+        assert n_second == 1  # no extra network call
+
+    def test_override_url_always_fresh(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        override_url = "https://override.test/data-v1.0/manifest.json"
+        network_stub.serve(override_url, json.dumps(manifest).encode())
+
+        # Default URL is unset (placeholder) — irrelevant when override is passed.
+        tcga._fetch_manifest(override_url)
+        tcga._fetch_manifest(override_url)
+
+        assert network_stub.calls == [override_url, override_url]
+        # Override does NOT write to cache.
+        assert not (cache_root / "tcga" / "1.0" / "manifest.json").exists()
+        assert not (cache_root / "tcga" / ".url_index.json").exists()
+
+    def test_malformed_json_raises_value_error(
+        self, monkeypatch, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        network_stub.serve(FIXTURE_MANIFEST_URL, b"not json {{{")
+
+        with pytest.raises(ValueError, match="manifest"):
+            tcga._fetch_manifest(None)
+
+    def test_network_failure_raises_network_error(self, monkeypatch, cache_root):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        # No `network_stub` fixture in this test, so urlopen will hit the real
+        # network; instead, install a stub that always fails.
+
+        def always_fail(url, timeout=None):  # noqa: ARG001
+            raise urllib.error.URLError("simulated")
+
+        monkeypatch.setattr("urllib.request.urlopen", always_fail)
+
+        with pytest.raises(tcga._NetworkError, match="Failed to download"):
+            tcga._fetch_manifest(None)

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
+import urllib.error
 from pathlib import Path
 
-import pytest  # noqa: F401  # used in later tasks (marks)
+import h5py
+import numpy as np
+import pytest
 
 from syng_bts import tcga
 from syng_bts.tcga import tcga_cache_dir
@@ -30,3 +35,284 @@ class TestTcgaCacheDir:
 class TestNetworkErrorClass:
     def test_is_oserror_subclass(self):
         assert issubclass(tcga._NetworkError, OSError)
+
+
+# ---------------------------------------------------------------------------
+# Helpers: build a tiny but schema-valid HDF5 file and matching manifest entry
+# ---------------------------------------------------------------------------
+
+
+def _sha256_of_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_of_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def make_test_h5(
+    path: Path,
+    *,
+    dataset_name: str,
+    n_raw_samples: int = 5,
+    n_filtered_samples: int = 4,
+    n_raw_features: int = 10,
+    n_filtered_features: int = 6,
+    n_synthetic: int = 8,
+    group_labels: tuple[str, ...] = ("A", "B"),
+    rng_seed: int = 0,
+) -> dict:
+    """Create a tiny but schema-valid v1.0 HDF5 file at ``path``.
+
+    Returns a manifest-entry-shaped dict (``dataset_name``, ``cancer_type``,
+    ``clinical_variable``, ``group_labels``, ``n_raw_samples``,
+    ``n_filtered_samples``, ``n_raw_features``, ``n_filtered_features``,
+    ``file``, ``file_size_bytes``, ``sha256``). Tests can pass these dicts
+    directly to ``make_test_manifest``.
+    """
+    rng = np.random.default_rng(rng_seed)
+    cancer_type, clinical_variable = dataset_name.split("_", 1)
+
+    raw_features = [f"hsa-feat-{i}" for i in range(n_raw_features)]
+    proc_features = raw_features[:n_filtered_features]
+
+    def _alternating_groups(n: int) -> list[str]:
+        return [group_labels[i % len(group_labels)] for i in range(n)]
+
+    raw_expr = rng.random((n_raw_samples, n_raw_features))
+    raw_groups = _alternating_groups(n_raw_samples)
+    sample_ids = [f"S{i}" for i in range(n_raw_samples)]
+
+    proc_data = {
+        norm: {
+            "expression": rng.random((n_filtered_samples, n_filtered_features)),
+            "groups": _alternating_groups(n_filtered_samples),
+            "feature_names": list(proc_features),
+        }
+        for norm in ("raw_norm", "TC", "DESeq")
+    }
+
+    synth_data = {}
+    for norm in ("raw_norm", "TC", "DESeq"):
+        synth_data[norm] = {}
+        for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+            synth_data[norm][model] = {
+                "expression": rng.random((n_synthetic, n_filtered_features)),
+                "groups": _alternating_groups(n_synthetic),
+            }
+
+    norm_attrs = {
+        "raw_norm": {
+            "normalization_method": "log2_filtered",
+            "transform": "log2(x+1)",
+        },
+        "TC": {
+            "normalization_method": "TC_CPM",
+            "transform": "log2(x+1)",
+        },
+        "DESeq": {
+            "normalization_method": "DESeq_median_of_ratios",
+            "transform": "log2(x+1)",
+        },
+    }
+    model_kl = {"CVAE1_5": 5, "CVAE1_10": 10, "CVAE1_20": 20}
+
+    with h5py.File(path, "w") as f:
+        f.attrs["dataset_name"] = dataset_name
+        f.attrs["cancer_type"] = cancer_type
+        f.attrs["clinical_variable"] = clinical_variable
+        f.attrs["group_labels"] = list(group_labels)
+        f.attrs["version"] = "1.0"
+        f.attrs["creation_date"] = "2026-04-30T00:00:00+00:00"
+        f.attrs["syng_bts_version"] = "3.3.2"
+        f.attrs["n_raw_samples"] = n_raw_samples
+        f.attrs["n_filtered_samples"] = n_filtered_samples
+        f.attrs["n_raw_features"] = n_raw_features
+        f.attrs["n_filtered_features"] = n_filtered_features
+
+        raw = f.create_group("raw")
+        raw.create_dataset("expression", data=raw_expr, dtype=np.float64)
+        raw.create_dataset("groups", data=raw_groups, dtype=h5py.string_dtype())
+        raw.create_dataset("sample_ids", data=sample_ids, dtype=h5py.string_dtype())
+        raw.create_dataset(
+            "feature_names", data=raw_features, dtype=h5py.string_dtype()
+        )
+
+        proc = f.create_group("processed")
+        for norm in ("raw_norm", "TC", "DESeq"):
+            ng = proc.create_group(norm)
+            for k, v in norm_attrs[norm].items():
+                ng.attrs[k] = v
+            d = proc_data[norm]
+            ng.create_dataset("expression", data=d["expression"], dtype=np.float64)
+            ng.create_dataset(
+                "groups", data=d["groups"], dtype=h5py.string_dtype()
+            )
+            ng.create_dataset(
+                "feature_names",
+                data=d["feature_names"],
+                dtype=h5py.string_dtype(),
+            )
+
+        synth = f.create_group("synthetic")
+        synth.attrs["epoch"] = 3000
+        synth.attrs["early_stop_patience"] = 20
+        synth.attrs["batch_frac"] = 0.1
+        synth.attrs["learning_rate"] = 0.0005
+        synth.attrs["random_seed"] = 42
+        synth.attrs["new_size"] = n_synthetic
+        synth.attrs["apply_log"] = False
+        for norm in ("raw_norm", "TC", "DESeq"):
+            ng = synth.create_group(norm)
+            ng.create_dataset(
+                "feature_names",
+                data=proc_features,
+                dtype=h5py.string_dtype(),
+            )
+            for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+                mg = ng.create_group(model)
+                mg.attrs["kl_weight"] = model_kl[model]
+                mg.attrs["reconstruction_term_weight"] = 1
+                mg.attrs["epochs_trained"] = 100
+                mg.attrs["normalization"] = norm
+                d = synth_data[norm][model]
+                mg.create_dataset(
+                    "expression", data=d["expression"], dtype=np.float64
+                )
+                mg.create_dataset(
+                    "groups", data=d["groups"], dtype=h5py.string_dtype()
+                )
+
+    return {
+        "dataset_name": dataset_name,
+        "cancer_type": cancer_type,
+        "clinical_variable": clinical_variable,
+        "group_labels": list(group_labels),
+        "n_raw_samples": n_raw_samples,
+        "n_filtered_samples": n_filtered_samples,
+        "n_raw_features": n_raw_features,
+        "n_filtered_features": n_filtered_features,
+        "file": path.name,
+        "file_size_bytes": path.stat().st_size,
+        "sha256": _sha256_of_file(path),
+    }
+
+
+def make_test_manifest(*entries: dict, version: str = "1.0") -> dict:
+    """Wrap a sequence of entry dicts into a manifest-shaped dict."""
+    return {
+        "version": version,
+        "created": "2026-04-30T00:00:00+00:00",
+        "syng_bts_version": "3.3.2",
+        "datasets": list(entries),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pytest fixtures
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """Minimal response object compatible with `urllib.request.urlopen`."""
+
+    def __init__(self, data: bytes):
+        self._buf = io.BytesIO(data)
+        self.headers = {"Content-Length": str(len(data))}
+
+    def read(self, n: int = -1) -> bytes:
+        return self._buf.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._buf.close()
+        return False
+
+
+class NetworkStub:
+    """Container for served bytes and a log of fetched URLs."""
+
+    def __init__(self):
+        self.served: dict[str, bytes] = {}
+        self.calls: list[str] = []
+
+    def serve(self, url: str, content: bytes) -> None:
+        self.served[url] = content
+
+
+@pytest.fixture
+def network_stub(monkeypatch) -> NetworkStub:
+    """Replace `urllib.request.urlopen` with a stub that serves from a dict."""
+    stub = NetworkStub()
+
+    def fake_urlopen(url, timeout=None):  # noqa: ARG001
+        url_str = url if isinstance(url, str) else url.full_url
+        stub.calls.append(url_str)
+        if url_str not in stub.served:
+            raise urllib.error.URLError(f"Stub: no fixture for {url_str}")
+        return _FakeResponse(stub.served[url_str])
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    return stub
+
+
+@pytest.fixture
+def cache_root(monkeypatch, tmp_path) -> Path:
+    """Point ``SYNG_BTS_CACHE_DIR`` at ``tmp_path`` for the test."""
+    monkeypatch.setenv("SYNG_BTS_CACHE_DIR", str(tmp_path))
+    return tmp_path
+
+
+# A canonical fixture URL used across tests.
+FIXTURE_BASE_URL = "https://fixture.test/data-v1.0"
+FIXTURE_MANIFEST_URL = f"{FIXTURE_BASE_URL}/manifest.json"
+
+
+def _dataset_url(file: str) -> str:
+    return f"{FIXTURE_BASE_URL}/{file}"
+
+
+class TestFixtureBuilder:
+    def test_make_test_h5_creates_readable_file(self, tmp_path):
+        path = tmp_path / "BRCA_carcinoma.h5"
+        entry = make_test_h5(path, dataset_name="BRCA_carcinoma")
+
+        assert path.exists()
+        assert entry["dataset_name"] == "BRCA_carcinoma"
+        assert entry["cancer_type"] == "BRCA"
+        assert entry["clinical_variable"] == "carcinoma"
+        assert entry["file"] == "BRCA_carcinoma.h5"
+        assert entry["file_size_bytes"] > 0
+        assert len(entry["sha256"]) == 64
+
+        with h5py.File(path, "r") as f:
+            assert f.attrs["dataset_name"] == "BRCA_carcinoma"
+            assert f.attrs["version"] == "1.0"
+            assert f["raw/expression"].shape == (5, 10)
+            assert f["processed/TC/expression"].shape == (4, 6)
+            assert f["synthetic/TC/CVAE1_5/expression"].shape == (8, 6)
+
+    def test_network_stub_serves_bytes(self, network_stub):
+        import urllib.request
+
+        network_stub.serve("http://example.com/foo", b"hello")
+        with urllib.request.urlopen("http://example.com/foo") as resp:
+            assert resp.read() == b"hello"
+        assert network_stub.calls == ["http://example.com/foo"]
+
+    def test_network_stub_unregistered_url_raises(self, network_stub):
+        import urllib.request
+
+        with pytest.raises(urllib.error.URLError):
+            urllib.request.urlopen("http://nope.test/missing")
+
+    def test_cache_root_sets_env(self, cache_root, monkeypatch):
+        import os
+
+        assert os.environ["SYNG_BTS_CACHE_DIR"] == str(cache_root)

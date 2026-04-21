@@ -180,3 +180,36 @@ def _fetch_manifest(manifest_url: str | None) -> dict:
     _write_url_index(index)
 
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# Name resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_name(name: str, manifest: dict) -> str:
+    """Resolve a user-supplied name to a full dataset name.
+
+    Resolution order:
+      1. Exact full-name match.
+      2. Cancer-type prefix matching exactly one dataset.
+      3. Multiple matches → ValueError listing matches.
+      4. No match → ValueError listing all available datasets.
+    """
+    full_names = [d["dataset_name"] for d in manifest["datasets"]]
+
+    if name in full_names:
+        return name
+
+    matches = [n for n in full_names if n.split("_", 1)[0] == name]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous name '{name}'. Matches: {matches}. "
+            f"Pass the full name to disambiguate."
+        )
+
+    raise ValueError(
+        f"Unknown TCGA dataset '{name}'. Available: {sorted(full_names)}"
+    )

@@ -407,3 +407,57 @@ class TestFetchManifest:
 
         with pytest.raises(tcga._NetworkError, match="Failed to download"):
             tcga._fetch_manifest(None)
+
+
+class TestResolveName:
+    @pytest.fixture
+    def manifest_with_three_entries(self):
+        """Manifest with one unique cancer-type and two BRCA entries."""
+        return {
+            "version": "1.0",
+            "datasets": [
+                {"dataset_name": "UCS_primary_pathology_total_pelv_lnr"},
+                {"dataset_name": "BRCA_breast_carcinoma_estrogen_receptor_status"},
+                {"dataset_name": "BRCA_other_subtype"},
+            ],
+        }
+
+    @pytest.fixture
+    def manifest_unique(self):
+        return {
+            "version": "1.0",
+            "datasets": [
+                {"dataset_name": "UCS_primary_pathology_total_pelv_lnr"},
+                {"dataset_name": "BRCA_breast_carcinoma_estrogen_receptor_status"},
+                {"dataset_name": "LIHC_platelet_norm_range_lower"},
+            ],
+        }
+
+    def test_full_name_match(self, manifest_unique):
+        assert (
+            tcga._resolve_name(
+                "UCS_primary_pathology_total_pelv_lnr", manifest_unique
+            )
+            == "UCS_primary_pathology_total_pelv_lnr"
+        )
+
+    def test_short_alias_unique(self, manifest_unique):
+        assert (
+            tcga._resolve_name("BRCA", manifest_unique)
+            == "BRCA_breast_carcinoma_estrogen_receptor_status"
+        )
+
+    def test_short_alias_ambiguous(self, manifest_with_three_entries):
+        with pytest.raises(ValueError, match="Ambiguous"):
+            tcga._resolve_name("BRCA", manifest_with_three_entries)
+
+    def test_unknown_name(self, manifest_unique):
+        with pytest.raises(ValueError, match="Unknown TCGA dataset"):
+            tcga._resolve_name("FAKE", manifest_unique)
+
+    def test_unknown_lists_available(self, manifest_unique):
+        with pytest.raises(ValueError) as exc_info:
+            tcga._resolve_name("FAKE", manifest_unique)
+        msg = str(exc_info.value)
+        assert "UCS_primary_pathology_total_pelv_lnr" in msg
+        assert "BRCA_breast_carcinoma_estrogen_receptor_status" in msg

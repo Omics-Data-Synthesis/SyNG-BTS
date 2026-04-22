@@ -213,3 +213,37 @@ def _resolve_name(name: str, manifest: dict) -> str:
     raise ValueError(
         f"Unknown TCGA dataset '{name}'. Available: {sorted(full_names)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Public function: list_tcga_datasets
+# ---------------------------------------------------------------------------
+
+
+def list_tcga_datasets(
+    *,
+    short: bool = False,
+    manifest_url: str | None = None,
+) -> list[str]:
+    """List the names of all TCGA datasets available in the manifest.
+
+    Parameters
+    ----------
+    short : bool, default False
+        If False, returns full project names. If True, returns cancer-type
+        aliases (e.g. "BRCA").
+    manifest_url : str or None
+        Override the default manifest URL. Useful for tests, forks, or
+        pre-staged air-gapped environments.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of dataset names (deduplicated when ``short=True``).
+    """
+    manifest = _fetch_manifest(manifest_url)
+    full_names = [d["dataset_name"] for d in manifest["datasets"]]
+    if short:
+        aliases = sorted({n.split("_", 1)[0] for n in full_names})
+        return aliases
+    return sorted(full_names)

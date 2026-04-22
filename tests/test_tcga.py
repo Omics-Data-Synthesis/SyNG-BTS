@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from syng_bts import tcga
-from syng_bts.tcga import tcga_cache_dir
+from syng_bts.tcga import list_tcga_datasets, tcga_cache_dir
 
 
 class TestTcgaCacheDir:
@@ -461,3 +461,63 @@ class TestResolveName:
         msg = str(exc_info.value)
         assert "UCS_primary_pathology_total_pelv_lnr" in msg
         assert "BRCA_breast_carcinoma_estrogen_receptor_status" in msg
+
+
+class TestListTcgaDatasets:
+    def _three_dataset_manifest(self, tmp_path):
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+        entries = [
+            make_test_h5(
+                h5_dir / "UCS_primary_pathology.h5",
+                dataset_name="UCS_primary_pathology",
+            ),
+            make_test_h5(
+                h5_dir / "BRCA_carcinoma.h5",
+                dataset_name="BRCA_carcinoma",
+            ),
+            make_test_h5(
+                h5_dir / "LIHC_platelet.h5",
+                dataset_name="LIHC_platelet",
+            ),
+        ]
+        return make_test_manifest(*entries)
+
+    def test_default_returns_full_names_sorted(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        manifest = self._three_dataset_manifest(tmp_path)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        result = list_tcga_datasets()
+
+        assert result == [
+            "BRCA_carcinoma",
+            "LIHC_platelet",
+            "UCS_primary_pathology",
+        ]
+
+    def test_short_returns_aliases_sorted_unique(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        manifest = self._three_dataset_manifest(tmp_path)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        result = list_tcga_datasets(short=True)
+
+        assert result == ["BRCA", "LIHC", "UCS"]
+
+    def test_manifest_url_override(self, network_stub, cache_root, tmp_path):
+        manifest = self._three_dataset_manifest(tmp_path)
+        url = "https://override.test/manifest.json"
+        network_stub.serve(url, json.dumps(manifest).encode())
+
+        result = list_tcga_datasets(manifest_url=url)
+
+        assert result == [
+            "BRCA_carcinoma",
+            "LIHC_platelet",
+            "UCS_primary_pathology",
+        ]

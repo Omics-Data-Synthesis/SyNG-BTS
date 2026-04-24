@@ -521,3 +521,89 @@ class TestListTcgaDatasets:
             "LIHC_platelet",
             "UCS_primary_pathology",
         ]
+
+
+class TestFetchAndVerifyH5:
+    def test_successful_download(
+        self, network_stub, cache_root, tmp_path
+    ):
+        # Build a fixture HDF5, capture its bytes and sha256
+        src = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        src.parent.mkdir()
+        entry = make_test_h5(src, dataset_name="BRCA_carcinoma")
+        h5_bytes = src.read_bytes()
+        url = _dataset_url(entry["file"])
+        network_stub.serve(url, h5_bytes)
+
+        dest = tmp_path / "out" / "BRCA_carcinoma.h5"
+        dest.parent.mkdir()
+
+        tcga._fetch_and_verify_h5(url, dest, entry["sha256"])
+
+        assert dest.exists()
+        assert dest.read_bytes() == h5_bytes
+        # No leftover .tmp
+        assert not dest.with_suffix(dest.suffix + ".tmp").exists()
+        assert network_stub.calls == [url]
+
+    def test_sha256_mismatch_then_success_retry(
+        self, network_stub, cache_root, tmp_path, monkeypatch
+    ):
+        # First response: corrupt; second response: correct.
+        src = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        src.parent.mkdir()
+        entry = make_test_h5(src, dataset_name="BRCA_carcinoma")
+        good_bytes = src.read_bytes()
+        bad_bytes = good_bytes[:-1] + b"\xff"  # one-byte corruption
+
+        url = _dataset_url(entry["file"])
+        responses = iter([bad_bytes, good_bytes])
+
+        def fake_urlopen(u, timeout=None):  # noqa: ARG001
+            assert u == url
+            return _FakeResponse(next(responses))
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        dest = tmp_path / "out" / "BRCA_carcinoma.h5"
+        dest.parent.mkdir()
+
+        tcga._fetch_and_verify_h5(url, dest, entry["sha256"])
+
+        assert dest.exists()
+        assert dest.read_bytes() == good_bytes
+
+    def test_sha256_mismatch_twice_raises(
+        self, network_stub, cache_root, tmp_path
+    ):
+        src = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        src.parent.mkdir()
+        entry = make_test_h5(src, dataset_name="BRCA_carcinoma")
+        good_bytes = src.read_bytes()
+        bad_bytes = good_bytes[:-1] + b"\xff"
+
+        url = _dataset_url(entry["file"])
+        network_stub.serve(url, bad_bytes)
+
+        dest = tmp_path / "out" / "BRCA_carcinoma.h5"
+        dest.parent.mkdir()
+
+        with pytest.raises(ValueError, match="Checksum mismatch"):
+            tcga._fetch_and_verify_h5(url, dest, entry["sha256"])
+
+        # Both .h5 and .tmp should be cleaned up
+        assert not dest.exists()
+        assert not dest.with_suffix(dest.suffix + ".tmp").exists()
+
+    def test_network_error_wrapped(self, monkeypatch, cache_root, tmp_path):
+        url = _dataset_url("BRCA.h5")
+        dest = tmp_path / "out" / "BRCA.h5"
+        dest.parent.mkdir()
+
+        def always_fail(u, timeout=None):  # noqa: ARG001
+            raise urllib.error.URLError("simulated")
+
+        monkeypatch.setattr("urllib.request.urlopen", always_fail)
+
+        with pytest.raises(tcga._NetworkError, match="Failed to download"):
+            tcga._fetch_and_verify_h5(url, dest, "deadbeef" * 8)

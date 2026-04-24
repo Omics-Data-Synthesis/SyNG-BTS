@@ -17,10 +17,10 @@ variable).
 
 from __future__ import annotations
 
-import hashlib  # noqa: F401  # used in later tasks
+import hashlib
 import json
 import os
-import sys  # noqa: F401  # used in later tasks
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass  # noqa: F401  # used in later tasks
@@ -32,10 +32,11 @@ import numpy as np  # noqa: F401  # used in later tasks
 import pandas as pd  # noqa: F401  # used in later tasks
 
 try:
-    from tqdm import tqdm as _tqdm  # noqa: F401  # used in later tasks
+    from tqdm import tqdm as _tqdm
 
     _HAS_TQDM = True
 except ImportError:
+    _tqdm = None  # type: ignore[assignment]
     _HAS_TQDM = False
 
 # ---------------------------------------------------------------------------
@@ -247,3 +248,100 @@ def list_tcga_datasets(
         aliases = sorted({n.split("_", 1)[0] for n in full_names})
         return aliases
     return sorted(full_names)
+
+
+# ---------------------------------------------------------------------------
+# HDF5 download + sha256 verification
+# ---------------------------------------------------------------------------
+
+
+def _sha256_of_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _stream_download(url: str, dest: Path) -> None:
+    """Download ``url`` to ``dest`` via ``dest.tmp`` then atomic rename.
+
+    Streams in 1 MiB chunks so memory use stays flat regardless of file size.
+    Uses tqdm if available; otherwise prints a single info line to stderr.
+    Wraps URL errors as ``_NetworkError``. Cleans up the ``.tmp`` on any
+    exception.
+    """
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with urllib.request.urlopen(url, timeout=_NETWORK_TIMEOUT_SECS) as resp:
+            total = int(resp.headers.get("Content-Length", "0") or 0)
+            pbar = None
+            if _HAS_TQDM and total > 0:
+                pbar = _tqdm(
+                    total=total,
+                    unit="B",
+                    unit_scale=True,
+                    desc=dest.name,
+                    leave=False,
+                )
+            else:
+                size_str = (
+                    f"{total / 1e6:.1f} MB" if total > 0 else "size unknown"
+                )
+                print(
+                    f"Downloading {dest.name} ({size_str})…",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+            try:
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        if pbar is not None:
+                            pbar.update(len(chunk))
+            finally:
+                if pbar is not None:
+                    pbar.close()
+
+        tmp.replace(dest)
+    except urllib.error.URLError as e:
+        tmp.unlink(missing_ok=True)
+        raise _NetworkError(
+            f"Failed to download {url}: "
+            f"{e.reason if hasattr(e, 'reason') else e}.\n"
+            f"Check your network connection, or pre-stage the file at "
+            f"{dest} and set {_CACHE_ENV_VAR} if needed."
+        ) from e
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _fetch_and_verify_h5(
+    url: str, dest: Path, expected_sha256: str
+) -> None:
+    """Download to ``dest``, verify sha256, retry once on mismatch.
+
+    On second mismatch, removes ``dest`` and raises ``ValueError``.
+    """
+    last_actual = None
+    for _ in range(2):
+        _stream_download(url, dest)
+        actual = _sha256_of_file(dest)
+        if actual == expected_sha256:
+            return
+        last_actual = actual
+        dest.unlink(missing_ok=True)
+
+    raise ValueError(
+        f"Checksum mismatch for {dest.name} after retry. "
+        f"Expected sha256={expected_sha256}, got {last_actual}. "
+        f"The cache and the published release may be out of sync — "
+        f"please file an issue at "
+        f"https://github.com/Omics-Data-Synthesis/SyNG-BTS/issues."
+    )

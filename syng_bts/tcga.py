@@ -23,13 +23,13 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass  # noqa: F401  # used in later tasks
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any  # noqa: F401  # used in later tasks
+from typing import Any
 
-import h5py  # noqa: F401  # used in later tasks
-import numpy as np  # noqa: F401  # used in later tasks
-import pandas as pd  # noqa: F401  # used in later tasks
+import h5py
+import numpy as np
+import pandas as pd
 
 try:
     from tqdm import tqdm as _tqdm
@@ -344,4 +344,192 @@ def _fetch_and_verify_h5(
         f"The cache and the published release may be out of sync — "
         f"please file an issue at "
         f"https://github.com/Omics-Data-Synthesis/SyNG-BTS/issues."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data containers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Subset:
+    """One slice of a TCGA dataset (raw, processed/X, or synthetic/X/Y).
+
+    Attributes
+    ----------
+    expression : pd.DataFrame
+        Expression matrix. Index is sample IDs (raw) or RangeIndex
+        (processed, synthetic). Columns are feature names.
+    groups : pd.Series
+        Group labels indexed identically to ``expression``.
+    metadata : dict[str, Any]
+        Per-slice attributes (normalization_method, transform, kl_weight,
+        epochs_trained, etc.).
+    """
+
+    expression: pd.DataFrame
+    groups: pd.Series
+    metadata: dict[str, Any]
+
+
+class TCGADataset:
+    """Eagerly-loaded view of one TCGA dataset bundle.
+
+    Built once inside ``load_tcga_dataset`` from the corresponding HDF5 file.
+    All 13 ``Subset`` views (raw + 3 processed + 9 synthetic) are constructed
+    before the file handle closes.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        cancer_type: str,
+        clinical_variable: str,
+        group_labels: list[str],
+        n_raw_samples: int,
+        n_filtered_samples: int,
+        n_raw_features: int,
+        n_filtered_features: int,
+        schema_version: str,
+        creation_date: str,
+        syng_bts_version: str,
+        raw: Subset,
+        processed: dict[str, Subset],
+        synthetic: dict[str, dict[str, Subset]],
+    ) -> None:
+        self.name = name
+        self.cancer_type = cancer_type
+        self.clinical_variable = clinical_variable
+        self.group_labels = group_labels
+        self.n_raw_samples = n_raw_samples
+        self.n_filtered_samples = n_filtered_samples
+        self.n_raw_features = n_raw_features
+        self.n_filtered_features = n_filtered_features
+        self.schema_version = schema_version
+        self.creation_date = creation_date
+        self.syng_bts_version = syng_bts_version
+        self.raw = raw
+        self.processed = processed
+        self.synthetic = synthetic
+
+
+# ---------------------------------------------------------------------------
+# HDF5 → DataFrame construction
+# ---------------------------------------------------------------------------
+
+
+def _decode(value: Any) -> Any:
+    """Decode bytes / numpy scalars / numpy arrays into pure-Python values."""
+    if isinstance(value, bytes):
+        return value.decode()
+    if isinstance(value, np.ndarray):
+        return [
+            v.decode() if isinstance(v, bytes) else v.item()
+            if hasattr(v, "item")
+            else v
+            for v in value
+        ]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _read_strings(dataset: h5py.Dataset) -> list[str]:
+    raw = dataset[:]
+    return [x.decode() if isinstance(x, bytes) else str(x) for x in raw]
+
+
+def _read_attrs(group: h5py.Group) -> dict[str, Any]:
+    return {k: _decode(v) for k, v in group.attrs.items()}
+
+
+def _build_subset_from_group(
+    group: h5py.Group,
+    *,
+    feature_names: list[str] | None = None,
+    sample_ids: list[str] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> Subset:
+    """Construct a Subset from an HDF5 group containing expression + groups.
+
+    ``feature_names`` is read from the group if not supplied (raw/processed
+    case); pass it explicitly for synthetic groups, where feature_names lives
+    one level up.
+    """
+    expr_arr = group["expression"][:]
+    groups = _read_strings(group["groups"])
+
+    if feature_names is None:
+        feature_names = _read_strings(group["feature_names"])
+
+    if sample_ids is not None:
+        index = pd.Index(sample_ids, name="sample_id")
+    else:
+        index = pd.RangeIndex(len(groups))
+
+    expression = pd.DataFrame(expr_arr, columns=feature_names, index=index)
+    groups_series = pd.Series(groups, index=index, name="groups")
+
+    metadata = _read_attrs(group)
+    if extra_metadata:
+        # Group-specific attrs win over inherited shared attrs.
+        merged = {**extra_metadata, **metadata}
+        metadata = merged
+
+    return Subset(
+        expression=expression, groups=groups_series, metadata=metadata
+    )
+
+
+def _build_dataset_from_h5(path: Path) -> TCGADataset:
+    """Read an entire v1.0 TCGA HDF5 file and return a TCGADataset."""
+    with h5py.File(path, "r") as f:
+        attrs = {k: _decode(v) for k, v in f.attrs.items()}
+
+        # Raw subset (with sample_ids)
+        raw_grp = f["raw"]
+        raw_sample_ids = (
+            _read_strings(raw_grp["sample_ids"])
+            if "sample_ids" in raw_grp
+            else None
+        )
+        raw = _build_subset_from_group(raw_grp, sample_ids=raw_sample_ids)
+
+        # Processed subsets (RangeIndex)
+        processed: dict[str, Subset] = {}
+        for norm in VALID_NORMALIZATIONS:
+            processed[norm] = _build_subset_from_group(f[f"processed/{norm}"])
+
+        # Synthetic subsets — feature_names lives at /synthetic/{norm}/
+        synth_root = f["synthetic"]
+        shared_attrs = _read_attrs(synth_root)
+        synthetic: dict[str, dict[str, Subset]] = {}
+        for norm in VALID_NORMALIZATIONS:
+            norm_grp = synth_root[norm]
+            features = _read_strings(norm_grp["feature_names"])
+            synthetic[norm] = {}
+            for model in VALID_MODELS:
+                synthetic[norm][model] = _build_subset_from_group(
+                    norm_grp[model],
+                    feature_names=features,
+                    extra_metadata=shared_attrs,
+                )
+
+    return TCGADataset(
+        name=str(attrs["dataset_name"]),
+        cancer_type=str(attrs["cancer_type"]),
+        clinical_variable=str(attrs["clinical_variable"]),
+        group_labels=[str(x) for x in attrs.get("group_labels", [])],
+        n_raw_samples=int(attrs["n_raw_samples"]),
+        n_filtered_samples=int(attrs["n_filtered_samples"]),
+        n_raw_features=int(attrs["n_raw_features"]),
+        n_filtered_features=int(attrs["n_filtered_features"]),
+        schema_version=str(attrs["version"]),
+        creation_date=str(attrs["creation_date"]),
+        syng_bts_version=str(attrs["syng_bts_version"]),
+        raw=raw,
+        processed=processed,
+        synthetic=synthetic,
     )

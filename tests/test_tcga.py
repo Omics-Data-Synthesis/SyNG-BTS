@@ -10,6 +10,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 from syng_bts import tcga
@@ -607,3 +608,109 @@ class TestFetchAndVerifyH5:
 
         with pytest.raises(tcga._NetworkError, match="Failed to download"):
             tcga._fetch_and_verify_h5(url, dest, "deadbeef" * 8)
+
+
+class TestBuildDatasetFromHdf5:
+    @pytest.fixture
+    def h5_file(self, tmp_path):
+        path = tmp_path / "BRCA_carcinoma.h5"
+        make_test_h5(
+            path,
+            dataset_name="BRCA_carcinoma",
+            n_raw_samples=5,
+            n_filtered_samples=4,
+            n_raw_features=10,
+            n_filtered_features=6,
+            n_synthetic=8,
+        )
+        return path
+
+    def test_returns_tcga_dataset(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert isinstance(ds, tcga.TCGADataset)
+
+    def test_root_attributes_populated(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert ds.name == "BRCA_carcinoma"
+        assert ds.cancer_type == "BRCA"
+        assert ds.clinical_variable == "carcinoma"
+        assert ds.group_labels == ["A", "B"]
+        assert ds.n_raw_samples == 5
+        assert ds.n_filtered_samples == 4
+        assert ds.n_raw_features == 10
+        assert ds.n_filtered_features == 6
+        assert ds.schema_version == "1.0"
+        assert ds.creation_date == "2026-04-30T00:00:00+00:00"
+        assert ds.syng_bts_version == "3.3.2"
+
+    def test_raw_subset_shape_and_index(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert isinstance(ds.raw, tcga.Subset)
+        assert ds.raw.expression.shape == (5, 10)
+        assert list(ds.raw.expression.columns) == [
+            f"hsa-feat-{i}" for i in range(10)
+        ]
+        assert list(ds.raw.expression.index) == [f"S{i}" for i in range(5)]
+        assert list(ds.raw.groups.index) == [f"S{i}" for i in range(5)]
+        assert ds.raw.groups.tolist() == ["A", "B", "A", "B", "A"]
+
+    def test_processed_subset_shape_and_rangeindex(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert set(ds.processed.keys()) == {"raw_norm", "TC", "DESeq"}
+        for norm in ("raw_norm", "TC", "DESeq"):
+            sub = ds.processed[norm]
+            assert isinstance(sub, tcga.Subset)
+            assert sub.expression.shape == (4, 6)
+            assert isinstance(sub.expression.index, pd.RangeIndex)
+            assert list(sub.expression.index) == list(range(4))
+            assert list(sub.groups.index) == list(range(4))
+
+    def test_processed_metadata(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert ds.processed["TC"].metadata["normalization_method"] == "TC_CPM"
+        assert ds.processed["TC"].metadata["transform"] == "log2(x+1)"
+        assert (
+            ds.processed["DESeq"].metadata["normalization_method"]
+            == "DESeq_median_of_ratios"
+        )
+
+    def test_synthetic_subset_shape_and_metadata(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        assert set(ds.synthetic.keys()) == {"raw_norm", "TC", "DESeq"}
+        for norm in ("raw_norm", "TC", "DESeq"):
+            assert set(ds.synthetic[norm].keys()) == {
+                "CVAE1_5",
+                "CVAE1_10",
+                "CVAE1_20",
+            }
+            for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+                sub = ds.synthetic[norm][model]
+                assert isinstance(sub, tcga.Subset)
+                assert sub.expression.shape == (8, 6)
+                assert isinstance(sub.expression.index, pd.RangeIndex)
+                assert sub.metadata["normalization"] == norm
+                assert sub.metadata["epochs_trained"] == 100
+                assert sub.metadata["reconstruction_term_weight"] == 1
+        # Per-model attrs from MODEL_PARAMS
+        assert ds.synthetic["TC"]["CVAE1_5"].metadata["kl_weight"] == 5
+        assert ds.synthetic["TC"]["CVAE1_10"].metadata["kl_weight"] == 10
+        assert ds.synthetic["TC"]["CVAE1_20"].metadata["kl_weight"] == 20
+
+    def test_synthetic_inherits_shared_attrs(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        meta = ds.synthetic["TC"]["CVAE1_5"].metadata
+        # /synthetic root attrs (epoch, batch_frac, ...) merged into each subset
+        assert meta["epoch"] == 3000
+        assert meta["new_size"] == 8
+        assert meta["random_seed"] == 42
+
+    def test_subset_is_frozen(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        with pytest.raises((AttributeError, TypeError)):
+            ds.raw.expression = pd.DataFrame()  # type: ignore[misc]
+
+    def test_no_open_file_handles_after_construction(self, h5_file):
+        ds = tcga._build_dataset_from_h5(h5_file)
+        # Deletion of the source HDF5 should not affect the in-memory dataset
+        h5_file.unlink()
+        assert ds.raw.expression.shape == (5, 10)

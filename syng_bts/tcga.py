@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -609,3 +610,18 @@ def load_tcga_dataset(
         raise ValueError(
             f"Corrupt HDF5 at {cached_h5}; pass force=True to redownload."
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# Public function: clear_tcga_cache
+# ---------------------------------------------------------------------------
+
+
+def clear_tcga_cache() -> None:
+    """Remove the entire TCGA cache directory tree.
+
+    Safe to call when the cache is empty or absent.
+    """
+    target = tcga_cache_dir()
+    if target.exists():
+        shutil.rmtree(target)

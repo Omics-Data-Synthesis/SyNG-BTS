@@ -14,7 +14,12 @@ import pandas as pd
 import pytest
 
 from syng_bts import tcga
-from syng_bts.tcga import list_tcga_datasets, load_tcga_dataset, tcga_cache_dir
+from syng_bts.tcga import (
+    clear_tcga_cache,
+    list_tcga_datasets,
+    load_tcga_dataset,
+    tcga_cache_dir,
+)
 
 
 class TestTcgaCacheDir:
@@ -820,3 +825,62 @@ class TestLoadTcgaDataset:
 
         with pytest.raises(ValueError, match="Corrupt HDF5"):
             load_tcga_dataset("BRCA_carcinoma")
+
+
+class TestClearTcgaCache:
+    def test_no_op_when_missing(self, cache_root):
+        # Cache dir does not exist yet
+        assert not (cache_root / "tcga").exists()
+        clear_tcga_cache()
+        assert not (cache_root / "tcga").exists()
+
+    def test_removes_everything(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        # Populate the cache
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+        brca_path = h5_dir / "BRCA_carcinoma.h5"
+        entry = make_test_h5(brca_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(
+            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
+        )
+        network_stub.serve(
+            _dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes()
+        )
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        load_tcga_dataset("BRCA_carcinoma")
+        assert (cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5").exists()
+        assert (cache_root / "tcga" / "1.0" / "manifest.json").exists()
+        assert (cache_root / "tcga" / ".url_index.json").exists()
+
+        clear_tcga_cache()
+
+        assert not (cache_root / "tcga").exists()
+
+    def test_subsequent_load_redownloads(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+        brca_path = h5_dir / "BRCA_carcinoma.h5"
+        entry = make_test_h5(brca_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(
+            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
+        )
+        network_stub.serve(
+            _dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes()
+        )
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        load_tcga_dataset("BRCA_carcinoma")
+        n_before_clear = len(network_stub.calls)
+        clear_tcga_cache()
+        load_tcga_dataset("BRCA_carcinoma")
+        n_after_clear = len(network_stub.calls)
+
+        # Both manifest and HDF5 must be redownloaded
+        assert n_after_clear == n_before_clear + 2

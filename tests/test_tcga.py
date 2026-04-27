@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from syng_bts import tcga
-from syng_bts.tcga import list_tcga_datasets, tcga_cache_dir
+from syng_bts.tcga import list_tcga_datasets, load_tcga_dataset, tcga_cache_dir
 
 
 class TestTcgaCacheDir:
@@ -714,3 +714,109 @@ class TestBuildDatasetFromHdf5:
         # Deletion of the source HDF5 should not affect the in-memory dataset
         h5_file.unlink()
         assert ds.raw.expression.shape == (5, 10)
+
+
+class TestLoadTcgaDataset:
+    @pytest.fixture
+    def two_dataset_setup(self, tmp_path, network_stub):
+        """Stage two fixture datasets (BRCA + UCS) and serve them."""
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+
+        brca_path = h5_dir / "BRCA_carcinoma.h5"
+        ucs_path = h5_dir / "UCS_other.h5"
+        brca_entry = make_test_h5(brca_path, dataset_name="BRCA_carcinoma")
+        ucs_entry = make_test_h5(ucs_path, dataset_name="UCS_other")
+        manifest = make_test_manifest(brca_entry, ucs_entry)
+
+        network_stub.serve(
+            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
+        )
+        network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
+        network_stub.serve(_dataset_url("UCS_other.h5"), ucs_path.read_bytes())
+
+        return {"manifest": manifest, "brca_entry": brca_entry}
+
+    def test_load_full_name(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        ds = load_tcga_dataset("BRCA_carcinoma")
+
+        assert isinstance(ds, tcga.TCGADataset)
+        assert ds.name == "BRCA_carcinoma"
+
+        # Cached on disk
+        cached = cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5"
+        assert cached.exists()
+
+    def test_load_short_alias(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        ds = load_tcga_dataset("BRCA")
+
+        assert ds.name == "BRCA_carcinoma"
+
+    def test_unknown_name_raises(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        with pytest.raises(ValueError, match="Unknown TCGA dataset"):
+            load_tcga_dataset("FAKE")
+
+    def test_cache_hit_no_network(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        load_tcga_dataset("BRCA_carcinoma")
+        n_first = len(network_stub.calls)
+        load_tcga_dataset("BRCA_carcinoma")
+        n_second = len(network_stub.calls)
+
+        # First call: manifest + h5. Second call: zero new network calls.
+        assert n_first == 2
+        assert n_second == n_first
+
+    def test_force_redownload(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        load_tcga_dataset("BRCA_carcinoma")
+        n_first = len(network_stub.calls)
+        load_tcga_dataset("BRCA_carcinoma", force=True)
+        n_second = len(network_stub.calls)
+
+        # force=True triggers one extra h5 download (manifest still cached).
+        assert n_second == n_first + 1
+
+    def test_manifest_url_override(
+        self, two_dataset_setup, network_stub, cache_root
+    ):
+        ds = load_tcga_dataset(
+            "BRCA_carcinoma", manifest_url=FIXTURE_MANIFEST_URL
+        )
+        assert ds.name == "BRCA_carcinoma"
+
+    def test_corrupt_cached_h5_raises_helpful_error(
+        self, monkeypatch, two_dataset_setup, network_stub, cache_root
+    ):
+        """If a cached HDF5 file is unreadable, the loader wraps the h5py
+        error with a hint to pass force=True."""
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+
+        # Populate the cache normally.
+        load_tcga_dataset("BRCA_carcinoma")
+        cached = cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5"
+        assert cached.exists()
+
+        # Corrupt the cached file (truncate to garbage that h5py rejects).
+        cached.write_bytes(b"not an hdf5 file")
+
+        with pytest.raises(ValueError, match="Corrupt HDF5"):
+            load_tcga_dataset("BRCA_carcinoma")

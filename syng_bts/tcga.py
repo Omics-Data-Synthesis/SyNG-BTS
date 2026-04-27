@@ -533,3 +533,79 @@ def _build_dataset_from_h5(path: Path) -> TCGADataset:
         processed=processed,
         synthetic=synthetic,
     )
+
+
+# ---------------------------------------------------------------------------
+# Public function: load_tcga_dataset
+# ---------------------------------------------------------------------------
+
+
+def _dataset_url_from_manifest(manifest_url: str, file: str) -> str:
+    """Resolve a dataset URL relative to the manifest URL."""
+    return manifest_url.rsplit("/", 1)[0] + "/" + file
+
+
+def _entry_for(manifest: dict, full_name: str) -> dict:
+    for entry in manifest["datasets"]:
+        if entry["dataset_name"] == full_name:
+            return entry
+    raise KeyError(full_name)  # pragma: no cover  (caller has already resolved)
+
+
+def load_tcga_dataset(
+    name: str,
+    *,
+    force: bool = False,
+    manifest_url: str | None = None,
+) -> TCGADataset:
+    """Download (if needed), cache, and load a TCGA dataset bundle.
+
+    Parameters
+    ----------
+    name : str
+        Either a full project name (e.g.
+        ``"BRCA_breast_carcinoma_estrogen_receptor_status"``) or a unique
+        cancer-type prefix (e.g. ``"BRCA"``).
+    force : bool, default False
+        If True, redownload the HDF5 file even if cached.
+    manifest_url : str or None, default None
+        Override the default manifest URL.
+
+    Returns
+    -------
+    TCGADataset
+        Eagerly-loaded container with all 13 splits available as DataFrames.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` does not resolve, or the downloaded file fails sha256
+        verification twice.
+    OSError
+        On network failure (wrapped with an offline-staging hint).
+    """
+    manifest = _fetch_manifest(manifest_url)
+    full_name = _resolve_name(name, manifest)
+    entry = _entry_for(manifest, full_name)
+
+    version = str(manifest["version"])
+    version_dir = tcga_cache_dir() / version
+    version_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_h5 = version_dir / entry["file"]
+
+    if force or not cached_h5.exists():
+        url = _dataset_url_from_manifest(
+            manifest_url if manifest_url is not None else _DEFAULT_MANIFEST_URL,
+            entry["file"],
+        )
+        _fetch_and_verify_h5(url, cached_h5, entry["sha256"])
+
+    try:
+        return _build_dataset_from_h5(cached_h5)
+    except (OSError, KeyError) as e:
+        # h5py raises OSError for malformed files and KeyError for missing
+        # groups/datasets — both indicate the cached file is corrupt.
+        raise ValueError(
+            f"Corrupt HDF5 at {cached_h5}; pass force=True to redownload."
+        ) from e

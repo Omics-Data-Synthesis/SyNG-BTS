@@ -415,6 +415,79 @@ class TCGADataset:
         self.processed = processed
         self.synthetic = synthetic
 
+    # --- Convenience accessors --------------------------------------------
+
+    def real(
+        self,
+        normalization: str = DEFAULT_NORMALIZATION,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        """Return ``(expression, groups)`` for one processed normalization.
+
+        Parameters
+        ----------
+        normalization : str
+            One of ``"raw_norm"``, ``"TC"``, ``"DESeq"``. Default ``"TC"``.
+        """
+        if normalization not in VALID_NORMALIZATIONS:
+            raise ValueError(
+                f"Invalid normalization '{normalization}'. "
+                f"Valid options: {VALID_NORMALIZATIONS}"
+            )
+        sub = self.processed[normalization]
+        return sub.expression, sub.groups
+
+    def synth(
+        self,
+        normalization: str = DEFAULT_NORMALIZATION,
+        model: str = DEFAULT_MODEL,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        """Return ``(expression, groups)`` for one synthetic configuration.
+
+        Parameters
+        ----------
+        normalization : str
+            One of ``"raw_norm"``, ``"TC"``, ``"DESeq"``. Default ``"TC"``.
+        model : str
+            One of ``"CVAE1_5"``, ``"CVAE1_10"``, ``"CVAE1_20"``. Default
+            ``"CVAE1_5"``.
+        """
+        if normalization not in VALID_NORMALIZATIONS:
+            raise ValueError(
+                f"Invalid normalization '{normalization}'. "
+                f"Valid options: {VALID_NORMALIZATIONS}"
+            )
+        if model not in VALID_MODELS:
+            raise ValueError(
+                f"Invalid model '{model}'. Valid options: {VALID_MODELS}"
+            )
+        sub = self.synthetic[normalization][model]
+        return sub.expression, sub.groups
+
+    def __repr__(self) -> str:
+        labels = "/".join(self.group_labels) if self.group_labels else "—"
+        # Read synthetic sample count from metadata (production: 1000, fixtures: smaller)
+        try:
+            synth_n = int(
+                self.synthetic[DEFAULT_NORMALIZATION][DEFAULT_MODEL]
+                .metadata.get("new_size", 0)
+            )
+        except (KeyError, ValueError, TypeError):
+            synth_n = 0
+        synth_n_str = f"{synth_n} samples each" if synth_n else "n samples each"
+        return (
+            f"TCGADataset(name='{self.name}', cancer_type='{self.cancer_type}',\n"
+            f"  raw: {self.n_raw_samples} samples × "
+            f"{self.n_raw_features} features\n"
+            f"  filtered: {self.n_filtered_samples} samples × "
+            f"{self.n_filtered_features} features\n"
+            f"  groups: {labels}\n"
+            f"  processed: {list(self.processed)}\n"
+            f"  synthetic: {list(self.synthetic)} × "
+            f"{list(VALID_MODELS)} ({synth_n_str})\n"
+            f"  schema_version: {self.schema_version}, "
+            f"created: {self.creation_date})"
+        )
+
 
 # ---------------------------------------------------------------------------
 # HDF5 → DataFrame construction

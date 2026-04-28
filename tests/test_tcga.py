@@ -884,3 +884,134 @@ class TestClearTcgaCache:
 
         # Both manifest and HDF5 must be redownloaded
         assert n_after_clear == n_before_clear + 2
+
+
+class TestConvenienceAccessors:
+    @pytest.fixture
+    def loaded_dataset(self, monkeypatch, network_stub, cache_root, tmp_path):
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+        path = h5_dir / "BRCA_carcinoma.h5"
+        entry = make_test_h5(path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        network_stub.serve(_dataset_url(entry["file"]), path.read_bytes())
+        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        return load_tcga_dataset("BRCA_carcinoma")
+
+    def test_real_default_is_TC(self, loaded_dataset):
+        df, groups = loaded_dataset.real()
+        # Default normalization is "TC"
+        assert df.equals(loaded_dataset.processed["TC"].expression)
+        assert groups.equals(loaded_dataset.processed["TC"].groups)
+
+    def test_real_explicit_norm(self, loaded_dataset):
+        df, groups = loaded_dataset.real(normalization="DESeq")
+        assert df.equals(loaded_dataset.processed["DESeq"].expression)
+        assert groups.equals(loaded_dataset.processed["DESeq"].groups)
+
+    def test_real_invalid_norm_raises(self, loaded_dataset):
+        with pytest.raises(ValueError, match="normalization"):
+            loaded_dataset.real(normalization="XYZ")
+
+    def test_synth_default(self, loaded_dataset):
+        df, groups = loaded_dataset.synth()
+        # Defaults: normalization="TC", model="CVAE1_5"
+        assert df.equals(loaded_dataset.synthetic["TC"]["CVAE1_5"].expression)
+        assert groups.equals(loaded_dataset.synthetic["TC"]["CVAE1_5"].groups)
+
+    def test_synth_explicit(self, loaded_dataset):
+        df, groups = loaded_dataset.synth(
+            normalization="DESeq", model="CVAE1_20"
+        )
+        assert df.equals(
+            loaded_dataset.synthetic["DESeq"]["CVAE1_20"].expression
+        )
+        assert groups.equals(
+            loaded_dataset.synthetic["DESeq"]["CVAE1_20"].groups
+        )
+
+    def test_synth_invalid_model_raises(self, loaded_dataset):
+        with pytest.raises(ValueError, match="model"):
+            loaded_dataset.synth(normalization="TC", model="FAKE")
+
+    def test_repr_contains_useful_info(self, loaded_dataset):
+        text = repr(loaded_dataset)
+        assert "BRCA_carcinoma" in text
+        assert "TCGADataset" in text
+        assert "5" in text  # n_raw_samples
+        assert "4" in text  # n_filtered_samples
+        # Synthetic count is read dynamically from metadata, not hardcoded.
+        # The fixture builds with n_synthetic=8 (see make_test_h5).
+        assert "8 samples each" in text
+
+
+class TestPackageExports:
+    def test_imports_from_top_level(self):
+        from syng_bts import (
+            Subset,
+            TCGADataset,
+            clear_tcga_cache,
+            list_tcga_datasets,
+            load_tcga_dataset,
+            tcga_cache_dir,
+        )
+
+        # Smoke-check identity to confirm they're the actual implementations
+        assert callable(load_tcga_dataset)
+        assert callable(list_tcga_datasets)
+        assert callable(clear_tcga_cache)
+        assert callable(tcga_cache_dir)
+        assert isinstance(TCGADataset, type)
+        assert isinstance(Subset, type)
+
+    def test_in_dunder_all(self):
+        import syng_bts
+
+        for name in (
+            "load_tcga_dataset",
+            "list_tcga_datasets",
+            "clear_tcga_cache",
+            "tcga_cache_dir",
+            "TCGADataset",
+            "Subset",
+        ):
+            assert name in syng_bts.__all__, f"{name!r} missing from __all__"
+
+
+@pytest.mark.slow
+class TestSlowIntegration:
+    """Hits the live published manifest. Skipped during Phase 1.
+
+    After Phase 3 (manifest URL wired in), run with:
+        pytest tests/test_tcga.py -m slow
+    """
+
+    def test_live_manifest_and_smallest_dataset(self, cache_root):
+        if tcga._DEFAULT_MANIFEST_URL.startswith("TBD-"):
+            pytest.skip(
+                "Default manifest URL not yet configured; "
+                "see Phase 3 in the plan."
+            )
+
+        # Use the smallest dataset (UCS, ~14 MB) for the live round-trip.
+        ds = load_tcga_dataset("UCS")
+
+        assert isinstance(ds, tcga.TCGADataset)
+        assert ds.cancer_type == "UCS"
+        # Schema invariants
+        assert ds.n_raw_features == 1881
+        assert ds.schema_version == "1.0"
+        assert ds.raw.expression.shape[0] == ds.n_raw_samples
+        assert ds.raw.expression.shape[1] == 1881
+        # Processed / synthetic shapes are consistent
+        for norm in ("raw_norm", "TC", "DESeq"):
+            assert (
+                ds.processed[norm].expression.shape
+                == (ds.n_filtered_samples, ds.n_filtered_features)
+            )
+            for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+                assert (
+                    ds.synthetic[norm][model].expression.shape[1]
+                    == ds.n_filtered_features
+                )

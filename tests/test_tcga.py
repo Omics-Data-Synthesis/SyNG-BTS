@@ -979,6 +979,143 @@ class TestPackageExports:
             assert name in syng_bts.__all__, f"{name!r} missing from __all__"
 
 
+@pytest.mark.real_data
+class TestRealDataAllTcgaDatasets:
+    """Full validation against the live published GitHub Release.
+
+    Run with:
+        pytest tests/test_tcga.py -m real_data
+
+    Skipped while ``_DEFAULT_MANIFEST_URL`` is a placeholder.
+    """
+
+    def _maybe_skip(self):
+        if tcga._DEFAULT_MANIFEST_URL.startswith("TBD-"):
+            pytest.skip(
+                "Default manifest URL not yet configured; "
+                "see Phase 3 in the plan."
+            )
+
+    def test_manifest_lists_24_datasets(self, cache_root):
+        self._maybe_skip()
+        names = list_tcga_datasets()
+        assert len(names) == 24
+        aliases = list_tcga_datasets(short=True)
+        assert len(aliases) == 24
+        assert len(set(aliases)) == 24, "Cancer-type aliases must be unique"
+
+    def test_load_every_dataset(self, cache_root):
+        """Load all 24 datasets and verify every loaded TCGADataset is
+        consistent with its corresponding manifest entry."""
+        self._maybe_skip()
+
+        # Fetch the manifest once via the loader so we can cross-check.
+        manifest = tcga._fetch_manifest(None)
+        entries_by_name = {e["dataset_name"]: e for e in manifest["datasets"]}
+        names = list_tcga_datasets()
+        assert set(names) == set(entries_by_name.keys())
+
+        for name in names:
+            entry = entries_by_name[name]
+            ds = load_tcga_dataset(name)
+
+            # 1. Schema invariants
+            assert ds.name == name
+            assert ds.n_raw_features == 1881
+            assert ds.schema_version == "1.0"
+
+            # 2. Root attrs match the manifest entry
+            assert ds.cancer_type == entry["cancer_type"], name
+            assert ds.clinical_variable == entry["clinical_variable"], name
+            assert sorted(ds.group_labels) == sorted(entry["group_labels"]), name
+            assert ds.n_raw_samples == entry["n_raw_samples"], name
+            assert ds.n_filtered_samples == entry["n_filtered_samples"], name
+            assert ds.n_filtered_features == entry["n_filtered_features"], name
+
+            # 3. Cached HDF5 sha256 matches the manifest entry
+            cached = tcga.tcga_cache_dir() / "1.0" / entry["file"]
+            assert cached.exists(), name
+            assert tcga._sha256_of_file(cached) == entry["sha256"], name
+
+            # 4. All 13 splits present
+            assert isinstance(ds.raw, tcga.Subset)
+            for norm in ("raw_norm", "TC", "DESeq"):
+                assert norm in ds.processed, name
+                assert norm in ds.synthetic, name
+                for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+                    assert model in ds.synthetic[norm], name
+
+            # 5. Index alignment in every Subset
+            assert ds.raw.expression.index.equals(ds.raw.groups.index), name
+            for norm in ("raw_norm", "TC", "DESeq"):
+                assert (
+                    ds.processed[norm]
+                    .expression.index.equals(ds.processed[norm].groups.index)
+                ), name
+                for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
+                    sub = ds.synthetic[norm][model]
+                    assert sub.expression.index.equals(sub.groups.index), name
+
+            # 6. Expression shapes consistent with manifest counts
+            assert ds.raw.expression.shape == (
+                entry["n_raw_samples"],
+                entry["n_raw_features"],
+            ), name
+            for norm in ("raw_norm", "TC", "DESeq"):
+                assert ds.processed[norm].expression.shape == (
+                    entry["n_filtered_samples"],
+                    entry["n_filtered_features"],
+                ), name
+
+    def test_cache_hit_after_load(self, cache_root):
+        self._maybe_skip()
+        # Load BRCA once to populate the cache
+        load_tcga_dataset("BRCA")
+
+        # Wrap urlopen and assert no further call on the second load
+        import urllib.request as _ur
+
+        original = _ur.urlopen
+        calls: list[str] = []
+
+        def counting_urlopen(url, timeout=None):
+            url_str = url if isinstance(url, str) else url.full_url
+            calls.append(url_str)
+            return original(url, timeout=timeout)
+
+        try:
+            _ur.urlopen = counting_urlopen  # type: ignore[assignment]
+            load_tcga_dataset("BRCA")
+        finally:
+            _ur.urlopen = original  # type: ignore[assignment]
+
+        assert calls == [], f"Expected zero network calls, got {calls}"
+
+    def test_pipeline_integration_with_smallest_dataset(self, cache_root):
+        self._maybe_skip()
+        from syng_bts import generate
+
+        ds = load_tcga_dataset("UCS")
+        real_df, real_groups = ds.real("TC")
+
+        # CPU-friendly model and tiny epoch budget
+        result = generate(
+            data=real_df,
+            groups=real_groups,
+            model="VAE1-10",
+            new_size=10,
+            batch_frac=1.0,
+            learning_rate=0.0005,
+            epoch=2,
+            random_seed=42,
+        )
+
+        assert result is not None
+        assert result.generated is not None
+        assert len(result.generated) == 10
+        assert list(result.generated.columns) == list(real_df.columns)
+
+
 @pytest.mark.slow
 class TestSlowIntegration:
     """Hits the live published manifest. Skipped during Phase 1.

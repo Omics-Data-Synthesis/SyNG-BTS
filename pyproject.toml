@@ -137,7 +137,7 @@ indent-style = "space"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short -m \"not slow\""
+addopts = "-v --tb=short -m \"not slow and not real_data\""
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",

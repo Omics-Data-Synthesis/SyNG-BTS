@@ -1104,16 +1104,16 @@ class TestRealDataAllTcgaDatasets:
             groups=real_groups,
             model="VAE1-10",
             new_size=10,
-            batch_frac=1.0,
+            batch_frac=0.1,
             learning_rate=0.0005,
             epoch=2,
             random_seed=42,
         )
 
         assert result is not None
-        assert result.generated is not None
-        assert len(result.generated) == 10
-        assert list(result.generated.columns) == list(real_df.columns)
+        assert result.generated_data is not None
+        assert len(result.generated_data) == 10
+        assert list(result.generated_data.columns) == list(real_df.columns)
 
 
 @pytest.mark.slow

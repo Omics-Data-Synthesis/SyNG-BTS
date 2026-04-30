@@ -44,9 +44,8 @@ except ImportError:
 # Module constants
 # ---------------------------------------------------------------------------
 
-# Phase 3 (Task 16) replaces this with the live URL.
+# URL of the published TCGA dataset manifest (data-v1.0).
 _DEFAULT_MANIFEST_URL = (
-    "TBD-replace-after-publish: "
     "https://github.com/Omics-Data-Synthesis/SyNG-BTS/"
     "releases/download/data-v1.0/manifest.json"
 )

@@ -62,7 +62,18 @@ Run a pilot study with :func:`~syng_bts.pilot_study`:
    )
    print(result.summary())
 
-For more details, see the :doc:`usage` guide.
+Browse and load full TCGA cohorts with :func:`~syng_bts.list_tcga_datasets` and :func:`~syng_bts.load_tcga_dataset`:
+
+.. code-block:: python
+
+   from syng_bts import list_tcga_datasets, load_tcga_dataset
+
+   list_tcga_datasets(short=True)
+   ds = load_tcga_dataset("BRCA")
+   real_df, real_groups = ds.real("TC")
+   print(real_df.shape)
+
+For more details, see the :doc:`usage` guide, or the :doc:`tcga` guide for full TCGA cohort access.
 For upgrading from v2.x, see the :doc:`migration` guide.
 
 Citation
@@ -92,6 +103,7 @@ Contents
    methods
    evals
    synthesize
+   tcga
    datasets
    configuration
 

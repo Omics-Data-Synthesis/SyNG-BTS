@@ -93,6 +93,36 @@ and :func:`~syng_bts.resolve_data` to load them:
    data, groups = resolve_data("SKCMPositive_4")
    print(f"Dataset shape: {data.shape}")
 
+Load TCGA Cohorts
+~~~~~~~~~~~~~~~~~
+
+For the full 24 TCGA miRNA cohorts (real + CVAE-synthesized, downloaded
+on demand), use :func:`~syng_bts.list_tcga_datasets` and
+:func:`~syng_bts.load_tcga_dataset`:
+
+.. code-block:: python
+
+   from syng_bts import list_tcga_datasets, load_tcga_dataset
+
+   # Browse available cohorts
+   print(list_tcga_datasets(short=True))
+   # ['BLCA', 'BRCA', 'COAD', ..., 'UCS']
+
+   # Load a cohort (downloads on first call, then cached locally)
+   ds = load_tcga_dataset("BRCA")
+
+   # Real expression data — DESeq-normalized by default
+   real_df, real_groups = ds.real()
+   print(f"Real shape: {real_df.shape}")
+
+   # CVAE-synthesized counterpart
+   synth_df, synth_groups = ds.synth()
+   print(f"Synthetic shape: {synth_df.shape}")
+
+See :doc:`tcga` for the full guide (catalog, normalizations, caching,
+custom mirrors) and :doc:`notebooks/tcga_quickstart` for a runnable
+end-to-end example.
+
 Generate Synthetic Data
 ~~~~~~~~~~~~~~~~~~~~~~~
 

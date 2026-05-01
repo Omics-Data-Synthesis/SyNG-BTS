@@ -40,7 +40,7 @@ try:
     __version__ = version("syng-bts")
 except PackageNotFoundError:
     # Package is not installed (running from source)
-    __version__ = "3.3.2"
+    __version__ = "3.4.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
@@ -78,6 +78,16 @@ from .result import PilotResult, SyngResult
 # Import synthesize (sample-size evaluation)
 from .synthesize import evaluate_sample_sizes, plot_sample_sizes
 
+# Import TCGA loader
+from .tcga import (
+    Subset,
+    TCGADataset,
+    clear_tcga_cache,
+    list_tcga_datasets,
+    load_tcga_dataset,
+    tcga_cache_dir,
+)
+
 # Define public API
 __all__ = [
     # Version info
@@ -107,4 +117,11 @@ __all__ = [
     # Result objects
     "SyngResult",
     "PilotResult",
+    # TCGA dataset loader
+    "load_tcga_dataset",
+    "list_tcga_datasets",
+    "clear_tcga_cache",
+    "tcga_cache_dir",
+    "TCGADataset",
+    "Subset",
 ]

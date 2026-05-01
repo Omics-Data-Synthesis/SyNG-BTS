@@ -4,18 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "syng-bts"
-version = "3.3.2"
+version = "3.4.0"
 description = "Synthesis of Next Generation Bulk Transcriptomic Sequencing - A data augmentation tool for transcriptomics data using deep generative models"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.10"
 authors = [
-    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
+    { name = "Yannick Dueren", email = "yannick.dueren@rub.de"  },
     { name = "Yunhui Qi" },
+    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
     { name = "Xinyi Wang" },
-    { name = "Yannick Dueren" },
+    { name = "Junze Zhou" },
 ]
 maintainers = [
+    { name = "Yannick Dueren", email = "yannick.dueren@rub.de" },
     { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
 ]
 keywords = [
@@ -55,6 +57,7 @@ dependencies = [
     "tensorboardX>=2.6.0",
     "umap-learn>=0.5.6",
     "pyarrow>=14.0.0",
+    "h5py>=3.0.0",
     "scikit-learn>=1.3.0",
     "xgboost>=2.0.0",
 ]
@@ -76,6 +79,7 @@ dev = [
     "mypy>=1.10.0",
     "build>=1.0.0",
     "twine>=5.0.0",
+    "tables>=3.8.0",
 ]
 
 # All optional dependencies
@@ -135,13 +139,14 @@ indent-style = "space"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m \"not slow and not real_data\""
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "real_data: marks tests that exercise live published TCGA data (deselect with '-m \"not real_data\"')",
 ]
 
 # mypy configuration

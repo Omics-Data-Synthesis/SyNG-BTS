@@ -73,6 +73,7 @@ autodoc_mock_imports = [
     "matplotlib.pyplot",
     "seaborn",
     "xgboost",
+    "h5py",
 ]
 
 # Napoleon settings for Google/NumPy style docstrings

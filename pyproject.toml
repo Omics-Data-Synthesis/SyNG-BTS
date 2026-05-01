@@ -94,7 +94,15 @@ Repository = "https://github.com/Omics-Data-Synthesis/SyNG-BTS"
 Issues = "https://github.com/Omics-Data-Synthesis/SyNG-BTS"
 
 [tool.setuptools]
-packages = ["syng_bts", "syng_bts.data"]
+packages = [
+    "syng_bts",
+    "syng_bts.data",
+    "syng_bts.data.examples",
+    "syng_bts.data.transfer",
+    "syng_bts.data.case",
+    "syng_bts.data.case.brca_subtype",
+    "syng_bts.data.case.lihc_subtype",
+]
 include-package-data = true
 
 [tool.setuptools.package-data]

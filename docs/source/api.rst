@@ -102,6 +102,48 @@ list_bundled_datasets
 
 .. autofunction:: syng_bts.list_bundled_datasets
 
+TCGA Datasets
+-------------
+
+The TCGA loader downloads, caches, and exposes 24 packaged TCGA miRNA
+cohorts (raw + normalized + CVAE-synthesized). See :doc:`tcga` for the
+narrative guide and :doc:`notebooks/tcga_quickstart` for a runnable
+example.
+
+load_tcga_dataset
+~~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.load_tcga_dataset
+
+list_tcga_datasets
+~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.list_tcga_datasets
+
+tcga_cache_dir
+~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.tcga_cache_dir
+
+clear_tcga_cache
+~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.clear_tcga_cache
+
+TCGADataset
+~~~~~~~~~~~
+
+.. autoclass:: syng_bts.TCGADataset
+   :members:
+   :exclude-members: __init__
+
+Subset
+~~~~~~
+
+.. autoclass:: syng_bts.Subset
+   :members:
+   :no-index:
+
 Model Classes
 -------------
 

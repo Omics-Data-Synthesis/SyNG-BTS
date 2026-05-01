@@ -57,7 +57,7 @@ _DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB
 
 VALID_NORMALIZATIONS = ("raw_norm", "TC", "DESeq")
 VALID_MODELS = ("CVAE1_5", "CVAE1_10", "CVAE1_20")
-DEFAULT_NORMALIZATION = "TC"
+DEFAULT_NORMALIZATION = "DESeq"
 DEFAULT_MODEL = "CVAE1_5"
 
 
@@ -79,8 +79,17 @@ def tcga_cache_dir() -> Path:
     """Return the active TCGA cache directory (without the version subdir).
 
     Honors the ``SYNG_BTS_CACHE_DIR`` environment variable if set; otherwise
-    returns ``~/.cache/syng-bts/tcga``. The directory is **not** created by this
-    call.
+    returns ``~/.cache/syng-bts/tcga``. The directory is **not** created by
+    this call.
+
+    Returns:
+        The cache root for TCGA datasets. Versioned dataset files live under
+        ``tcga_cache_dir() / <manifest-version>``.
+
+    Example:
+        >>> from syng_bts import tcga_cache_dir
+        >>> tcga_cache_dir()
+        PosixPath('/home/alice/.cache/syng-bts/tcga')
     """
     root_str = os.environ.get(_CACHE_ENV_VAR)
     root = Path(root_str) if root_str else _DEFAULT_CACHE_ROOT
@@ -211,9 +220,7 @@ def _resolve_name(name: str, manifest: dict) -> str:
             f"Pass the full name to disambiguate."
         )
 
-    raise ValueError(
-        f"Unknown TCGA dataset '{name}'. Available: {sorted(full_names)}"
-    )
+    raise ValueError(f"Unknown TCGA dataset '{name}'. Available: {sorted(full_names)}")
 
 
 # ---------------------------------------------------------------------------
@@ -226,21 +233,23 @@ def list_tcga_datasets(
     short: bool = False,
     manifest_url: str | None = None,
 ) -> list[str]:
-    """List the names of all TCGA datasets available in the manifest.
+    """Return the names of all TCGA cohorts in the published manifest.
 
-    Parameters
-    ----------
-    short : bool, default False
-        If False, returns full project names. If True, returns cancer-type
-        aliases (e.g. "BRCA").
-    manifest_url : str or None
-        Override the default manifest URL. Useful for tests, forks, or
-        pre-staged air-gapped environments.
+    Args:
+        short: If ``True``, return short cohort codes (e.g. ``"BRCA"``).
+            Otherwise return the full manifest dataset names.
+        manifest_url: Override the published manifest URL. Defaults to the
+            data-v1.0 release manifest.
 
-    Returns
-    -------
-    list[str]
-        Sorted list of dataset names (deduplicated when ``short=True``).
+    Returns:
+        A list of dataset names. With ``short=False`` (default), names are
+        the full manifest entries; with ``short=True``, the leading cohort
+        code.
+
+    Example:
+        >>> from syng_bts import list_tcga_datasets
+        >>> list_tcga_datasets(short=True)[:3]
+        ['ACC', 'BLCA', 'BRCA']
     """
     manifest = _fetch_manifest(manifest_url)
     full_names = [d["dataset_name"] for d in manifest["datasets"]]
@@ -286,9 +295,7 @@ def _stream_download(url: str, dest: Path) -> None:
                     leave=False,
                 )
             else:
-                size_str = (
-                    f"{total / 1e6:.1f} MB" if total > 0 else "size unknown"
-                )
+                size_str = f"{total / 1e6:.1f} MB" if total > 0 else "size unknown"
                 print(
                     f"Downloading {dest.name} ({size_str})…",
                     file=sys.stderr,
@@ -322,9 +329,7 @@ def _stream_download(url: str, dest: Path) -> None:
         raise
 
 
-def _fetch_and_verify_h5(
-    url: str, dest: Path, expected_sha256: str
-) -> None:
+def _fetch_and_verify_h5(url: str, dest: Path, expected_sha256: str) -> None:
     """Download to ``dest``, verify sha256, retry once on mismatch.
 
     On second mismatch, removes ``dest`` and raises ``ValueError``.
@@ -354,18 +359,16 @@ def _fetch_and_verify_h5(
 
 @dataclass(frozen=True)
 class Subset:
-    """One slice of a TCGA dataset (raw, processed/X, or synthetic/X/Y).
+    """An expression subset returned by :class:`TCGADataset` accessors.
 
-    Attributes
-    ----------
-    expression : pd.DataFrame
-        Expression matrix. Index is sample IDs (raw) or RangeIndex
-        (processed, synthetic). Columns are feature names.
-    groups : pd.Series
-        Group labels indexed identically to ``expression``.
-    metadata : dict[str, Any]
-        Per-slice attributes (normalization_method, transform, kl_weight,
-        epochs_trained, etc.).
+    Attributes:
+        expression: A :class:`pandas.DataFrame` of shape
+            ``(n_samples, n_features)``. Rows are TCGA samples (indexed by
+            sample barcode); columns are miRNA features.
+        groups: A :class:`pandas.Series` aligned to ``expression.index`` with
+            categorical group labels (e.g. tumor vs. normal).
+        metadata: Dict of HDF5 attributes captured at dataset assembly time
+            (e.g. version, normalization, source).
     """
 
     expression: pd.DataFrame
@@ -374,11 +377,15 @@ class Subset:
 
 
 class TCGADataset:
-    """Eagerly-loaded view of one TCGA dataset bundle.
+    """A loaded TCGA cohort with real and synthetic accessors.
 
-    Built once inside ``load_tcga_dataset`` from the corresponding HDF5 file.
-    All 13 ``Subset`` views (raw + 3 processed + 9 synthetic) are constructed
-    before the file handle closes.
+    Returned by :func:`load_tcga_dataset`. Wraps a single HDF5 file
+    containing the raw expression matrix, three normalizations
+    (``raw_norm``, ``TC``, ``DESeq``), and nine synthetic groups (three
+    CVAE models × three normalizations).
+
+    Use :meth:`real` to access real expression data and :meth:`synth` to
+    access a synthetic counterpart.
     """
 
     def __init__(
@@ -422,10 +429,27 @@ class TCGADataset:
     ) -> tuple[pd.DataFrame, pd.Series]:
         """Return ``(expression, groups)`` for one processed normalization.
 
-        Parameters
-        ----------
-        normalization : str
-            One of ``"raw_norm"``, ``"TC"``, ``"DESeq"``. Default ``"TC"``.
+        Args:
+            normalization: One of ``"raw_norm"``, ``"TC"``, or ``"DESeq"``
+                (default). See ``syng_bts.tcga.VALID_NORMALIZATIONS``.
+
+        Returns:
+            A ``(expression, groups)`` tuple where ``expression`` is a
+            :class:`pandas.DataFrame` of shape ``(n_samples, n_features)`` and
+            ``groups`` is a :class:`pandas.Series` of group labels aligned to
+            ``expression.index``. To access the per-slice metadata dict, use
+            the underlying :class:`Subset` directly via
+            ``dataset.processed[normalization]``.
+
+        Raises:
+            ValueError: If ``normalization`` is not in
+                ``syng_bts.tcga.VALID_NORMALIZATIONS``.
+
+        Example:
+            >>> ds = load_tcga_dataset("BRCA")
+            >>> real_df, real_groups = ds.real("TC")
+            >>> real_df.shape
+            (1144, 570)
         """
         if normalization not in VALID_NORMALIZATIONS:
             raise ValueError(
@@ -442,13 +466,30 @@ class TCGADataset:
     ) -> tuple[pd.DataFrame, pd.Series]:
         """Return ``(expression, groups)`` for one synthetic configuration.
 
-        Parameters
-        ----------
-        normalization : str
-            One of ``"raw_norm"``, ``"TC"``, ``"DESeq"``. Default ``"TC"``.
-        model : str
-            One of ``"CVAE1_5"``, ``"CVAE1_10"``, ``"CVAE1_20"``. Default
-            ``"CVAE1_5"``.
+        Args:
+            normalization: One of ``"raw_norm"``, ``"TC"``, or ``"DESeq"``
+                (default). See ``syng_bts.tcga.VALID_NORMALIZATIONS``.
+            model: One of ``"CVAE1_5"`` (default), ``"CVAE1_10"``, or
+                ``"CVAE1_20"``. See ``syng_bts.tcga.VALID_MODELS``.
+
+        Returns:
+            A ``(expression, groups)`` tuple where ``expression`` is a
+            :class:`pandas.DataFrame` of shape ``(n_samples, n_features)`` and
+            ``groups`` is a :class:`pandas.Series` of group labels aligned to
+            ``expression.index``. To access the per-slice metadata dict (KL
+            weight, epochs trained, etc.), use the underlying :class:`Subset`
+            directly via ``dataset.synthetic[normalization][model]``.
+
+        Raises:
+            ValueError: If ``normalization`` is not in
+                ``syng_bts.tcga.VALID_NORMALIZATIONS`` or ``model`` is not in
+                ``syng_bts.tcga.VALID_MODELS``.
+
+        Example:
+            >>> ds = load_tcga_dataset("BRCA")
+            >>> synth_df, synth_groups = ds.synth("TC", "CVAE1_5")
+            >>> synth_df.shape
+            (1000, 570)
         """
         if normalization not in VALID_NORMALIZATIONS:
             raise ValueError(
@@ -456,9 +497,7 @@ class TCGADataset:
                 f"Valid options: {VALID_NORMALIZATIONS}"
             )
         if model not in VALID_MODELS:
-            raise ValueError(
-                f"Invalid model '{model}'. Valid options: {VALID_MODELS}"
-            )
+            raise ValueError(f"Invalid model '{model}'. Valid options: {VALID_MODELS}")
         sub = self.synthetic[normalization][model]
         return sub.expression, sub.groups
 
@@ -467,8 +506,9 @@ class TCGADataset:
         # Read synthetic sample count from metadata (production: 1000, fixtures: smaller)
         try:
             synth_n = int(
-                self.synthetic[DEFAULT_NORMALIZATION][DEFAULT_MODEL]
-                .metadata.get("new_size", 0)
+                self.synthetic[DEFAULT_NORMALIZATION][DEFAULT_MODEL].metadata.get(
+                    "new_size", 0
+                )
             )
         except (KeyError, ValueError, TypeError):
             synth_n = 0
@@ -499,7 +539,9 @@ def _decode(value: Any) -> Any:
         return value.decode()
     if isinstance(value, np.ndarray):
         return [
-            v.decode() if isinstance(v, bytes) else v.item()
+            v.decode()
+            if isinstance(v, bytes)
+            else v.item()
             if hasattr(v, "item")
             else v
             for v in value
@@ -551,9 +593,7 @@ def _build_subset_from_group(
         merged = {**extra_metadata, **metadata}
         metadata = merged
 
-    return Subset(
-        expression=expression, groups=groups_series, metadata=metadata
-    )
+    return Subset(expression=expression, groups=groups_series, metadata=metadata)
 
 
 def _build_dataset_from_h5(path: Path) -> TCGADataset:
@@ -564,9 +604,7 @@ def _build_dataset_from_h5(path: Path) -> TCGADataset:
         # Raw subset (with sample_ids)
         raw_grp = f["raw"]
         raw_sample_ids = (
-            _read_strings(raw_grp["sample_ids"])
-            if "sample_ids" in raw_grp
-            else None
+            _read_strings(raw_grp["sample_ids"]) if "sample_ids" in raw_grp else None
         )
         raw = _build_subset_from_group(raw_grp, sample_ids=raw_sample_ids)
 
@@ -631,31 +669,38 @@ def load_tcga_dataset(
     force: bool = False,
     manifest_url: str | None = None,
 ) -> TCGADataset:
-    """Download (if needed), cache, and load a TCGA dataset bundle.
+    """Download (if needed) and return a TCGA cohort as a :class:`TCGADataset`.
 
-    Parameters
-    ----------
-    name : str
-        Either a full project name (e.g.
-        ``"BRCA_breast_carcinoma_estrogen_receptor_status"``) or a unique
-        cancer-type prefix (e.g. ``"BRCA"``).
-    force : bool, default False
-        If True, redownload the HDF5 file even if cached.
-    manifest_url : str or None, default None
-        Override the default manifest URL.
+    On first call for a given dataset, the loader fetches the manifest,
+    downloads the corresponding HDF5 file, verifies its sha256, and caches
+    the file under ``tcga_cache_dir() / <version>``. Subsequent calls reuse
+    the cached file.
 
-    Returns
-    -------
-    TCGADataset
-        Eagerly-loaded container with all 13 splits available as DataFrames.
+    Args:
+        name: Cohort code (e.g. ``"BRCA"``) or full dataset name from the
+            manifest. Cancer-type prefixes resolve to the canonical entry
+            when unambiguous.
+        force: If ``True``, redownload even when a cached file exists.
+        manifest_url: Override the published manifest URL (useful for
+            staging mirrors). Defaults to the data-v1.0 release manifest.
 
-    Raises
-    ------
-    ValueError
-        If ``name`` does not resolve, or the downloaded file fails sha256
-        verification twice.
-    OSError
-        On network failure (wrapped with an offline-staging hint).
+    Returns:
+        A :class:`TCGADataset` exposing :meth:`TCGADataset.real` and
+        :meth:`TCGADataset.synth` accessors.
+
+    Raises:
+        ValueError: If ``name`` does not match any cohort in the manifest,
+            if the cached HDF5 file is corrupt (pass ``force=True`` to
+            redownload), or if the sha256 checksum fails twice after retry.
+        OSError: If the manifest or HDF5 file cannot be downloaded due to a
+            network failure.
+
+    Example:
+        >>> from syng_bts import load_tcga_dataset
+        >>> ds = load_tcga_dataset("BRCA")
+        >>> real_df, real_groups = ds.real()
+        >>> real_df.shape
+        (1144, 570)
     """
     manifest = _fetch_manifest(manifest_url)
     full_name = _resolve_name(name, manifest)
@@ -690,9 +735,16 @@ def load_tcga_dataset(
 
 
 def clear_tcga_cache() -> None:
-    """Remove the entire TCGA cache directory tree.
+    """Remove the entire TCGA cache directory.
 
-    Safe to call when the cache is empty or absent.
+    Deletes ``tcga_cache_dir()`` recursively. The next call to
+    :func:`load_tcga_dataset` will redownload from the manifest. Use this
+    for full cleanup; for per-dataset redownload, prefer
+    :func:`load_tcga_dataset` with ``force=True``.
+
+    Example:
+        >>> from syng_bts import clear_tcga_cache
+        >>> clear_tcga_cache()
     """
     target = tcga_cache_dir()
     if target.exists():

@@ -899,16 +899,16 @@ class TestConvenienceAccessors:
         monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
         return load_tcga_dataset("BRCA_carcinoma")
 
-    def test_real_default_is_TC(self, loaded_dataset):
+    def test_real_default_is_DESeq(self, loaded_dataset):
         df, groups = loaded_dataset.real()
-        # Default normalization is "TC"
-        assert df.equals(loaded_dataset.processed["TC"].expression)
-        assert groups.equals(loaded_dataset.processed["TC"].groups)
-
-    def test_real_explicit_norm(self, loaded_dataset):
-        df, groups = loaded_dataset.real(normalization="DESeq")
+        # Default normalization is "DESeq"
         assert df.equals(loaded_dataset.processed["DESeq"].expression)
         assert groups.equals(loaded_dataset.processed["DESeq"].groups)
+
+    def test_real_explicit_norm(self, loaded_dataset):
+        df, groups = loaded_dataset.real(normalization="TC")
+        assert df.equals(loaded_dataset.processed["TC"].expression)
+        assert groups.equals(loaded_dataset.processed["TC"].groups)
 
     def test_real_invalid_norm_raises(self, loaded_dataset):
         with pytest.raises(ValueError, match="normalization"):
@@ -916,9 +916,11 @@ class TestConvenienceAccessors:
 
     def test_synth_default(self, loaded_dataset):
         df, groups = loaded_dataset.synth()
-        # Defaults: normalization="TC", model="CVAE1_5"
-        assert df.equals(loaded_dataset.synthetic["TC"]["CVAE1_5"].expression)
-        assert groups.equals(loaded_dataset.synthetic["TC"]["CVAE1_5"].groups)
+        # Defaults: normalization="DESeq", model="CVAE1_5"
+        assert df.equals(
+            loaded_dataset.synthetic["DESeq"]["CVAE1_5"].expression
+        )
+        assert groups.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_5"].groups)
 
     def test_synth_explicit(self, loaded_dataset):
         df, groups = loaded_dataset.synth(

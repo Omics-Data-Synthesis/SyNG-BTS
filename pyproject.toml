@@ -4,18 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "syng-bts"
-version = "3.3.2"
+version = "3.4.0"
 description = "Synthesis of Next Generation Bulk Transcriptomic Sequencing - A data augmentation tool for transcriptomics data using deep generative models"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.10"
 authors = [
-    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
+    { name = "Yannick Dueren", email = "yannick.dueren@rub.de"  },
     { name = "Yunhui Qi" },
+    { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
     { name = "Xinyi Wang" },
-    { name = "Yannick Dueren" },
+    { name = "Junze Zhou" },
 ]
 maintainers = [
+    { name = "Yannick Dueren", email = "yannick.dueren@rub.de" },
     { name = "Li-Xuan Qin", email = "qinl@mskcc.org" },
 ]
 keywords = [

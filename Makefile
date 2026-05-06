@@ -1,7 +1,7 @@
 # SyNG-BTS Makefile
 # Development automation for SyNG-BTS package
 
-.PHONY: help install install-dev install-docs install-all build publish publish-test docs docs-serve clean clean-all lint format test test-cov init-dev check
+.PHONY: help install install-dev install-docs install-all build publish publish-test docs docs-serve clean clean-all lint format test test-all test-cov init-dev check
 
 # Python executable - uses venv if available, otherwise system Python
 PYTHON := $(shell if [ -f .venv/bin/python ]; then echo ".venv/bin/python"; else echo "python"; fi)
@@ -20,7 +20,8 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make init-dev      - Initialize development environment (venv + deps)"
-	@echo "  make test          - Run tests"
+	@echo "  make test          - Run tests (excludes slow and real_data)"
+	@echo "  make test-all      - Run all tests including slow and real_data"
 	@echo "  make test-cov      - Run tests with coverage report"
 	@echo "  make check         - Run all checks (lint, test)"
 	@echo "  make lint          - Run linters (ruff)"
@@ -78,6 +79,9 @@ format:
 
 test:
 	$(PYTHON) -m pytest tests/ -v
+
+test-all:
+	$(PYTHON) -m pytest tests/ -v -m ""
 
 test-cov:
 	$(PYTHON) -m pytest tests/ -v --cov=syng_bts --cov-report=html --cov-report=term

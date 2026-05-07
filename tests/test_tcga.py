@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import urllib.error
 from pathlib import Path
 
@@ -320,8 +321,6 @@ class TestFixtureBuilder:
             urllib.request.urlopen("http://nope.test/missing")
 
     def test_cache_root_sets_env(self, cache_root, monkeypatch):
-        import os
-
         assert os.environ["SYNG_BTS_CACHE_DIR"] == str(cache_root)
 
 
@@ -613,6 +612,46 @@ class TestFetchAndVerifyH5:
 
         with pytest.raises(tcga._NetworkError, match="Failed to download"):
             tcga._fetch_and_verify_h5(url, dest, "deadbeef" * 8)
+
+
+class TestStreamDownloadDeadline:
+    """The wall-clock guard in ``_stream_download`` aborts a stalled transfer."""
+
+    def test_stalled_transfer_raises_network_error(self, monkeypatch, tmp_path):
+        # A response that streams forever models a server that trickles data
+        # without ever finishing; without the deadline guard the download
+        # loop would never terminate.
+        class _EndlessResponse:
+            headers = {}  # no Content-Length -> plain stderr line, no tqdm
+
+            def read(self, n=-1):
+                return b"x" * 1024
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(url, timeout=None):  # noqa: ARG001
+            return _EndlessResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        # Fake monotonic clock: the start capture and the first loop check
+        # both read 0.0; the next check jumps far past the deadline.
+        clock = iter([0.0, 0.0])
+        monkeypatch.setattr(tcga.time, "monotonic", lambda: next(clock, 1e9))
+
+        dest = tmp_path / "out" / "STALLED.h5"
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+
+        with pytest.raises(tcga._NetworkError, match="stalled"):
+            tcga._stream_download("https://stalled.test/STALLED.h5", dest)
+
+        # The partial .tmp is cleaned up; no .h5 is left behind.
+        assert not dest.exists()
+        assert not tmp.exists()
 
 
 class TestBuildDatasetFromHdf5:
@@ -988,29 +1027,23 @@ class TestRealDataAllTcgaDatasets:
     Run with:
         pytest tests/test_tcga.py -m real_data
 
-    Skipped while ``_DEFAULT_MANIFEST_URL`` is a placeholder.
+    These tests deliberately do not use the ``cache_root`` fixture: rather than
+    redirecting ``SYNG_BTS_CACHE_DIR`` to a fresh tmp_path, they use the real
+    production cache (``tcga_cache_dir()``, default ``~/.cache/syng-bts/tcga``)
+    so the 24 HDF5 files (~34 MB each) are downloaded once per machine and
+    reused across every run.
     """
 
-    def _maybe_skip(self):
-        if tcga._DEFAULT_MANIFEST_URL.startswith("TBD-"):
-            pytest.skip(
-                "Default manifest URL not yet configured; "
-                "see Phase 3 in the plan."
-            )
-
-    def test_manifest_lists_24_datasets(self, cache_root):
-        self._maybe_skip()
+    def test_manifest_lists_24_datasets(self):
         names = list_tcga_datasets()
         assert len(names) == 24
         aliases = list_tcga_datasets(short=True)
         assert len(aliases) == 24
         assert len(set(aliases)) == 24, "Cancer-type aliases must be unique"
 
-    def test_load_every_dataset(self, cache_root):
+    def test_load_every_dataset(self):
         """Load all 24 datasets and verify every loaded TCGADataset is
         consistent with its corresponding manifest entry."""
-        self._maybe_skip()
-
         # Fetch the manifest once via the loader so we can cross-check.
         manifest = tcga._fetch_manifest(None)
         entries_by_name = {e["dataset_name"]: e for e in manifest["datasets"]}
@@ -1069,8 +1102,7 @@ class TestRealDataAllTcgaDatasets:
                     entry["n_filtered_features"],
                 ), name
 
-    def test_cache_hit_after_load(self, cache_root):
-        self._maybe_skip()
+    def test_cache_hit_after_load(self):
         # Load BRCA once to populate the cache
         load_tcga_dataset("BRCA")
 
@@ -1093,8 +1125,7 @@ class TestRealDataAllTcgaDatasets:
 
         assert calls == [], f"Expected zero network calls, got {calls}"
 
-    def test_pipeline_integration_with_smallest_dataset(self, cache_root):
-        self._maybe_skip()
+    def test_pipeline_integration_with_smallest_dataset(self):
         from syng_bts import generate
 
         ds = load_tcga_dataset("UCS")
@@ -1120,19 +1151,13 @@ class TestRealDataAllTcgaDatasets:
 
 @pytest.mark.slow
 class TestSlowIntegration:
-    """Hits the live published manifest. Skipped during Phase 1.
+    """Hits the live published manifest.
 
-    After Phase 3 (manifest URL wired in), run with:
+    Run with:
         pytest tests/test_tcga.py -m slow
     """
 
     def test_live_manifest_and_smallest_dataset(self, cache_root):
-        if tcga._DEFAULT_MANIFEST_URL.startswith("TBD-"):
-            pytest.skip(
-                "Default manifest URL not yet configured; "
-                "see Phase 3 in the plan."
-            )
-
         # Use the smallest dataset (UCS, ~14 MB) for the live round-trip.
         ds = load_tcga_dataset("UCS")
 

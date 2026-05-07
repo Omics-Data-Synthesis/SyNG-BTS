@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ _DEFAULT_MANIFEST_URL = (
 _CACHE_ENV_VAR = "SYNG_BTS_CACHE_DIR"
 _DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "syng-bts"
 _NETWORK_TIMEOUT_SECS = 60
+_DOWNLOAD_DEADLINE_SECS = 600  # wall-clock cap for one file download
 _DOWNLOAD_CHUNK_BYTES = 1 << 20  # 1 MiB
 
 VALID_NORMALIZATIONS = ("raw_norm", "TC", "DESeq")
@@ -277,8 +279,10 @@ def _stream_download(url: str, dest: Path) -> None:
 
     Streams in 1 MiB chunks so memory use stays flat regardless of file size.
     Uses tqdm if available; otherwise prints a single info line to stderr.
-    Wraps URL errors as ``_NetworkError``. Cleans up the ``.tmp`` on any
-    exception.
+    Aborts with ``_NetworkError`` if the transfer exceeds
+    ``_DOWNLOAD_DEADLINE_SECS`` wall-clock seconds, so a stalled connection
+    fails fast instead of hanging forever. Wraps URL errors as
+    ``_NetworkError``. Cleans up the ``.tmp`` on any exception.
     """
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -303,8 +307,18 @@ def _stream_download(url: str, dest: Path) -> None:
                 )
 
             try:
+                start = time.monotonic()
                 with open(tmp, "wb") as f:
                     while True:
+                        if time.monotonic() - start > _DOWNLOAD_DEADLINE_SECS:
+                            raise _NetworkError(
+                                f"Download of {dest.name} aborted after "
+                                f"{_DOWNLOAD_DEADLINE_SECS}s — transfer "
+                                f"stalled or too slow.\n"
+                                f"Check your network connection, or "
+                                f"pre-stage the file at {dest} and set "
+                                f"{_CACHE_ENV_VAR} if needed."
+                            )
                         chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
                         if not chunk:
                             break

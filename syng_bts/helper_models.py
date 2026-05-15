@@ -45,10 +45,13 @@ class VAE(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Linear(int(num_features), 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(True),
             nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(True),
             nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(True),
         )
 
@@ -57,10 +60,13 @@ class VAE(nn.Module):
 
         self.decoder = nn.Sequential(
             nn.Linear(32, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(True),
             nn.Linear(64, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(True),
             nn.Linear(128, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(True),
             nn.Linear(256, int(num_features)),
             nn.ReLU(True),

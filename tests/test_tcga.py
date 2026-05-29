@@ -157,9 +157,7 @@ def make_test_h5(
                 ng.attrs[k] = v
             d = proc_data[norm]
             ng.create_dataset("expression", data=d["expression"], dtype=np.float64)
-            ng.create_dataset(
-                "groups", data=d["groups"], dtype=h5py.string_dtype()
-            )
+            ng.create_dataset("groups", data=d["groups"], dtype=h5py.string_dtype())
             ng.create_dataset(
                 "feature_names",
                 data=d["feature_names"],
@@ -188,12 +186,8 @@ def make_test_h5(
                 mg.attrs["epochs_trained"] = 100
                 mg.attrs["normalization"] = norm
                 d = synth_data[norm][model]
-                mg.create_dataset(
-                    "expression", data=d["expression"], dtype=np.float64
-                )
-                mg.create_dataset(
-                    "groups", data=d["groups"], dtype=h5py.string_dtype()
-                )
+                mg.create_dataset("expression", data=d["expression"], dtype=np.float64)
+                mg.create_dataset("groups", data=d["groups"], dtype=h5py.string_dtype())
 
     return {
         "dataset_name": dataset_name,
@@ -440,9 +434,7 @@ class TestResolveName:
 
     def test_full_name_match(self, manifest_unique):
         assert (
-            tcga._resolve_name(
-                "UCS_primary_pathology_total_pelv_lnr", manifest_unique
-            )
+            tcga._resolve_name("UCS_primary_pathology_total_pelv_lnr", manifest_unique)
             == "UCS_primary_pathology_total_pelv_lnr"
         )
 
@@ -529,9 +521,7 @@ class TestListTcgaDatasets:
 
 
 class TestFetchAndVerifyH5:
-    def test_successful_download(
-        self, network_stub, cache_root, tmp_path
-    ):
+    def test_successful_download(self, network_stub, cache_root, tmp_path):
         # Build a fixture HDF5, capture its bytes and sha256
         src = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
         src.parent.mkdir()
@@ -578,9 +568,7 @@ class TestFetchAndVerifyH5:
         assert dest.exists()
         assert dest.read_bytes() == good_bytes
 
-    def test_sha256_mismatch_twice_raises(
-        self, network_stub, cache_root, tmp_path
-    ):
+    def test_sha256_mismatch_twice_raises(self, network_stub, cache_root, tmp_path):
         src = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
         src.parent.mkdir()
         entry = make_test_h5(src, dataset_name="BRCA_carcinoma")
@@ -691,9 +679,7 @@ class TestBuildDatasetFromHdf5:
         ds = tcga._build_dataset_from_h5(h5_file)
         assert isinstance(ds.raw, tcga.Subset)
         assert ds.raw.expression.shape == (5, 10)
-        assert list(ds.raw.expression.columns) == [
-            f"hsa-feat-{i}" for i in range(10)
-        ]
+        assert list(ds.raw.expression.columns) == [f"hsa-feat-{i}" for i in range(10)]
         assert list(ds.raw.expression.index) == [f"S{i}" for i in range(5)]
         assert list(ds.raw.groups.index) == [f"S{i}" for i in range(5)]
         assert ds.raw.groups.tolist() == ["A", "B", "A", "B", "A"]
@@ -773,9 +759,7 @@ class TestLoadTcgaDataset:
         ucs_entry = make_test_h5(ucs_path, dataset_name="UCS_other")
         manifest = make_test_manifest(brca_entry, ucs_entry)
 
-        network_stub.serve(
-            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
-        )
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
         network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
         network_stub.serve(_dataset_url("UCS_other.h5"), ucs_path.read_bytes())
 
@@ -839,12 +823,8 @@ class TestLoadTcgaDataset:
         # force=True triggers one extra h5 download (manifest still cached).
         assert n_second == n_first + 1
 
-    def test_manifest_url_override(
-        self, two_dataset_setup, network_stub, cache_root
-    ):
-        ds = load_tcga_dataset(
-            "BRCA_carcinoma", manifest_url=FIXTURE_MANIFEST_URL
-        )
+    def test_manifest_url_override(self, two_dataset_setup, network_stub, cache_root):
+        ds = load_tcga_dataset("BRCA_carcinoma", manifest_url=FIXTURE_MANIFEST_URL)
         assert ds.name == "BRCA_carcinoma"
 
     def test_corrupt_cached_h5_raises_helpful_error(
@@ -873,21 +853,15 @@ class TestClearTcgaCache:
         clear_tcga_cache()
         assert not (cache_root / "tcga").exists()
 
-    def test_removes_everything(
-        self, monkeypatch, network_stub, cache_root, tmp_path
-    ):
+    def test_removes_everything(self, monkeypatch, network_stub, cache_root, tmp_path):
         # Populate the cache
         h5_dir = tmp_path / "_fixture"
         h5_dir.mkdir()
         brca_path = h5_dir / "BRCA_carcinoma.h5"
         entry = make_test_h5(brca_path, dataset_name="BRCA_carcinoma")
         manifest = make_test_manifest(entry)
-        network_stub.serve(
-            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
-        )
-        network_stub.serve(
-            _dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes()
-        )
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
         monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
 
         load_tcga_dataset("BRCA_carcinoma")
@@ -907,12 +881,8 @@ class TestClearTcgaCache:
         brca_path = h5_dir / "BRCA_carcinoma.h5"
         entry = make_test_h5(brca_path, dataset_name="BRCA_carcinoma")
         manifest = make_test_manifest(entry)
-        network_stub.serve(
-            FIXTURE_MANIFEST_URL, json.dumps(manifest).encode()
-        )
-        network_stub.serve(
-            _dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes()
-        )
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
         monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
 
         load_tcga_dataset("BRCA_carcinoma")
@@ -956,21 +926,13 @@ class TestConvenienceAccessors:
     def test_synth_default(self, loaded_dataset):
         df, groups = loaded_dataset.synth()
         # Defaults: normalization="DESeq", model="CVAE1_5"
-        assert df.equals(
-            loaded_dataset.synthetic["DESeq"]["CVAE1_5"].expression
-        )
+        assert df.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_5"].expression)
         assert groups.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_5"].groups)
 
     def test_synth_explicit(self, loaded_dataset):
-        df, groups = loaded_dataset.synth(
-            normalization="DESeq", model="CVAE1_20"
-        )
-        assert df.equals(
-            loaded_dataset.synthetic["DESeq"]["CVAE1_20"].expression
-        )
-        assert groups.equals(
-            loaded_dataset.synthetic["DESeq"]["CVAE1_20"].groups
-        )
+        df, groups = loaded_dataset.synth(normalization="DESeq", model="CVAE1_20")
+        assert df.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_20"].expression)
+        assert groups.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_20"].groups)
 
     def test_synth_invalid_model_raises(self, loaded_dataset):
         with pytest.raises(ValueError, match="model"):
@@ -1083,9 +1045,8 @@ class TestRealDataAllTcgaDatasets:
             # 5. Index alignment in every Subset
             assert ds.raw.expression.index.equals(ds.raw.groups.index), name
             for norm in ("raw_norm", "TC", "DESeq"):
-                assert (
-                    ds.processed[norm]
-                    .expression.index.equals(ds.processed[norm].groups.index)
+                assert ds.processed[norm].expression.index.equals(
+                    ds.processed[norm].groups.index
                 ), name
                 for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
                     sub = ds.synthetic[norm][model]
@@ -1170,9 +1131,9 @@ class TestSlowIntegration:
         assert ds.raw.expression.shape[1] == 1881
         # Processed / synthetic shapes are consistent
         for norm in ("raw_norm", "TC", "DESeq"):
-            assert (
-                ds.processed[norm].expression.shape
-                == (ds.n_filtered_samples, ds.n_filtered_features)
+            assert ds.processed[norm].expression.shape == (
+                ds.n_filtered_samples,
+                ds.n_filtered_features,
             )
             for model in ("CVAE1_5", "CVAE1_10", "CVAE1_20"):
                 assert (

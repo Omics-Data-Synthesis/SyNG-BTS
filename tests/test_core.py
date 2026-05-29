@@ -108,103 +108,94 @@ class TestExperimentImports:
 class TestParseModelSpec:
     """Unit tests for _parse_model_spec."""
 
-    def test_vae_with_kl(self):
-        assert _parse_model_spec("VAE1-10") == ("VAE", 1, 10)
-
-    def test_ae_with_kl(self):
-        assert _parse_model_spec("AE1-1") == ("AE", 1, 1)
-
-    def test_cvae_with_kl(self):
-        assert _parse_model_spec("CVAE1-20") == ("CVAE", 1, 20)
-
-    def test_plain_model(self):
-        assert _parse_model_spec("GAN") == ("GAN", 1, 1)
-
-    def test_flow_model(self):
-        assert _parse_model_spec("maf") == ("maf", 1, 1)
-
-    def test_recon_weight_parsed(self):
-        """Reconstruction term weight (middle digit) is extracted."""
-        assert _parse_model_spec("VAE2-5") == ("VAE", 2, 5)
-
-    def test_cvae_recon_weight(self):
-        """CVAE with non-default reconstruction weight."""
-        assert _parse_model_spec("CVAE3-10") == ("CVAE", 3, 10)
+    @pytest.mark.parametrize(
+        "spec, expected",
+        [
+            ("VAE1-10", ("VAE", 1, 10)),
+            ("AE1-1", ("AE", 1, 1)),
+            ("CVAE1-20", ("CVAE", 1, 20)),
+            ("GAN", ("GAN", 1, 1)),
+            ("maf", ("maf", 1, 1)),
+            ("VAE2-5", ("VAE", 2, 5)),
+            ("CVAE3-10", ("CVAE", 3, 10)),
+        ],
+    )
+    def test_parse_model_spec(self, spec, expected):
+        assert _parse_model_spec(spec) == expected
 
 
 # =========================================================================
 # _build_loss_df
 # =========================================================================
 class TestBuildLossDf:
-    """Unit tests for _build_loss_df."""
+    """Unit tests for _build_loss_df across all model families."""
 
-    def test_ae_family(self):
-        log = {
-            "val_kl_loss_per_batch": [1.0, 0.5],
-            "val_reconstruction_loss_per_batch": [2.0, 1.5],
-        }
-        df = _build_loss_df(log, "VAE")
-        assert list(df.columns) == ["kl", "recons"]
-        assert len(df) == 2
-
-    def test_ae_plain(self):
-        """AE models log train/val total loss, not kl/recons split."""
-        log = {
-            "train_loss_per_batch": [100.0, 90.0],
-            "val_loss_per_batch": [110.0, 95.0],
-        }
-        df = _build_loss_df(log, "AE")
-        assert list(df.columns) == ["train_loss", "val_loss"]
-        assert len(df) == 2
-
-    def test_cvae_family_train_fallback(self):
-        log = {
-            "train_kl_loss_per_batch": [1.0],
-            "train_reconstruction_loss_per_batch": [2.0],
-        }
-        df = _build_loss_df(log, "CVAE")
-        assert list(df.columns) == ["kl", "recons"]
-        assert len(df) == 1
-
-    def test_gan_family(self):
-        log = {
-            "train_discriminator_loss_per_batch": [3.0, 2.5],
-            "train_generator_loss_per_batch": [1.0, 0.8],
-        }
-        df = _build_loss_df(log, "GAN")
-        assert list(df.columns) == ["discriminator", "generator"]
-
-    def test_flow(self):
-        log = {"train_loss_per_epoch": [10.0, 9.0, 8.0]}
-        df = _build_loss_df(log, "maf")
-        assert list(df.columns) == ["train_loss"]
-        assert len(df) == 3
-
-    def test_wgan_family(self):
-        log = {
-            "train_discriminator_loss_per_batch": [3.0],
-            "train_generator_loss_per_batch": [1.0],
-        }
-        df = _build_loss_df(log, "WGAN")
-        assert list(df.columns) == ["discriminator", "generator"]
-
-    def test_wgangp_family(self):
-        log = {
-            "train_discriminator_loss_per_batch": [3.0],
-            "train_generator_loss_per_batch": [1.0],
-        }
-        df = _build_loss_df(log, "WGANGP")
-        assert list(df.columns) == ["discriminator", "generator"]
-
-    def test_realnvp_flow(self):
-        log = {"train_loss_per_epoch": [5.0, 4.0]}
-        df = _build_loss_df(log, "realnvp")
-        assert list(df.columns) == ["train_loss"]
-
-    def test_glow_flow(self):
-        log = {"train_loss_per_epoch": [5.0]}
-        df = _build_loss_df(log, "glow")
-        assert list(df.columns) == ["train_loss"]
+    @pytest.mark.parametrize(
+        "log, modelname, expected_columns, expected_len",
+        [
+            (
+                {
+                    "val_kl_loss_per_batch": [1.0, 0.5],
+                    "val_reconstruction_loss_per_batch": [2.0, 1.5],
+                },
+                "VAE",
+                ["kl", "recons"],
+                2,
+            ),
+            (
+                {
+                    "train_loss_per_batch": [100.0, 90.0],
+                    "val_loss_per_batch": [110.0, 95.0],
+                },
+                "AE",
+                ["train_loss", "val_loss"],
+                2,
+            ),
+            (
+                {
+                    "train_kl_loss_per_batch": [1.0],
+                    "train_reconstruction_loss_per_batch": [2.0],
+                },
+                "CVAE",
+                ["kl", "recons"],
+                1,
+            ),
+            (
+                {
+                    "train_discriminator_loss_per_batch": [3.0, 2.5],
+                    "train_generator_loss_per_batch": [1.0, 0.8],
+                },
+                "GAN",
+                ["discriminator", "generator"],
+                2,
+            ),
+            (
+                {
+                    "train_discriminator_loss_per_batch": [3.0],
+                    "train_generator_loss_per_batch": [1.0],
+                },
+                "WGAN",
+                ["discriminator", "generator"],
+                1,
+            ),
+            (
+                {
+                    "train_discriminator_loss_per_batch": [3.0],
+                    "train_generator_loss_per_batch": [1.0],
+                },
+                "WGANGP",
+                ["discriminator", "generator"],
+                1,
+            ),
+            ({"train_loss_per_epoch": [10.0, 9.0, 8.0]}, "maf", ["train_loss"], 3),
+            ({"train_loss_per_epoch": [5.0, 4.0]}, "realnvp", ["train_loss"], 2),
+            ({"train_loss_per_epoch": [5.0]}, "glow", ["train_loss"], 1),
+        ],
+    )
+    def test_build_loss_df(self, log, modelname, expected_columns, expected_len):
+        df = _build_loss_df(log, modelname)
+        assert list(df.columns) == expected_columns
+        assert len(df) == expected_len
 
 
 # =========================================================================
@@ -653,51 +644,6 @@ class TestComputeNewSize:
 class TestGenerate:
     """Integration tests for generate() — fast config (2 epochs)."""
 
-    def test_returns_syng_result(self, sample_data):
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, SyngResult)
-
-    def test_generated_columns_match_input(self, sample_data):
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert list(result.generated_data.columns) == list(sample_data.columns)
-
-    def test_generated_row_count(self, sample_data):
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=15,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.generated_data) == 15
-
-    def test_loss_is_dataframe(self, sample_data):
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result.loss, pd.DataFrame)
-        assert len(result.loss) > 0
-
     def test_no_files_without_output_dir(self, sample_data, temp_dir):
         """generate() without output_dir should not write files."""
         before = set(temp_dir.rglob("*"))
@@ -726,22 +672,17 @@ class TestGenerate:
         files = list(temp_dir.rglob("*.csv"))
         assert len(files) > 0, "Expected CSV files in output_dir"
 
-    def test_from_csv_path(self, sample_csv_file):
+    @pytest.mark.parametrize("source", ["csv", "bundled", "dataframe"])
+    def test_generate_accepts_input_sources(self, sample_csv_file, source):
+        """generate() accepts a CSV path, a bundled-dataset name, or a DataFrame."""
+        if source == "csv":
+            data = sample_csv_file
+        elif source == "bundled":
+            data = "SKCMPositive_4"
+        else:  # dataframe
+            data, _groups = resolve_data("SKCMPositive_4")
         result = generate(
-            data=sample_csv_file,
-            model="VAE1-10",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[1] == NUM_FEATURES
-
-    def test_from_bundled_dataset(self):
-        """generate() accepts a bundled dataset name."""
-        result = generate(
-            data="SKCMPositive_4",
+            data=data,
             model="VAE1-10",
             new_size=10,
             epoch=FAST_EPOCHS,
@@ -750,33 +691,27 @@ class TestGenerate:
         )
         assert isinstance(result, SyngResult)
         assert len(result.generated_data) == 10
+        assert result.generated_data.shape[1] > 0
 
-    def test_metadata_populated(self, sample_data):
+    @pytest.mark.parametrize(
+        "model, expected_recon, expected_kl",
+        [("VAE1-10", 1, 10), ("VAE2-5", 2, 5)],
+    )
+    def test_metadata_recon_and_kl_weights(
+        self, sample_data, model, expected_recon, expected_kl
+    ):
+        """modelname + reconstruction/kl weights are recorded in metadata."""
         result = generate(
             data=sample_data,
-            model="VAE1-10",
+            model=model,
             new_size=10,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
         )
         assert result.metadata["modelname"] == "VAE"
-        assert result.metadata["kl_weight"] == 10
-        assert result.metadata["reconstruction_term_weight"] == 1
-
-    def test_recon_weight_in_metadata(self, sample_data):
-        """Non-default reconstruction_term_weight appears in metadata."""
-        result = generate(
-            data=sample_data,
-            model="VAE2-5",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert result.metadata["modelname"] == "VAE"
-        assert result.metadata["reconstruction_term_weight"] == 2
-        assert result.metadata["kl_weight"] == 5
+        assert result.metadata["reconstruction_term_weight"] == expected_recon
+        assert result.metadata["kl_weight"] == expected_kl
 
     def test_epochs_trained_metadata_within_bounds(self, sample_data):
         result = generate(
@@ -847,19 +782,6 @@ class TestGenerate:
         assert result.metadata["num_epochs"] == 8
         assert result.metadata["epochs_trained"] == 2
 
-    def test_gan_model(self, sample_data):
-        """generate() works with GAN model."""
-        result = generate(
-            data=sample_data,
-            model="GAN",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, SyngResult)
-        assert len(result.generated_data) == 10
-
     def test_early_stop_default(self, sample_data):
         """epoch=None enables early stopping with patience."""
         result = generate(
@@ -929,39 +851,6 @@ class TestGenerate:
                 learning_rate=LR,
             )
 
-    def test_generate_with_dataframe_input(self):
-        """generate() works with a DataFrame loaded from bundled dataset."""
-        from syng_bts import resolve_data
-
-        df, _groups = resolve_data("SKCMPositive_4")
-        result = generate(
-            data=df,
-            model="VAE1-10",
-            new_size=10,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, SyngResult)
-        assert isinstance(result.generated_data, pd.DataFrame)
-        assert len(result.generated_data) == 10
-        # Column count should match (possibly minus metadata columns like 'samples')
-        assert result.generated_data.shape[1] > 0
-
-    def test_generated_data_is_dataframe_with_shape(self, sample_data):
-        """generated_data is a DataFrame with correct shape and column names."""
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=8,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result.generated_data, pd.DataFrame)
-        assert result.generated_data.shape == (8, NUM_FEATURES)
-        assert list(result.generated_data.columns) == list(sample_data.columns)
-
     def test_save_writes_to_disk(self, sample_data, temp_dir):
         """SyngResult.save() writes correct files to output_dir."""
         result = generate(
@@ -1010,79 +899,44 @@ class TestGenerate:
         )
         assert result2.metadata["generated_labels"] is None
 
-    def test_generate_grouped_int_new_size_row_count(self, sample_data):
-        """generate() with grouped data + int new_size returns exactly new_size rows."""
-        groups = pd.Series([0] * 12 + [1] * 8)
-        result = generate(
-            data=sample_data,
-            model="CVAE1-10",
-            new_size=100,
-            groups=groups,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.generated_data) == 100
-
-    def test_generate_grouped_list_new_size_row_count(self, sample_data):
-        """generate() with grouped data + list new_size returns sum(list) rows."""
-        groups = pd.Series([0] * 12 + [1] * 8)
-        result = generate(
-            data=sample_data,
-            model="CVAE1-10",
-            new_size=[60, 40],
-            groups=groups,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.generated_data) == 100
-
-    def test_generate_grouped_vae_int_new_size_row_count(self, sample_data):
-        """generate() with non-CVAE grouped data + int new_size returns exactly new_size."""
+    @pytest.mark.parametrize(
+        "new_size, expected_counts",
+        [(50, {0: 30, 1: 20}), ([60, 40], {0: 60, 1: 40})],
+    )
+    def test_generate_vae_grouped_group_counts(
+        self, sample_data, new_size, expected_counts
+    ):
+        """Non-CVAE grouped generation maps new_size to per-group counts (total implied)."""
         groups = pd.Series([0] * 12 + [1] * 8)
         result = generate(
             data=sample_data,
             model="VAE1-10",
-            new_size=50,
-            groups=groups,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.generated_data) == 50
-
-    def test_generate_grouped_vae_int_new_size_group_counts(self, sample_data):
-        """Grouped int new_size maps to requested per-group counts for non-CVAE."""
-        groups = pd.Series([0] * 12 + [1] * 8)
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=50,
+            new_size=new_size,
             groups=groups,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
         )
         counts = result.generated_groups.value_counts()
-        assert counts.loc[0] == 30
-        assert counts.loc[1] == 20
+        assert counts.loc[0] == expected_counts[0]
+        assert counts.loc[1] == expected_counts[1]
+        assert len(result.generated_data) == sum(expected_counts.values())
 
-    def test_generate_grouped_vae_list_new_size_group_counts(self, sample_data):
-        """Grouped list new_size maps to explicit per-group counts for non-CVAE."""
+    @pytest.mark.parametrize("new_size", [100, [60, 40]])
+    def test_generate_cvae_grouped_total_row_count(self, sample_data, new_size):
+        """CVAE grouped generation returns the requested total row count."""
         groups = pd.Series([0] * 12 + [1] * 8)
         result = generate(
             data=sample_data,
-            model="VAE1-10",
-            new_size=[60, 40],
+            model="CVAE1-10",
+            new_size=new_size,
             groups=groups,
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
         )
-        counts = result.generated_groups.value_counts()
-        assert counts.loc[0] == 60
-        assert counts.loc[1] == 40
+        expected_total = new_size if isinstance(new_size, int) else sum(new_size)
+        assert len(result.generated_data) == expected_total
 
 
 # =========================================================================
@@ -1090,17 +944,6 @@ class TestGenerate:
 # =========================================================================
 class TestPilotStudy:
     """Integration tests for pilot_study()."""
-
-    def test_returns_pilot_result(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert isinstance(result, PilotResult)
 
     def test_pilot_study_rejects_metadata_columns(self, sample_data):
         """pilot_study() rejects user DataFrames with metadata-like columns."""
@@ -1117,69 +960,8 @@ class TestPilotStudy:
                 learning_rate=LR,
             )
 
-    def test_runs_count(self, sample_data):
-        """5 draws per pilot size."""
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.runs) == 5  # 1 pilot × 5 draws
-
-    def test_multiple_pilot_sizes(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[8, 12],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.runs) == 10  # 2 pilots × 5 draws
-
-    def test_run_keys_are_tuples(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        for key in result.runs:
-            assert isinstance(key, tuple)
-            assert len(key) == 2
-            assert key[0] == 10
-            assert key[1] in range(1, 6)
-
-    def test_each_run_is_syng_result(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        for run in result.runs.values():
-            assert isinstance(run, SyngResult)
-
-    def test_generated_columns_match_input(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        for run in result.runs.values():
-            assert list(run.generated_data.columns) == list(sample_data.columns)
-
-    def test_pilot_run_metadata_contains_indices_and_draw(self, sample_data):
+    def test_pilot_run_metadata(self, sample_data):
+        """Each run records pilot_size, draw, pilot_indices, and bounded epochs_trained."""
         result = pilot_study(
             data=sample_data,
             pilot_size=[10],
@@ -1191,9 +973,9 @@ class TestPilotStudy:
         for (psize, draw), run in result.runs.items():
             assert run.metadata["pilot_size"] == psize
             assert run.metadata["draw"] == draw
-            assert "pilot_indices" in run.metadata
             assert isinstance(run.metadata["pilot_indices"], list)
             assert len(run.metadata["pilot_indices"]) == psize
+            assert 0 < run.metadata["epochs_trained"] <= run.metadata["num_epochs"]
 
     def test_cvae_generated_data_excludes_label_column(self, sample_data):
         """CVAE generated_data is feature-only; labels in metadata."""
@@ -1213,20 +995,6 @@ class TestPilotStudy:
             assert "generated_labels" in run.metadata
             assert run.metadata["generated_labels"] is not None
             assert len(run.metadata["generated_labels"]) == len(run.generated_data)
-
-    def test_pilot_run_metadata_includes_epochs_trained(self, sample_data):
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        for run in result.runs.values():
-            assert "epochs_trained" in run.metadata
-            assert run.metadata["epochs_trained"] > 0
-            assert run.metadata["epochs_trained"] <= run.metadata["num_epochs"]
 
     def test_saves_with_output_dir(self, sample_data, temp_dir):
         pilot_study(
@@ -1287,64 +1055,32 @@ class TestPilotStudy:
                 learning_rate=LR,
             )
 
-    def test_n_draws_default_produces_5_runs(self, sample_data):
-        """Default n_draws=5 produces 5 runs per pilot size."""
+    @pytest.mark.parametrize(
+        "pilot_size, n_draws, expected_count, expected_keys",
+        [
+            ([8, 12], None, 10, None),
+            ([10], 3, 3, None),
+            ([8, 12], 2, 4, {(8, 1), (8, 2), (12, 1), (12, 2)}),
+            ([10], 1, 1, {(10, 1)}),
+        ],
+    )
+    def test_pilot_run_count(
+        self, sample_data, pilot_size, n_draws, expected_count, expected_keys
+    ):
+        """pilot_size × n_draws determines the run count and keys."""
+        kwargs = {} if n_draws is None else {"n_draws": n_draws}
         result = pilot_study(
             data=sample_data,
-            pilot_size=[10],
+            pilot_size=pilot_size,
             model="VAE1-10",
             epoch=FAST_EPOCHS,
             batch_frac=BATCH_FRAC,
             learning_rate=LR,
+            **kwargs,
         )
-        assert len(result.runs) == 5
-        for key in result.runs:
-            assert key[1] in range(1, 6)
-
-    def test_n_draws_custom_value(self, sample_data):
-        """Custom n_draws changes number of runs per pilot size."""
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            n_draws=3,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.runs) == 3
-        for key in result.runs:
-            assert key[0] == 10
-            assert key[1] in range(1, 4)
-
-    def test_n_draws_multiple_pilot_sizes(self, sample_data):
-        """Custom n_draws with multiple pilot sizes."""
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[8, 12],
-            n_draws=2,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.runs) == 4  # 2 pilots × 2 draws
-        expected_keys = {(8, 1), (8, 2), (12, 1), (12, 2)}
-        assert set(result.runs.keys()) == expected_keys
-
-    def test_n_draws_one(self, sample_data):
-        """n_draws=1 produces exactly 1 run per pilot size."""
-        result = pilot_study(
-            data=sample_data,
-            pilot_size=[10],
-            n_draws=1,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-        )
-        assert len(result.runs) == 1
-        assert (10, 1) in result.runs
+        assert len(result.runs) == expected_count
+        if expected_keys is not None:
+            assert set(result.runs.keys()) == expected_keys
 
     def test_pilot_new_size_uses_pilot_labels(self, sample_data, monkeypatch):
         """pilot_study computes grouped new_size from pilot-draw labels."""

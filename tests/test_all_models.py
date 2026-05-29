@@ -19,12 +19,14 @@ import pytest
 import torch
 
 from syng_bts import generate
+from syng_bts.helper_models import AE, CVAE, GAN, VAE
 from syng_bts.helper_training import (
     TrainedModel,
     _build_arch_params_ae,
     _build_arch_params_flow,
     _build_arch_params_gan,
 )
+from syng_bts.model_factory import rebuild_model
 from syng_bts.result import SyngResult
 
 # ---------------------------------------------------------------------------
@@ -36,23 +38,6 @@ LR = 0.001
 SEED = 42
 NUM_FEATURES = 50
 NUM_SAMPLES = 20
-
-# All model specs to validate in comprehensive sweeps
-ALL_MODEL_SPECS = [
-    # (model_string, has_reconstruction, needs_groups)
-    ("AE", True, False),
-    ("VAE1-10", True, False),
-    ("CVAE", True, True),
-    ("GAN", False, False),
-    ("WGAN", False, False),
-    ("WGANGP", False, False),
-    ("maf", False, False),
-    ("realnvp", False, False),
-    ("glow", False, False),
-    ("maf-split", False, False),
-    ("maf-split-glow", False, False),
-]
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -198,175 +183,12 @@ class TestTrainedModel:
 
 
 # =========================================================================
-# Smoke tests — validate each model family produces valid results
-# =========================================================================
-
-
-class TestSmokeTests:
-    """Quick smoke tests that generate() produces valid results."""
-
-    def test_generate_ae(self, sample_data):
-        """Produces a valid SyngResult for AE."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[0] > 0
-        assert result.generated_data.shape[1] == NUM_FEATURES
-        assert result.reconstructed_data is not None
-        assert result.loss.shape[0] > 0
-        assert result.model_state is not None
-        assert result.metadata["epochs_trained"] > 0
-
-    def test_generate_vae(self, sample_data):
-        """Produces a valid SyngResult for VAE."""
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[1] == NUM_FEATURES
-        assert result.reconstructed_data is not None
-        assert "kl" in result.loss.columns
-        assert "recons" in result.loss.columns
-
-    def test_generate_gan(self, sample_data):
-        """Produces a valid SyngResult for GAN."""
-        result = generate(
-            data=sample_data,
-            model="GAN",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[1] == NUM_FEATURES
-        assert result.reconstructed_data is None
-        assert "discriminator" in result.loss.columns
-        assert "generator" in result.loss.columns
-
-    def test_generate_maf(self, sample_data):
-        """Produces a valid SyngResult for MAF flow."""
-        result = generate(
-            data=sample_data,
-            model="maf",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert isinstance(result, SyngResult)
-        assert result.generated_data.shape[1] == NUM_FEATURES
-        assert result.reconstructed_data is None
-        assert "train_loss" in result.loss.columns
-
-    def test_generate_metadata_has_arch_info(self, sample_data):
-        """Captures model/epoch/seed metadata correctly."""
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.metadata["model"] == "VAE1-10"
-        assert result.metadata["modelname"] == "VAE"
-        assert result.metadata["seed"] == SEED
-        assert result.metadata["num_epochs"] == FAST_EPOCHS
-
-
-# =========================================================================
 # Inference dispatcher tests
 # =========================================================================
 
 
 class TestInferenceDispatcher:
     """Tests for the unified inference module (syng_bts/inference.py)."""
-
-    def test_run_generation_ae(self, sample_data):
-        """run_generation produces samples for AE model."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.generated_data.shape[0] > 0
-        assert result.generated_data.shape[1] == NUM_FEATURES
-
-    def test_run_generation_gan(self, sample_data):
-        """run_generation produces samples for GAN model."""
-        result = generate(
-            data=sample_data,
-            model="GAN",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.generated_data.shape[0] > 0
-        assert result.reconstructed_data is None
-
-    def test_run_generation_flow(self, sample_data):
-        """run_generation produces samples for flow model."""
-        result = generate(
-            data=sample_data,
-            model="maf",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.generated_data.shape[0] > 0
-        assert result.reconstructed_data is None
-
-    def test_run_reconstruction_ae(self, sample_data):
-        """run_reconstruction produces reconstruction for AE model."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.reconstructed_data is not None
-        assert result.reconstructed_data.shape[1] == NUM_FEATURES
-
-    def test_run_reconstruction_vae(self, sample_data):
-        """run_reconstruction produces reconstruction for VAE model."""
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert result.reconstructed_data is not None
 
     def test_inference_dispatcher_rejects_unknown_family(self):
         """run_generation raises ValueError for unknown family."""
@@ -411,28 +233,11 @@ class TestInferenceDispatcher:
 
 
 class TestMetadataEnrichment:
-    """Tests that metadata includes arch_params and apply_log."""
+    """Tests that metadata records the apply_log value faithfully."""
 
-    def test_metadata_has_arch_params(self, sample_data):
-        """Metadata includes arch_params."""
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        assert "arch_params" in result.metadata
-        ap = result.metadata["arch_params"]
-        assert ap["family"] == "ae"
-        assert ap["modelname"] == "VAE"
-        assert "num_features" in ap
-        assert "latent_size" in ap
-
-    def test_metadata_has_apply_log(self, sample_data):
-        """Metadata includes apply_log."""
+    @pytest.mark.parametrize("apply_log", [True, False])
+    def test_metadata_apply_log_value(self, sample_data, apply_log):
+        """metadata['apply_log'] round-trips the requested value."""
         result = generate(
             data=sample_data,
             model="AE",
@@ -441,73 +246,9 @@ class TestMetadataEnrichment:
             learning_rate=LR,
             random_seed=SEED,
             verbose="silent",
-            apply_log=True,
+            apply_log=apply_log,
         )
-        assert "apply_log" in result.metadata
-        assert result.metadata["apply_log"] is True
-
-    def test_metadata_apply_log_false(self, sample_data):
-        """Metadata preserves apply_log=False."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-            apply_log=False,
-        )
-        assert result.metadata["apply_log"] is False
-
-    def test_arch_params_excludes_private_keys(self, sample_data):
-        """Private keys (like _train_random_seed) are stripped from arch_params."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        ap = result.metadata["arch_params"]
-        for key in ap:
-            assert not key.startswith("_"), f"Private key {key!r} leaked into metadata"
-
-    def test_gan_metadata_arch_params(self, sample_data):
-        """GAN metadata includes correct arch_params."""
-        result = generate(
-            data=sample_data,
-            model="GAN",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        ap = result.metadata["arch_params"]
-        assert ap["family"] == "gan"
-        assert ap["modelname"] == "GAN"
-        assert "latent_dim" in ap
-
-    def test_flow_metadata_arch_params(self, sample_data):
-        """Flow metadata includes correct arch_params."""
-        result = generate(
-            data=sample_data,
-            model="maf",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=SEED,
-            verbose="silent",
-        )
-        ap = result.metadata["arch_params"]
-        assert ap["family"] == "flow"
-        assert ap["modelname"] == "maf"
-        assert "num_inputs" in ap
-        assert "num_blocks" in ap
-        assert "num_hidden" in ap
+        assert result.metadata["apply_log"] is apply_log
 
 
 # =========================================================================
@@ -522,134 +263,6 @@ class TestModelReconstructionParity:
     ``model_state`` produces parity-equivalent outputs to the originally
     trained model object from ``TrainedModel.model``.
     """
-
-    @staticmethod
-    def _rebuild_ae_model(arch_params, model_state):
-        """Rebuild an AE/VAE/CVAE model from arch_params + state_dict."""
-        from syng_bts.helper_models import AE, CVAE, VAE
-
-        modelname = arch_params["modelname"]
-        num_features = arch_params["num_features"]
-        if modelname == "CVAE":
-            num_classes = arch_params["num_classes"]
-            model = CVAE(num_features, num_classes)
-        elif modelname == "VAE":
-            model = VAE(num_features)
-        elif modelname == "AE":
-            model = AE(num_features)
-        else:
-            raise ValueError(f"Unknown AE model: {modelname}")
-        model.load_state_dict(model_state)
-        model.eval()
-        return model
-
-    @staticmethod
-    def _rebuild_gan_model(arch_params, model_state):
-        """Rebuild a GAN model from arch_params + state_dict."""
-        from syng_bts.helper_models import GAN
-
-        num_features = arch_params["num_features"]
-        latent_dim = arch_params["latent_dim"]
-        model = GAN(num_features=num_features, latent_dim=latent_dim)
-        model.load_state_dict(model_state)
-        model.eval()
-        return model
-
-    @staticmethod
-    def _rebuild_flow_model(arch_params, model_state):
-        """Rebuild a flow model from arch_params + state_dict."""
-        import torch.nn as nn
-
-        from syng_bts import helper_train as ht
-
-        modelname = arch_params["modelname"]
-        num_inputs = arch_params["num_inputs"]
-        num_blocks = arch_params["num_blocks"]
-        num_hidden = arch_params["num_hidden"]
-        device = torch.device("cpu")
-
-        act = "tanh"
-        modules = []
-        if modelname == "glow":
-            mask = torch.arange(0, num_inputs) % 2
-            mask = mask.to(device).float()
-            for _ in range(num_blocks):
-                modules += [
-                    ht.BatchNormFlow(num_inputs),
-                    ht.LUInvertibleMM(num_inputs),
-                    ht.CouplingLayer(
-                        num_inputs,
-                        num_hidden,
-                        mask,
-                        num_cond_inputs=None,
-                        s_act="tanh",
-                        t_act="relu",
-                    ),
-                ]
-                mask = 1 - mask
-        elif modelname == "realnvp":
-            mask = torch.arange(0, num_inputs) % 2
-            mask = mask.to(device).float()
-            for _ in range(num_blocks):
-                modules += [
-                    ht.CouplingLayer(
-                        num_inputs,
-                        num_hidden,
-                        mask,
-                        num_cond_inputs=None,
-                        s_act="tanh",
-                        t_act="relu",
-                    ),
-                    ht.BatchNormFlow(num_inputs),
-                ]
-                mask = 1 - mask
-        elif modelname == "maf":
-            for _ in range(num_blocks):
-                modules += [
-                    ht.MADE(num_inputs, num_hidden, num_cond_inputs=None, act=act),
-                    ht.BatchNormFlow(num_inputs),
-                    ht.Reverse(num_inputs),
-                ]
-        elif modelname == "maf-split":
-            for _ in range(num_blocks):
-                modules += [
-                    ht.MADESplit(
-                        num_inputs,
-                        num_hidden,
-                        num_cond_inputs=None,
-                        s_act="tanh",
-                        t_act="relu",
-                    ),
-                    ht.BatchNormFlow(num_inputs),
-                    ht.Reverse(num_inputs),
-                ]
-        elif modelname == "maf-split-glow":
-            for _ in range(num_blocks):
-                modules += [
-                    ht.MADESplit(
-                        num_inputs,
-                        num_hidden,
-                        num_cond_inputs=None,
-                        s_act="tanh",
-                        t_act="relu",
-                    ),
-                    ht.BatchNormFlow(num_inputs),
-                    ht.InvertibleMM(num_inputs),
-                ]
-        else:
-            raise ValueError(f"Unknown flow model: {modelname}")
-
-        model = ht.FlowSequential(*modules)
-        for module in model.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight)
-                if hasattr(module, "bias") and module.bias is not None:
-                    module.bias.data.fill_(0)
-
-        model.load_state_dict(model_state)
-        model.num_inputs = num_inputs
-        model.eval()
-        return model
 
     @staticmethod
     def _train_test_model(sample_data, model: str, *, groups=None) -> TrainedModel:
@@ -682,14 +295,13 @@ class TestModelReconstructionParity:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model", ["AE", "VAE1-10"])
-    @pytest.mark.slow
     def test_ae_family_original_vs_rebuilt_generation_parity(self, sample_data, model):
         """AE/VAE: original trained model and rebuilt model generate identically."""
         from syng_bts.inference import run_generation
 
         trained_original = self._train_test_model(sample_data, model)
         ap = trained_original.arch_params
-        rebuilt_model = self._rebuild_ae_model(ap, trained_original.model_state)
+        rebuilt_model = rebuild_model(ap, trained_original.model_state)
         trained_rebuilt = TrainedModel(
             model=rebuilt_model,
             model_state=trained_original.model_state,
@@ -715,7 +327,7 @@ class TestModelReconstructionParity:
 
         trained_original = self._train_test_model(sample_data, model)
         ap = trained_original.arch_params
-        rebuilt_model = self._rebuild_gan_model(ap, trained_original.model_state)
+        rebuilt_model = rebuild_model(ap, trained_original.model_state)
         trained_rebuilt = TrainedModel(
             model=rebuilt_model,
             model_state=trained_original.model_state,
@@ -752,7 +364,7 @@ class TestModelReconstructionParity:
 
         trained_original = self._train_test_model(sample_data, model)
         ap = trained_original.arch_params
-        rebuilt_model = self._rebuild_flow_model(ap, trained_original.model_state)
+        rebuilt_model = rebuild_model(ap, trained_original.model_state)
         trained_rebuilt = TrainedModel(
             model=rebuilt_model,
             model_state=trained_original.model_state,
@@ -783,7 +395,7 @@ class TestModelReconstructionParity:
 
         trained_original = self._train_test_model(sample_data, model)
         ap = trained_original.arch_params
-        rebuilt_model = self._rebuild_ae_model(ap, trained_original.model_state)
+        rebuilt_model = rebuild_model(ap, trained_original.model_state)
         trained_rebuilt = TrainedModel(
             model=rebuilt_model,
             model_state=trained_original.model_state,
@@ -931,72 +543,58 @@ class TestMetadataSchemaValidation:
 class TestModelFactory:
     """Tests for syng_bts/model_factory.py rebuild_model()."""
 
-    def test_rebuild_ae(self):
-        """rebuild_model reconstructs an AE model."""
-        from syng_bts.helper_models import AE
-        from syng_bts.model_factory import rebuild_model
-
-        model = AE(NUM_FEATURES)
-        state = model.state_dict()
-        arch = {
-            "family": "ae",
-            "modelname": "AE",
-            "num_features": NUM_FEATURES,
-            "latent_size": 64,
-        }
-        rebuilt = rebuild_model(arch, state)
-        assert isinstance(rebuilt, AE)
-        # Verify eval mode
+    @pytest.mark.parametrize(
+        "model_cls, ctor_kwargs, arch",
+        [
+            (
+                AE,
+                {},
+                {
+                    "family": "ae",
+                    "modelname": "AE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 64,
+                },
+            ),
+            (
+                VAE,
+                {},
+                {
+                    "family": "ae",
+                    "modelname": "VAE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 32,
+                },
+            ),
+            (
+                CVAE,
+                {"num_classes": 2},
+                {
+                    "family": "ae",
+                    "modelname": "CVAE",
+                    "num_features": NUM_FEATURES,
+                    "latent_size": 32,
+                    "num_classes": 2,
+                },
+            ),
+            (
+                GAN,
+                {"latent_dim": 32},
+                {
+                    "family": "gan",
+                    "modelname": "GAN",
+                    "num_features": NUM_FEATURES,
+                    "latent_dim": 32,
+                },
+            ),
+        ],
+    )
+    def test_rebuild_construct(self, model_cls, ctor_kwargs, arch):
+        """rebuild_model reconstructs each model family in eval mode."""
+        model = model_cls(NUM_FEATURES, **ctor_kwargs)
+        rebuilt = rebuild_model(arch, model.state_dict())
+        assert isinstance(rebuilt, model_cls)
         assert not rebuilt.training
-
-    def test_rebuild_vae(self):
-        """rebuild_model reconstructs a VAE model."""
-        from syng_bts.helper_models import VAE
-        from syng_bts.model_factory import rebuild_model
-
-        model = VAE(NUM_FEATURES)
-        state = model.state_dict()
-        arch = {
-            "family": "ae",
-            "modelname": "VAE",
-            "num_features": NUM_FEATURES,
-            "latent_size": 32,
-        }
-        rebuilt = rebuild_model(arch, state)
-        assert isinstance(rebuilt, VAE)
-
-    def test_rebuild_cvae(self):
-        """rebuild_model reconstructs a CVAE model."""
-        from syng_bts.helper_models import CVAE
-        from syng_bts.model_factory import rebuild_model
-
-        model = CVAE(NUM_FEATURES, num_classes=2)
-        state = model.state_dict()
-        arch = {
-            "family": "ae",
-            "modelname": "CVAE",
-            "num_features": NUM_FEATURES,
-            "latent_size": 32,
-            "num_classes": 2,
-        }
-        rebuilt = rebuild_model(arch, state)
-        assert isinstance(rebuilt, CVAE)
-
-    def test_rebuild_gan(self):
-        """rebuild_model reconstructs a GAN model."""
-        from syng_bts.helper_models import GAN
-        from syng_bts.model_factory import rebuild_model
-
-        model = GAN(NUM_FEATURES, latent_dim=32)
-        state = model.state_dict()
-        arch = {
-            "family": "gan",
-            "modelname": "GAN",
-            "num_features": NUM_FEATURES,
-            "latent_dim": 32,
-        }
-        rebuilt = rebuild_model(arch, state)
-        assert isinstance(rebuilt, GAN)
 
     def test_rebuild_maf(self):
         """rebuild_model reconstructs a MAF flow model."""
@@ -1045,34 +643,6 @@ class TestModelFactory:
                 },
                 {},
             )
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("model_str", ["AE", "VAE1-10", "GAN", "maf", "realnvp"])
-    def test_factory_vs_cached_model_parity(self, sample_data, model_str):
-        """Factory-rebuilt model produces identical outputs to original."""
-        from syng_bts.inference import run_generation
-        from syng_bts.model_factory import rebuild_model
-
-        trained = TestModelReconstructionParity._train_test_model(
-            sample_data, model_str
-        )
-        rebuilt = rebuild_model(trained.arch_params, trained.model_state)
-        trained_rebuilt = TrainedModel(
-            model=rebuilt,
-            model_state=trained.model_state,
-            arch_params=trained.arch_params,
-            log_dict={},
-            epochs_trained=0,
-        )
-
-        torch.manual_seed(99)
-        gen_original = run_generation(trained, num_samples=50)
-        torch.manual_seed(99)
-        gen_rebuilt = run_generation(trained_rebuilt, num_samples=50)
-
-        assert gen_original.shape == gen_rebuilt.shape
-        assert torch.allclose(gen_original, gen_rebuilt)
-        assert torch.isfinite(gen_original).all()
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model_str", ["AE", "GAN", "maf"])

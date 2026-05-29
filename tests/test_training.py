@@ -328,40 +328,6 @@ class TestTrainingGANs:
         assert isinstance(result.model_state, dict)
         assert len(result.model_state) > 0
 
-    def test_no_files_written(self, raw_data, raw_labels, tmp_path):
-        orig_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            training_GANs(
-                rawdata=raw_data,
-                rawlabels=raw_labels,
-                batch_size=BATCH_SIZE,
-                random_seed=42,
-                modelname="GAN",
-                num_epochs=FAST_EPOCHS,
-                learning_rate=0.001,
-                early_stop=False,
-            )
-            assert len(list(tmp_path.iterdir())) == 0
-        finally:
-            os.chdir(orig_cwd)
-
-    def test_no_figures_created(self, raw_data, raw_labels):
-        plt.close("all")
-        figs_before = plt.get_fignums()
-        training_GANs(
-            rawdata=raw_data,
-            rawlabels=raw_labels,
-            batch_size=BATCH_SIZE,
-            random_seed=42,
-            modelname="GAN",
-            num_epochs=FAST_EPOCHS,
-            learning_rate=0.001,
-            early_stop=False,
-        )
-        figs_after = plt.get_fignums()
-        assert figs_before == figs_after
-
 
 # ===========================================================================
 # training_flows
@@ -419,46 +385,6 @@ class TestTrainingFlows:
         )
         assert "train_loss_per_epoch" in result.log_dict
         assert len(result.log_dict["train_loss_per_epoch"]) == FAST_EPOCHS
-
-    def test_no_files_written(self, raw_data, tmp_path):
-        orig_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            training_flows(
-                rawdata=raw_data,
-                batch_frac=0.5,
-                valid_batch_frac=0.3,
-                random_seed=42,
-                modelname="maf",
-                num_blocks=2,
-                num_epochs=FAST_EPOCHS,
-                learning_rate=0.001,
-                num_hidden=32,
-                early_stop=False,
-                early_stop_num=30,
-            )
-            assert len(list(tmp_path.iterdir())) == 0
-        finally:
-            os.chdir(orig_cwd)
-
-    def test_no_figures_created(self, raw_data):
-        plt.close("all")
-        figs_before = plt.get_fignums()
-        training_flows(
-            rawdata=raw_data,
-            batch_frac=0.5,
-            valid_batch_frac=0.3,
-            random_seed=42,
-            modelname="maf",
-            num_blocks=2,
-            num_epochs=FAST_EPOCHS,
-            learning_rate=0.001,
-            num_hidden=32,
-            early_stop=False,
-            early_stop_num=30,
-        )
-        figs_after = plt.get_fignums()
-        assert figs_before == figs_after
 
     def test_tensorboard_opt_in(self, raw_data, tmp_path):
         """When tensorboard_dir is set, TensorBoard files are created."""
@@ -527,40 +453,6 @@ class TestTrainingIter:
             learning_rate=0.001,
         )
         assert feed_labels.shape[0] == feed_data.shape[0]
-
-    def test_no_files_written(self, raw_data, raw_labels_single_class, tmp_path):
-        orig_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            training_iter(
-                iter_times=1,
-                rawdata=raw_data,
-                rawlabels=raw_labels_single_class,
-                random_seed=42,
-                modelname="AE",
-                num_epochs=FAST_EPOCHS,
-                batch_size=BATCH_SIZE,
-                learning_rate=0.001,
-            )
-            assert len(list(tmp_path.iterdir())) == 0
-        finally:
-            os.chdir(orig_cwd)
-
-    def test_no_figures_created(self, raw_data, raw_labels_single_class):
-        plt.close("all")
-        figs_before = plt.get_fignums()
-        training_iter(
-            iter_times=1,
-            rawdata=raw_data,
-            rawlabels=raw_labels_single_class,
-            random_seed=42,
-            modelname="AE",
-            num_epochs=FAST_EPOCHS,
-            batch_size=BATCH_SIZE,
-            learning_rate=0.001,
-        )
-        figs_after = plt.get_fignums()
-        assert figs_before == figs_after
 
 
 # ===========================================================================

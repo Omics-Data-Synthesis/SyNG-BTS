@@ -207,49 +207,16 @@ class TestEvaluateSampleSizesDataFrame:
 class TestEvaluateSampleSizesSyngResult:
     """Tests for evaluate_sample_sizes using SyngResult inputs."""
 
-    def test_which_generated(self, small_syng_result):
-        """SyngResult with which='generated' uses generated_data + groups."""
-        result = evaluate_sample_sizes(
-            data=small_syng_result,
-            sample_sizes=[50],
-            n_draws=1,
-            which="generated",
-            methods=["LOGIS"],
-        )
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 1
-
-    def test_which_original(self, small_syng_result):
-        """SyngResult with which='original' uses original_data + groups."""
-        result = evaluate_sample_sizes(
-            data=small_syng_result,
-            sample_sizes=[50],
-            n_draws=1,
-            which="original",
-            methods=["LOGIS"],
-        )
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 1
-
-    def test_which_reconstructed(self, small_syng_result):
-        """SyngResult with which='reconstructed' uses reconstructed_data."""
-        result = evaluate_sample_sizes(
-            data=small_syng_result,
-            sample_sizes=[50],
-            n_draws=1,
-            which="reconstructed",
-            methods=["LOGIS"],
-        )
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 1
-
-    def test_which_default_is_generated(self, small_syng_result):
-        """Default which='generated' when not specified."""
+    @pytest.mark.parametrize("which", ["generated", "original", "reconstructed", None])
+    def test_which_selectors(self, small_syng_result, which):
+        """Each 'which' selector (and the default) produces a result row."""
+        kwargs = {} if which is None else {"which": which}
         result = evaluate_sample_sizes(
             data=small_syng_result,
             sample_sizes=[50],
             n_draws=1,
             methods=["LOGIS"],
+            **kwargs,
         )
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
@@ -445,65 +412,28 @@ class TestMethodAliases:
         )
         assert set(result["method"]) == {"LOGIS", "SVM", "KNN", "RF", "XGB"}
 
-    def test_alias_logistic(self, small_synthetic_data):
-        """'LOGISTIC' alias resolves to 'LOGIS'."""
+    @pytest.mark.parametrize(
+        "alias, canonical",
+        [
+            ("LOGISTIC", "LOGIS"),
+            ("LR", "LOGIS"),
+            ("RANDOM_FOREST", "RF"),
+            ("XGBOOST", "XGB"),
+            ("logis", "LOGIS"),
+            ("rf", "RF"),
+        ],
+    )
+    def test_method_alias_resolution(self, small_synthetic_data, alias, canonical):
+        """Aliases and mixed-case names resolve to canonical method names."""
         data, groups = small_synthetic_data
         result = evaluate_sample_sizes(
             data=data,
             sample_sizes=[50],
             groups=groups,
             n_draws=1,
-            methods=["LOGISTIC"],
+            methods=[alias],
         )
-        assert result["method"].iloc[0] == "LOGIS"
-
-    def test_alias_lr(self, small_synthetic_data):
-        """'LR' alias resolves to 'LOGIS'."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LR"],
-        )
-        assert result["method"].iloc[0] == "LOGIS"
-
-    def test_alias_random_forest(self, small_synthetic_data):
-        """'RANDOM_FOREST' alias resolves to 'RF'."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["RANDOM_FOREST"],
-        )
-        assert result["method"].iloc[0] == "RF"
-
-    def test_alias_xgboost(self, small_synthetic_data):
-        """'XGBOOST' alias resolves to 'XGB'."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["XGBOOST"],
-        )
-        assert result["method"].iloc[0] == "XGB"
-
-    def test_case_insensitive(self, small_synthetic_data):
-        """Method names are case-insensitive."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["logis", "rf"],
-        )
-        assert set(result["method"]) == {"LOGIS", "RF"}
+        assert result["method"].iloc[0] == canonical
 
 
 # ---------------------------------------------------------------------------
@@ -615,63 +545,34 @@ class TestPlotSampleSizes:
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
-    def test_two_panel_with_generated(self, small_synthetic_data):
-        """Providing metric_generated produces a two-column figure."""
+    @pytest.mark.parametrize(
+        "methods, with_generated, expected_axes",
+        [
+            (["LOGIS"], True, 2),
+            (["LOGIS", "RF"], False, 2),
+            (["LOGIS", "RF"], True, 4),
+        ],
+    )
+    def test_panel_geometry(
+        self, small_synthetic_data, methods, with_generated, expected_axes
+    ):
+        """Panel count = n_methods rows × (2 if generated else 1) columns."""
         data, groups = small_synthetic_data
         metrics = evaluate_sample_sizes(
             data=data,
             sample_sizes=[40, 60, 80],
             groups=groups,
             n_draws=2,
-            methods=["LOGIS"],
+            methods=methods,
         )
         fig = plot_sample_sizes(
             metric_real=metrics,
             n_target=100,
-            metric_generated=metrics,
+            metric_generated=metrics if with_generated else None,
             metric_name="f1_score",
         )
         assert isinstance(fig, plt.Figure)
-        assert len(fig.axes) == 2  # 1 method × 2 panels
-        plt.close(fig)
-
-    def test_multiple_methods_panels(self, small_synthetic_data):
-        """Multiple methods produce one row per method."""
-        data, groups = small_synthetic_data
-        metrics = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[40, 60, 80],
-            groups=groups,
-            n_draws=2,
-            methods=["LOGIS", "RF"],
-        )
-        fig = plot_sample_sizes(
-            metric_real=metrics,
-            n_target=100,
-            metric_name="f1_score",
-        )
-        assert isinstance(fig, plt.Figure)
-        assert len(fig.axes) == 2  # 2 methods × 1 column
-        plt.close(fig)
-
-    def test_multi_method_two_panel(self, small_synthetic_data):
-        """Multiple methods with generated data produce method×2 panels."""
-        data, groups = small_synthetic_data
-        metrics = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[40, 60, 80],
-            groups=groups,
-            n_draws=2,
-            methods=["LOGIS", "RF"],
-        )
-        fig = plot_sample_sizes(
-            metric_real=metrics,
-            n_target=100,
-            metric_generated=metrics,
-            metric_name="accuracy",
-        )
-        assert isinstance(fig, plt.Figure)
-        assert len(fig.axes) == 4  # 2 methods × 2 columns
+        assert len(fig.axes) == expected_axes
         plt.close(fig)
 
     def test_no_plt_show_called(self, small_synthetic_data, monkeypatch):
@@ -897,63 +798,28 @@ class TestVerboseEvaluate:
 class TestSampleSizesInput:
     """Tests for expanded sample_sizes input types."""
 
-    def test_numpy_array(self, small_synthetic_data):
-        """numpy array of ints is accepted."""
+    @pytest.mark.parametrize(
+        "sizes",
+        [
+            np.array([40, 60]),
+            np.arange(40, 80, 20),
+            pd.Series([40, 60]),
+            np.array([33, 66]),
+        ],
+    )
+    def test_sample_sizes_array_like(self, small_synthetic_data, sizes):
+        """Array-like sample_sizes (ndarray / arange / Series) are accepted."""
         data, groups = small_synthetic_data
         result = evaluate_sample_sizes(
             data=data,
-            sample_sizes=np.array([40, 60]),
+            sample_sizes=sizes,
             groups=groups,
             n_draws=1,
             methods=["LOGIS"],
             verbose=0,
         )
         assert isinstance(result, pd.DataFrame)
-        assert set(result["total_size"]) == {40, 60}
-
-    def test_numpy_arange(self, small_synthetic_data):
-        """numpy arange is accepted."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=np.arange(40, 80, 20),
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=0,
-        )
-        assert isinstance(result, pd.DataFrame)
-        assert set(result["total_size"]) == {40, 60}
-
-    def test_pandas_series(self, small_synthetic_data):
-        """pandas Series of ints is accepted."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=pd.Series([40, 60]),
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=0,
-        )
-        assert isinstance(result, pd.DataFrame)
-        assert set(result["total_size"]) == {40, 60}
-
-    def test_single_int(self, small_synthetic_data):
-        """Single int creates equidistant sizes up to n_rows."""
-        data, groups = small_synthetic_data  # 100 rows
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=3,
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=0,
-        )
-        assert isinstance(result, pd.DataFrame)
-        sizes = sorted(result["total_size"].unique())
-        assert len(sizes) == 3
-        assert sizes[-1] == 100  # max = n_rows
+        assert set(result["total_size"]) == {int(s) for s in sizes}
 
     def test_single_int_equidistant(self):
         """Verify equidistant pattern for single int input."""
@@ -983,26 +849,14 @@ class TestSampleSizesInput:
         )
         assert list(result["total_size"].unique()) == [100]
 
-    def test_single_int_zero_raises(self, small_synthetic_data):
-        """sample_sizes=0 should raise ValueError."""
+    @pytest.mark.parametrize("bad_size", [0, -1])
+    def test_single_int_non_positive_raises(self, small_synthetic_data, bad_size):
+        """A non-positive single int sample size is rejected."""
         data, groups = small_synthetic_data
         with pytest.raises(ValueError, match="positive"):
             evaluate_sample_sizes(
                 data=data,
-                sample_sizes=0,
-                groups=groups,
-                n_draws=1,
-                methods=["LOGIS"],
-                verbose=0,
-            )
-
-    def test_single_int_negative_raises(self, small_synthetic_data):
-        """sample_sizes=-1 should raise ValueError."""
-        data, groups = small_synthetic_data
-        with pytest.raises(ValueError, match="positive"):
-            evaluate_sample_sizes(
-                data=data,
-                sample_sizes=-1,
+                sample_sizes=bad_size,
                 groups=groups,
                 n_draws=1,
                 methods=["LOGIS"],

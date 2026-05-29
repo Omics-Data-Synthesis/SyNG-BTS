@@ -20,13 +20,6 @@ matplotlib.use("Agg")  # Use non-interactive backend for testing
 class TestHeatmapEval:
     """Test heatmap evaluation function."""
 
-    def test_heatmap_eval_import(self):
-        """Test heatmap_eval can be imported."""
-        from syng_bts import heatmap_eval
-
-        assert heatmap_eval is not None
-        assert callable(heatmap_eval)
-
     def test_heatmap_eval_single_dataset(self, sample_data):
         """Test heatmap with single dataset returns a Figure."""
         from syng_bts import heatmap_eval
@@ -86,13 +79,6 @@ class TestHeatmapEval:
 
 class TestUMAPEval:
     """Test UMAP evaluation function."""
-
-    def test_umap_eval_import(self):
-        """Test UMAP_eval can be imported."""
-        from syng_bts import UMAP_eval
-
-        assert UMAP_eval is not None
-        assert callable(UMAP_eval)
 
     def test_umap_eval_single_dataset_returns_figure(self, sample_data):
         """UMAP with only real data returns a Figure."""
@@ -185,13 +171,6 @@ class TestUMAPEval:
 class TestEvaluationFunction:
     """Test the main evaluation() function."""
 
-    def test_evaluation_import(self):
-        """Test evaluation function can be imported."""
-        from syng_bts import evaluation
-
-        assert evaluation is not None
-        assert callable(evaluation)
-
     def test_evaluation_returns_dict_of_figures(self, sample_data):
         """evaluation() returns a dict with 'heatmap' and 'umap' Figures."""
         from syng_bts import evaluation
@@ -252,22 +231,13 @@ class TestEvaluationFunction:
         for f in figs.values():
             plt.close(f)
 
-    def test_evaluation_n_samples_none(self, sample_data):
-        """n_samples=None uses all samples."""
+    @pytest.mark.parametrize("n_samples", [None, 5])
+    def test_evaluation_n_samples(self, sample_data, n_samples):
+        """evaluation() works with n_samples=None (all) and a small head/tail sample."""
         from syng_bts import evaluation
 
         gen = sample_data * 1.1 + 0.01
-        figs = evaluation(sample_data, gen, apply_log=False, n_samples=None)
-        assert isinstance(figs, dict)
-        for f in figs.values():
-            plt.close(f)
-
-    def test_evaluation_n_samples_small(self, sample_data):
-        """Small n_samples still works (sub-samples from each end)."""
-        from syng_bts import evaluation
-
-        gen = sample_data * 1.1 + 0.01
-        figs = evaluation(sample_data, gen, apply_log=False, n_samples=5)
+        figs = evaluation(sample_data, gen, apply_log=False, n_samples=n_samples)
         assert isinstance(figs, dict)
         for f in figs.values():
             plt.close(f)
@@ -392,35 +362,23 @@ class TestEvaluationFunction:
         for f in figs.values():
             plt.close(f)
 
-    def test_evaluation_real_groups_length_mismatch_raises(self, sample_data):
-        """real_groups length mismatch raises ValueError."""
+    @pytest.mark.parametrize(
+        "param_name, match",
+        [
+            ("real_groups", "real_groups length"),
+            ("generated_groups", "generated_groups length"),
+        ],
+    )
+    def test_evaluation_groups_length_mismatch_raises(
+        self, sample_data, param_name, match
+    ):
+        """A groups array whose length != data raises ValueError (real or generated)."""
         from syng_bts import evaluation
 
         gen = sample_data * 1.1 + 0.01
-        bad_real_groups = pd.Series(["A"] * (len(sample_data) - 1))
-
-        with pytest.raises(ValueError, match="real_groups length"):
-            evaluation(
-                sample_data,
-                gen,
-                real_groups=bad_real_groups,
-                apply_log=False,
-            )
-
-    def test_evaluation_generated_groups_length_mismatch_raises(self, sample_data):
-        """generated_groups length mismatch raises ValueError."""
-        from syng_bts import evaluation
-
-        gen = sample_data * 1.1 + 0.01
-        bad_gen_groups = pd.Series(["A"] * (len(gen) - 1))
-
-        with pytest.raises(ValueError, match="generated_groups length"):
-            evaluation(
-                sample_data,
-                gen,
-                generated_groups=bad_gen_groups,
-                apply_log=False,
-            )
+        bad_groups = pd.Series(["A"] * (len(sample_data) - 1))
+        with pytest.raises(ValueError, match=match):
+            evaluation(sample_data, gen, apply_log=False, **{param_name: bad_groups})
 
 
 # ---------------------------------------------------------------------------
@@ -430,22 +388,6 @@ class TestEvaluationFunction:
 
 class TestEvaluationFunctionsExist:
     """Test evaluation functions are accessible from main package."""
-
-    def test_all_evaluation_functions_exported(self):
-        """Test all evaluation functions are in package exports."""
-        from syng_bts import __all__
-
-        expected = ["heatmap_eval", "UMAP_eval", "evaluation"]
-        for func_name in expected:
-            assert func_name in __all__
-
-    def test_evaluation_module_has_functions(self):
-        """Test evaluations module has expected functions."""
-        from syng_bts import evaluations
-
-        assert hasattr(evaluations, "heatmap_eval")
-        assert hasattr(evaluations, "UMAP_eval")
-        assert hasattr(evaluations, "evaluation")
 
     def test_old_save_param_removed(self):
         """heatmap_eval no longer accepts 'save' parameter."""

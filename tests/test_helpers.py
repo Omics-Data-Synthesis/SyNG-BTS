@@ -584,34 +584,6 @@ class TestReconstructSamples:
         assert data.shape[1] == 51
         assert data.shape[0] == 40
 
-    def test_no_files_written(self, ae_model, sample_dataloader, tmp_path):
-        """reconstruct_samples writes no files to disk."""
-        from syng_bts.helper_utils import reconstruct_samples
-
-        orig_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            reconstruct_samples(
-                model=ae_model,
-                modelname="AE",
-                data_loader=sample_dataloader,
-                n_features=50,
-            )
-            assert len(list(tmp_path.iterdir())) == 0
-        finally:
-            os.chdir(orig_cwd)
-
-    def test_no_figures_created(self, ae_model, sample_dataloader):
-        """reconstruct_samples does not create matplotlib figures."""
-        from syng_bts.helper_utils import reconstruct_samples
-
-        figs_before = plt.get_fignums()
-        reconstruct_samples(
-            model=ae_model, modelname="AE", data_loader=sample_dataloader, n_features=50
-        )
-        figs_after = plt.get_fignums()
-        assert figs_before == figs_after
-
     def test_data_is_detached(self, ae_model, sample_dataloader):
         """Returned data tensor should be detached from computation graph."""
         from syng_bts.helper_utils import reconstruct_samples

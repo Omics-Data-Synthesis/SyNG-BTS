@@ -4,7 +4,6 @@ Pytest configuration and fixtures for SyNG-BTS tests.
 This module provides shared test fixtures for all test modules including:
 - temp_dir: Temporary directory with automatic cleanup
 - sample_data: Small transcriptomics-like DataFrame (20x50)
-- sample_data_with_labels: Sample data with binary class labels
 - sample_csv_file: Temporary CSV file for testing I/O
 - small_training_config: Minimal training parameters for fast tests
 
@@ -22,7 +21,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-import torch
 
 
 @pytest.fixture
@@ -48,28 +46,11 @@ def sample_data():
 
 
 @pytest.fixture
-def sample_data_with_labels(sample_data):
-    """Create sample data with class labels for conditional models."""
-    data = sample_data.copy()
-    # Add a label column (binary classification)
-    data.insert(0, "label", np.random.choice([0, 1], size=len(data)))
-    return data
-
-
-@pytest.fixture
 def sample_csv_file(temp_dir, sample_data):
     """Create a sample CSV file for testing data loading."""
     csv_path = temp_dir / "test_data.csv"
     sample_data.to_csv(csv_path, index=False)
     return csv_path
-
-
-@pytest.fixture
-def sample_parquet_file(temp_dir, sample_data):
-    """Create a sample Parquet file for testing data loading."""
-    pq_path = temp_dir / "test_data.parquet"
-    sample_data.to_parquet(pq_path, engine="pyarrow")
-    return pq_path
 
 
 @pytest.fixture
@@ -90,63 +71,3 @@ def small_training_config():
         "Gaussian_head_num": 2,
         "random_seed": 42,
     }
-
-
-@pytest.fixture
-def sample_result(sample_data):
-    """Create a minimal SyngResult for downstream testing.
-
-    Uses sample_data as the generated DataFrame with small noise added,
-    and a synthetic loss DataFrame. Useful for tests that need a
-    pre-built SyngResult without running actual training.
-    """
-    from syng_bts import SyngResult
-
-    rng = np.random.RandomState(42)
-    gen = sample_data.copy()
-    gen = gen + rng.normal(0, 0.1, size=gen.shape)
-
-    loss = pd.DataFrame(
-        {
-            "kl": rng.rand(50) * 10,
-            "recons": rng.rand(50) * 5,
-        }
-    )
-
-    return SyngResult(
-        generated_data=gen,
-        loss=loss,
-        metadata={"model": "VAE1-10", "dataname": "test", "seed": 42},
-    )
-
-
-@pytest.fixture
-def sample_result_with_model(sample_data):
-    """Create a SyngResult with all optional fields populated."""
-    from syng_bts import SyngResult
-
-    rng = np.random.RandomState(123)
-    gen = sample_data.copy()
-    recon = sample_data.copy()
-
-    loss = pd.DataFrame(
-        {
-            "kl": rng.rand(50),
-            "recons": rng.rand(50),
-        }
-    )
-
-    model_state = {"weight": torch.randn(10, 5)}
-
-    return SyngResult(
-        generated_data=gen,
-        loss=loss,
-        reconstructed_data=recon,
-        model_state=model_state,
-        metadata={
-            "model": "VAE1-10",
-            "dataname": "test_full",
-            "seed": 123,
-            "epochs_trained": 100,
-        },
-    )

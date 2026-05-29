@@ -61,71 +61,64 @@ class TestResolveVerbose:
 class TestPrintTrainingState:
     """Test _print_training_state formatting."""
 
-    def test_basic_output(self, capsys):
-        _print_training_state(
-            epoch=0,
-            num_epochs=100,
-            loss_dict={"train_loss": 1.2345},
-        )
+    @pytest.mark.parametrize(
+        "state_kwargs,expected_substrings",
+        [
+            (
+                {"epoch": 0, "num_epochs": 100, "loss_dict": {"train_loss": 1.2345}},
+                ["Epoch 001/100", "train_loss: 1.2345"],
+            ),
+            (
+                {"epoch": 9, "num_epochs": 50, "loss_dict": {"kl": 0.1, "recons": 0.2}},
+                ["kl: 0.1000", "recons: 0.2000"],
+            ),
+            (
+                {
+                    "epoch": 0,
+                    "num_epochs": 10,
+                    "loss_dict": {"loss": 0.5},
+                    "learning_rate": 0.001,
+                },
+                ["LR: 0.001000"],
+            ),
+            (
+                {
+                    "epoch": 0,
+                    "num_epochs": 10,
+                    "loss_dict": {"loss": 0.5},
+                    "elapsed_time": 120.0,
+                },
+                ["Time: 2.00min"],
+            ),
+            (
+                {
+                    "epoch": 5,
+                    "num_epochs": 100,
+                    "loss_dict": {"loss": 0.3},
+                    "early_stop_info": "patience 3/10",
+                },
+                ["patience 3/10"],
+            ),
+            (
+                {
+                    "epoch": 49,
+                    "num_epochs": 50,
+                    "loss_dict": {"loss": 0.01},
+                    "elapsed_time": 600.0,
+                    "learning_rate": 0.0001,
+                    "early_stop_info": "no improvement",
+                },
+                ["Epoch 050/050", "loss: 0.0100", "LR:", "Time:", "no improvement"],
+            ),
+        ],
+        ids=["basic", "multi_loss", "with_lr", "with_time", "early_stop", "all_fields"],
+    )
+    def test_print_training_state(self, capsys, state_kwargs, expected_substrings):
+        """_print_training_state output contains expected substrings."""
+        _print_training_state(**state_kwargs)
         out = capsys.readouterr().out
-        assert "Epoch 001/100" in out
-        assert "train_loss: 1.2345" in out
-
-    def test_multiple_losses(self, capsys):
-        _print_training_state(
-            epoch=9,
-            num_epochs=50,
-            loss_dict={"kl": 0.1, "recons": 0.2},
-        )
-        out = capsys.readouterr().out
-        assert "kl: 0.1000" in out
-        assert "recons: 0.2000" in out
-
-    def test_with_learning_rate(self, capsys):
-        _print_training_state(
-            epoch=0,
-            num_epochs=10,
-            loss_dict={"loss": 0.5},
-            learning_rate=0.001,
-        )
-        out = capsys.readouterr().out
-        assert "LR: 0.001000" in out
-
-    def test_with_elapsed_time(self, capsys):
-        _print_training_state(
-            epoch=0,
-            num_epochs=10,
-            loss_dict={"loss": 0.5},
-            elapsed_time=120.0,
-        )
-        out = capsys.readouterr().out
-        assert "Time: 2.00min" in out
-
-    def test_with_early_stop_info(self, capsys):
-        _print_training_state(
-            epoch=5,
-            num_epochs=100,
-            loss_dict={"loss": 0.3},
-            early_stop_info="patience 3/10",
-        )
-        out = capsys.readouterr().out
-        assert "patience 3/10" in out
-
-    def test_all_optional_fields(self, capsys):
-        _print_training_state(
-            epoch=49,
-            num_epochs=50,
-            loss_dict={"loss": 0.01},
-            elapsed_time=600.0,
-            learning_rate=0.0001,
-            early_stop_info="no improvement",
-        )
-        out = capsys.readouterr().out
-        assert "Epoch 050/050" in out
-        assert "loss: 0.0100" in out
-        assert "LR:" in out
-        assert "Time:" in out
-        assert "no improvement" in out
+        for substring in expected_substrings:
+            assert substring in out, f"Expected {substring!r} in output: {out!r}"
 
 
 # =========================================================================
@@ -134,68 +127,49 @@ class TestPrintTrainingState:
 class TestVerboseGenerate:
     """Test that verbose param controls stdout output from generate()."""
 
-    def test_verbose_0_silent(self, sample_data, capsys):
-        """verbose=0 should produce no stdout output."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose=0,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert out == ""
+    @pytest.mark.parametrize(
+        "int_form,str_form,empty,must_contain,must_not_contain",
+        [
+            (0, "silent", True, [], []),
+            (1, "minimal", False, ["Training complete"], ["Epoch 001/"]),
+            (2, "detailed", False, ["Epoch 001/", "Training complete"], []),
+        ],
+        ids=["silent", "minimal", "detailed"],
+    )
+    def test_verbose_level(
+        self,
+        sample_data,
+        capsys,
+        int_form,
+        str_form,
+        empty,
+        must_contain,
+        must_not_contain,
+    ):
+        """Each verbose level controls generate() stdout, and the string alias
+        behaves identically to its integer form."""
 
-    def test_verbose_silent_string(self, sample_data, capsys):
-        """verbose='silent' should produce no stdout output."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose="silent",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert out == ""
+        def output_for(verbose):
+            result = generate(
+                data=sample_data,
+                model="AE",
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+                random_seed=42,
+                verbose=verbose,
+            )
+            assert isinstance(result, SyngResult)
+            return capsys.readouterr().out
 
-    def test_verbose_1_minimal(self, sample_data, capsys):
-        """verbose=1 should emit completion message but no per-epoch detail."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose=1,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert "Training complete" in out
-        # Should NOT contain per-epoch lines
-        assert "Epoch 001/" not in out
-
-    def test_verbose_2_detailed(self, sample_data, capsys):
-        """verbose=2 should emit per-epoch output."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose=2,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert "Epoch 001/" in out
-        assert "Training complete" in out
+        for verbose in (int_form, str_form):
+            out = output_for(verbose)
+            if empty:
+                assert out == "", f"verbose={verbose!r} should be silent"
+            for s in must_contain:
+                assert s in out, f"verbose={verbose!r}: expected {s!r} in output"
+            for s in must_not_contain:
+                assert s not in out, f"verbose={verbose!r}: did not expect {s!r}"
 
     def test_default_verbose_is_1(self, sample_data, capsys):
         """Default verbose (not passed) should behave as verbose=1."""
@@ -211,34 +185,3 @@ class TestVerboseGenerate:
         assert isinstance(result, SyngResult)
         assert "Epoch 001/" not in out
         assert "Training complete" in out
-
-    def test_verbose_text_minimal(self, sample_data, capsys):
-        """verbose='minimal' should behave like verbose=1."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose="minimal",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert "Epoch 001/" not in out
-        assert "Training complete" in out
-
-    def test_verbose_text_detailed(self, sample_data, capsys):
-        """verbose='detailed' should behave like verbose=2."""
-        result = generate(
-            data=sample_data,
-            model="AE",
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
-            random_seed=42,
-            verbose="detailed",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, SyngResult)
-        assert "Epoch 001/" in out

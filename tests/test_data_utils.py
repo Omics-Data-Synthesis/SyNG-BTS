@@ -32,63 +32,48 @@ class TestBundledDatasets:
         # Should have 13 datasets total
         assert len(datasets) == 13
 
-    def test_resolve_bundled_dataset_skcm(self):
-        """Test loading SKCMPositive_4 bundled dataset via resolve_data."""
+    @pytest.mark.parametrize(
+        "dataset_name,has_groups",
+        [
+            # Datasets without a groups sidecar → groups is None
+            ("SKCMPositive_4", False),
+            ("BRCA", False),
+            ("PRAD", False),
+            # Dataset with a groups sidecar → groups is a Series
+            ("BRCASubtypeSel", True),
+        ],
+        ids=["SKCMPositive_4", "BRCA", "PRAD", "BRCASubtypeSel"],
+    )
+    def test_resolve_bundled_dataset(self, dataset_name, has_groups):
+        """Bundled datasets load via resolve_data, with groups present iff
+        the dataset ships a groups sidecar."""
         from syng_bts import resolve_data
 
-        data, groups = resolve_data("SKCMPositive_4")
+        data, groups = resolve_data(dataset_name)
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) > 0
         assert len(data.columns) > 0
-        # SKCMPositive_4 has no groups sidecar
-        assert groups is None
 
-    def test_resolve_bundled_dataset_brca(self):
-        """Test loading BRCA bundled dataset."""
+        if has_groups:
+            assert groups is not None
+            assert isinstance(groups, pd.Series)
+            assert len(groups) == len(data)
+        else:
+            assert groups is None
+
+    def test_resolve_generated_dataset(self):
+        """The CVAE-generated BRCA training set has a specific shape and the two
+        expected subtype labels in its groups sidecar."""
         from syng_bts import resolve_data
 
-        data, groups = resolve_data("BRCA")
-
-        assert isinstance(data, pd.DataFrame)
-        assert len(data) > 0
-        # BRCA has no groups sidecar
-        assert groups is None
-
-    def test_resolve_bundled_dataset_prad(self):
-        """Test loading PRAD bundled dataset."""
-        from syng_bts import resolve_data
-
-        data, groups = resolve_data("PRAD")
-
-        assert isinstance(data, pd.DataFrame)
-        assert len(data) > 0
-        # PRAD has no groups sidecar
-        assert groups is None
-
-    def test_resolve_bundled_dataset_brca_subtype(self):
-        """Test loading BRCA subtype case study dataset."""
-        from syng_bts import resolve_data
-
-        data, groups = resolve_data("BRCASubtypeSel")
-
-        assert isinstance(data, pd.DataFrame)
-        assert len(data) > 0
-        # BRCASubtypeSel has a groups sidecar
-        assert groups is not None
-        assert isinstance(groups, pd.Series)
-        assert len(groups) == len(data)
-
-    def test_resolve_bundled_dataset_brca_generated(self):
-        """Test loading CVAE-generated BRCA training data."""
-        from syng_bts import resolve_data
-
-        data, groups = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
+        data, groups = resolve_data(
+            "BRCASubtypeSel_train_epoch285_CVAE1-20_generated"
+        )
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) == 1000
         assert len(data.columns) == 47
-        # Generated data has groups sidecar
         assert groups is not None
         assert isinstance(groups, pd.Series)
         assert len(groups) == len(data)
@@ -210,12 +195,20 @@ class TestResolveDataEdgeCases:
         assert isinstance(df, pd.DataFrame)
         assert len(df) > 0
 
-    def test_unknown_name_raises_valueerror(self):
-        """Unknown dataset name raises ValueError with descriptive message."""
+    @pytest.mark.parametrize(
+        "input_val,exc_type,match",
+        [
+            ("totally_nonexistent_dataset", ValueError, "Unknown dataset name"),
+            (12345, TypeError, "pd.DataFrame, str, or Path"),
+        ],
+        ids=["unknown_name", "invalid_type"],
+    )
+    def test_raises_on_bad_input(self, input_val, exc_type, match):
+        """Bad inputs raise the expected exception with a descriptive message."""
         from syng_bts import resolve_data
 
-        with pytest.raises(ValueError, match="Unknown dataset name"):
-            resolve_data("totally_nonexistent_dataset")
+        with pytest.raises(exc_type, match=match):
+            resolve_data(input_val)
 
     def test_nonexistent_path_object_raises(self, temp_dir):
         """Non-existent Path raises FileNotFoundError."""
@@ -223,21 +216,6 @@ class TestResolveDataEdgeCases:
 
         with pytest.raises(FileNotFoundError):
             resolve_data(temp_dir / "no_such_file.csv")
-
-    def test_invalid_type_raises_typeerror(self):
-        """Invalid type raises TypeError."""
-        from syng_bts import resolve_data
-
-        with pytest.raises(TypeError, match="pd.DataFrame, str, or Path"):
-            resolve_data(12345)
-
-    def test_path_with_directory_separator(self, sample_csv_file):
-        """Paths with separators are treated as file paths."""
-        from syng_bts import resolve_data
-
-        df, groups = resolve_data(str(sample_csv_file))
-        assert len(df) == 20
-        assert groups is None
 
     def test_unsupported_file_type_raises(self, temp_dir):
         """Unsupported file extensions raise ValueError."""
@@ -248,6 +226,14 @@ class TestResolveDataEdgeCases:
 
         with pytest.raises(ValueError, match="Unsupported file type"):
             _read_user_file(txt_file)
+
+    def test_path_with_directory_separator(self, sample_csv_file):
+        """Paths with separators are treated as file paths."""
+        from syng_bts import resolve_data
+
+        df, groups = resolve_data(str(sample_csv_file))
+        assert len(df) == 20
+        assert groups is None
 
 
 # ---------------------------------------------------------------------------
@@ -263,12 +249,20 @@ class TestDeriveDataname:
         result = _derive_dataname(sample_data, name="override")
         assert result == "override"
 
-    def test_from_file_path_string(self):
-        """Derive name from a string file path."""
+    @pytest.mark.parametrize(
+        "input_val,expected",
+        [
+            ("/some/path/MyDataset.csv", "MyDataset"),
+            ("SKCMPositive_4", "SKCMPositive_4"),
+            ("BRCASubtypeSel_train", "BRCASubtypeSel_train"),
+        ],
+        ids=["file_path_strips_extension", "bundled_name", "name_without_extension"],
+    )
+    def test_from_string(self, input_val, expected):
+        """Derive name from string inputs (file paths and plain names)."""
         from syng_bts.data_utils import _derive_dataname
 
-        result = _derive_dataname("/some/path/MyDataset.csv")
-        assert result == "MyDataset"
+        assert _derive_dataname(input_val) == expected
 
     def test_from_file_path_object(self):
         """Derive name from a Path object."""
@@ -276,13 +270,6 @@ class TestDeriveDataname:
 
         result = _derive_dataname(Path("/some/path/MyDataset.csv"))
         assert result == "MyDataset"
-
-    def test_from_bundled_name(self):
-        """Derive name from a plain bundled name string."""
-        from syng_bts.data_utils import _derive_dataname
-
-        result = _derive_dataname("SKCMPositive_4")
-        assert result == "SKCMPositive_4"
 
     def test_from_dataframe_with_attrs(self):
         """Derive name from a DataFrame with .attrs['name']."""
@@ -308,13 +295,6 @@ class TestDeriveDataname:
         sample_data.attrs["name"] = "from_attrs"
         result = _derive_dataname(sample_data, name="explicit")
         assert result == "explicit"
-
-    def test_name_from_string_without_extension(self):
-        """Plain string without extension used as-is."""
-        from syng_bts.data_utils import _derive_dataname
-
-        result = _derive_dataname("BRCASubtypeSel_train")
-        assert result == "BRCASubtypeSel_train"
 
 
 # ---------------------------------------------------------------------------
@@ -409,22 +389,23 @@ class TestValidateFeatureData:
 
         _validate_feature_data(sample_data)  # should not raise
 
-    def test_rejects_groups_column(self, sample_data):
-        """DataFrame with a 'groups' column is rejected."""
+    @pytest.mark.parametrize(
+        "col_name,col_value,match",
+        [
+            ("groups", 0, "metadata column"),
+            ("samples", "TCGA-XX", "metadata column"),
+            ("Groups", 1, "metadata column"),
+            ("Samples", "X", "metadata column"),
+        ],
+        ids=["groups", "samples", "Groups_caps", "Samples_caps"],
+    )
+    def test_rejects_metadata_columns(self, sample_data, col_name, col_value, match):
+        """DataFrame with metadata-like columns is rejected."""
         from syng_bts.data_utils import _validate_feature_data
 
         bad = sample_data.copy()
-        bad["groups"] = 0
-        with pytest.raises(ValueError, match="metadata column"):
-            _validate_feature_data(bad)
-
-    def test_rejects_samples_column(self, sample_data):
-        """DataFrame with a 'samples' column is rejected."""
-        from syng_bts.data_utils import _validate_feature_data
-
-        bad = sample_data.copy()
-        bad["samples"] = "TCGA-XX"
-        with pytest.raises(ValueError, match="metadata column"):
+        bad[col_name] = col_value
+        with pytest.raises(ValueError, match=match):
             _validate_feature_data(bad)
 
     def test_rejects_non_numeric_columns(self):
@@ -442,22 +423,4 @@ class TestValidateFeatureData:
         bad = sample_data.copy()
         bad.index = [0] * len(bad)
         with pytest.raises(ValueError, match="duplicate"):
-            _validate_feature_data(bad)
-
-    def test_case_insensitive_metadata_check(self, sample_data):
-        """Metadata column check is case-insensitive."""
-        from syng_bts.data_utils import _validate_feature_data
-
-        bad = sample_data.copy()
-        bad["Groups"] = 1
-        with pytest.raises(ValueError, match="metadata column"):
-            _validate_feature_data(bad)
-
-    def test_case_insensitive_samples_check(self, sample_data):
-        """'Samples' column (capitalized) is also rejected."""
-        from syng_bts.data_utils import _validate_feature_data
-
-        bad = sample_data.copy()
-        bad["Samples"] = "X"
-        with pytest.raises(ValueError, match="metadata column"):
             _validate_feature_data(bad)

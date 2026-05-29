@@ -467,104 +467,119 @@ class TestResolveEarlyStoppingConfig:
     early_stop_patience parameters without training models.
     """
 
-    def test_both_epoch_and_patience(self):
-        """epoch + early_stop_patience → early_stop=True, num_epochs=epoch."""
+    @pytest.mark.parametrize(
+        "call_kwargs, expected",
+        [
+            (
+                # epoch + early_stop_patience → early_stop=True, num_epochs=epoch
+                {
+                    "epoch": 500,
+                    "early_stop_patience": 2,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                (500, True, 2),
+            ),
+            (
+                # epoch only → early_stop=False, num_epochs=epoch
+                {
+                    "epoch": 500,
+                    "early_stop_patience": None,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                (500, False, 30),
+            ),
+            (
+                # early_stop_patience only → early_stop=True, num_epochs=default_max
+                {
+                    "epoch": None,
+                    "early_stop_patience": 2,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                (1000, True, 2),
+            ),
+            (
+                # neither → early_stop=True, num_epochs=default_max, patience=default
+                {
+                    "epoch": None,
+                    "early_stop_patience": None,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                (1000, True, 30),
+            ),
+            (
+                # custom defaults respected
+                {
+                    "epoch": None,
+                    "early_stop_patience": None,
+                    "default_max_epochs": 500,
+                    "default_patience": 15,
+                },
+                (500, True, 15),
+            ),
+        ],
+        ids=["both", "epoch_only", "patience_only", "neither", "custom_defaults"],
+    )
+    def test_resolve_early_stopping_config_happy(self, call_kwargs, expected):
+        """Happy-path combinations return correct (num_epochs, early_stop, early_stop_num)."""
         num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=500,
-            early_stop_patience=2,
-            default_max_epochs=1000,
-            default_patience=30,
+            **call_kwargs
         )
-        assert num_epochs == 500
-        assert early_stop is True
-        assert early_stop_num == 2
+        assert (num_epochs, early_stop, early_stop_num) == expected
 
-    def test_epoch_only(self):
-        """epoch only → early_stop=False, num_epochs=epoch."""
-        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=500,
-            early_stop_patience=None,
-            default_max_epochs=1000,
-            default_patience=30,
-        )
-        assert num_epochs == 500
-        assert early_stop is False
-        assert early_stop_num == 30  # Default patience still returned
-
-    def test_patience_only(self):
-        """early_stop_patience only → early_stop=True, num_epochs=default_max."""
-        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=None,
-            early_stop_patience=2,
-            default_max_epochs=1000,
-            default_patience=30,
-        )
-        assert num_epochs == 1000
-        assert early_stop is True
-        assert early_stop_num == 2
-
-    def test_neither_epoch_nor_patience(self):
-        """Neither → early_stop=True, num_epochs=default_max, patience=default."""
-        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=None,
-            early_stop_patience=None,
-            default_max_epochs=1000,
-            default_patience=30,
-        )
-        assert num_epochs == 1000
-        assert early_stop is True
-        assert early_stop_num == 30
-
-    def test_custom_defaults(self):
-        """Helper respects custom default values."""
-        num_epochs, early_stop, early_stop_num = _resolve_early_stopping_config(
-            epoch=None,
-            early_stop_patience=None,
-            default_max_epochs=500,
-            default_patience=15,
-        )
-        assert num_epochs == 500
-        assert early_stop is True
-        assert early_stop_num == 15
-
-    def test_epoch_zero_raises(self):
-        """epoch must be a positive integer when provided."""
-        with pytest.raises(ValueError, match="epoch must be a positive integer"):
-            _resolve_early_stopping_config(
-                epoch=0,
-                early_stop_patience=5,
-                default_max_epochs=1000,
-                default_patience=30,
-            )
-
-    def test_negative_epoch_raises(self):
-        with pytest.raises(ValueError, match="epoch must be a positive integer"):
-            _resolve_early_stopping_config(
-                epoch=-1,
-                early_stop_patience=None,
-                default_max_epochs=1000,
-                default_patience=30,
-            )
-
-    def test_non_positive_patience_raises(self):
-        with pytest.raises(
-            ValueError, match="early_stop_patience must be a positive integer"
-        ):
-            _resolve_early_stopping_config(
-                epoch=None,
-                early_stop_patience=0,
-                default_max_epochs=1000,
-                default_patience=30,
-            )
-
-    def test_non_integer_epoch_raises(self):
-        with pytest.raises(ValueError, match="epoch must be a positive integer"):
-            _resolve_early_stopping_config(
-                epoch=1.5,
-                early_stop_patience=None,
-                default_max_epochs=1000,
-                default_patience=30,
-            )
+    @pytest.mark.parametrize(
+        "call_kwargs, exc_type, match",
+        [
+            (
+                {
+                    "epoch": 0,
+                    "early_stop_patience": 5,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                ValueError,
+                "epoch must be a positive integer",
+            ),
+            (
+                {
+                    "epoch": -1,
+                    "early_stop_patience": None,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                ValueError,
+                "epoch must be a positive integer",
+            ),
+            (
+                {
+                    "epoch": None,
+                    "early_stop_patience": 0,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                ValueError,
+                "early_stop_patience must be a positive integer",
+            ),
+            (
+                {
+                    "epoch": 1.5,
+                    "early_stop_patience": None,
+                    "default_max_epochs": 1000,
+                    "default_patience": 30,
+                },
+                ValueError,
+                "epoch must be a positive integer",
+            ),
+        ],
+        ids=["epoch_zero", "epoch_negative", "patience_zero", "epoch_non_integer"],
+    )
+    def test_resolve_early_stopping_config_raises(self, call_kwargs, exc_type, match):
+        """Invalid inputs raise the expected exception."""
+        with pytest.raises(exc_type, match=match):
+            _resolve_early_stopping_config(**call_kwargs)
 
 
 # =========================================================================
@@ -581,15 +596,14 @@ class TestComputeNewSize:
         labels = torch.tensor([0.0] * 12 + [1.0] * 8)
         assert _compute_new_size(labels, 20, [300, 200]) == [300, 200]
 
-    def test_list_without_groups_raises(self):
-        labels = torch.zeros(20)
-        with pytest.raises(ValueError, match="requires grouped data"):
-            _compute_new_size(labels, 20, [100, 200])
-
-    def test_list_wrong_length_raises(self):
-        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        with pytest.raises(ValueError, match="list length"):
-            _compute_new_size(labels, 20, [100, 200, 300])
+    def test_rounding_indivisible(self):
+        """When new_size cannot be evenly split, total still equals new_size."""
+        labels = torch.tensor([0.0] * 7 + [1.0] * 3)
+        result = _compute_new_size(labels, 10, 11)
+        assert isinstance(result, list)
+        assert sum(result) == 11  # total preserved exactly
+        # 7/10 * 11 = 7.7 → round → 8; 11 - 8 = 3
+        assert result == [8, 3]
 
     def test_unbalanced_two_groups(self):
         labels = torch.tensor([0.0] * 12 + [1.0] * 8)
@@ -608,34 +622,38 @@ class TestComputeNewSize:
             "preserves the original class ratio" in str(w.message) for w in caught
         )
 
-    def test_rounding_indivisible(self):
-        """When new_size cannot be evenly split, total still equals new_size."""
-        labels = torch.tensor([0.0] * 7 + [1.0] * 3)
-        result = _compute_new_size(labels, 10, 11)
-        assert isinstance(result, list)
-        assert sum(result) == 11  # total preserved exactly
-        # 7/10 * 11 = 7.7 → round → 8; 11 - 8 = 3
-        assert result == [8, 3]
+    # Raise-test variants — labels differ per row, so each is passed directly.
+    _TWO_GROUP_LABELS = torch.tensor([0.0] * 12 + [1.0] * 8)
+    _SINGLE_GROUP_LABELS = torch.zeros(20)
 
-    def test_int_bool_raises(self):
-        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        with pytest.raises(TypeError, match=r"must be an int or list\[int\]"):
-            _compute_new_size(labels, 20, True)
-
-    def test_int_negative_raises(self):
-        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        with pytest.raises(ValueError, match="must be non-negative"):
-            _compute_new_size(labels, 20, -1)
-
-    def test_list_non_integer_raises(self):
-        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        with pytest.raises(TypeError, match="list values must be integers"):
-            _compute_new_size(labels, 20, [100, 100.5])
-
-    def test_list_negative_raises(self):
-        labels = torch.tensor([0.0] * 12 + [1.0] * 8)
-        with pytest.raises(ValueError, match="list values must be non-negative"):
-            _compute_new_size(labels, 20, [100, -1])
+    @pytest.mark.parametrize(
+        "labels_spec, new_size, exc_type, match",
+        [
+            ("single", [100, 200], ValueError, "requires grouped data"),
+            ("two", [100, 200, 300], ValueError, "list length"),
+            ("two", True, TypeError, r"must be an int or list\[int\]"),
+            ("two", -1, ValueError, "must be non-negative"),
+            ("two", [100, 100.5], TypeError, "list values must be integers"),
+            ("two", [100, -1], ValueError, "list values must be non-negative"),
+        ],
+        ids=[
+            "list_without_groups",
+            "list_wrong_length",
+            "int_bool",
+            "int_negative",
+            "list_non_integer",
+            "list_negative",
+        ],
+    )
+    def test_compute_new_size_raises(self, labels_spec, new_size, exc_type, match):
+        """Invalid inputs raise the expected exception."""
+        labels = (
+            self._SINGLE_GROUP_LABELS
+            if labels_spec == "single"
+            else self._TWO_GROUP_LABELS
+        )
+        with pytest.raises(exc_type, match=match):
+            _compute_new_size(labels, len(labels), new_size)
 
 
 # =========================================================================

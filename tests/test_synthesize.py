@@ -317,17 +317,12 @@ class TestEvaluateValidation:
         with pytest.raises(ValueError, match="non-empty"):
             evaluate_sample_sizes(data=data, sample_sizes=[], groups=groups)
 
-    def test_negative_sample_size_raises(self, small_synthetic_data):
-        """Non-positive sample size raises ValueError."""
+    @pytest.mark.parametrize("bad_size", [-10, 0])
+    def test_non_positive_sample_size_raises(self, small_synthetic_data, bad_size):
+        """Non-positive sample sizes raise ValueError."""
         data, groups = small_synthetic_data
         with pytest.raises(ValueError, match="positive integers"):
-            evaluate_sample_sizes(data=data, sample_sizes=[-10], groups=groups)
-
-    def test_zero_sample_size_raises(self, small_synthetic_data):
-        """Zero sample size raises ValueError."""
-        data, groups = small_synthetic_data
-        with pytest.raises(ValueError, match="positive integers"):
-            evaluate_sample_sizes(data=data, sample_sizes=[0], groups=groups)
+            evaluate_sample_sizes(data=data, sample_sizes=[bad_size], groups=groups)
 
     def test_sample_size_exceeds_rows_raises(self, small_synthetic_data):
         """Sample size larger than data raises ValueError."""
@@ -650,104 +645,54 @@ class TestPlotSampleSizes:
 class TestVerboseEvaluate:
     """Tests for the verbose parameter of evaluate_sample_sizes."""
 
-    def test_verbose_0_silent(self, small_synthetic_data, capsys):
-        """verbose=0 should produce no stdout output."""
+    @pytest.mark.parametrize(
+        "int_form,str_form,empty,requires_bar,must_contain,must_not_contain",
+        [
+            (0, "silent", True, False, [], []),
+            (1, "minimal", False, True, ["Progress", "size=1/1"], ["F1:"]),
+            (2, "detailed", False, False, ["F1:", "Acc:", "AUC:"], []),
+        ],
+        ids=["silent", "minimal", "detailed"],
+    )
+    def test_verbose_level(
+        self,
+        small_synthetic_data,
+        capsys,
+        int_form,
+        str_form,
+        empty,
+        requires_bar,
+        must_contain,
+        must_not_contain,
+    ):
+        """Each verbose level controls evaluate_sample_sizes() stdout, and the
+        string alias behaves identically to its integer form."""
         data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=0,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        assert out == ""
 
-    def test_verbose_silent_string(self, small_synthetic_data, capsys):
-        """verbose='silent' should produce no stdout output."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose="silent",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        assert out == ""
+        def output_for(verbose):
+            result = evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=verbose,
+            )
+            assert isinstance(result, pd.DataFrame)
+            return capsys.readouterr().out
 
-    def test_verbose_1_minimal(self, small_synthetic_data, capsys):
-        """verbose=1 should show one overall progress line, not metrics."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=1,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        # Should contain bar characters
-        assert "\u2588" in out or "\u2591" in out
-        assert "Progress" in out
-        assert "size=1/1" in out
-        # Should NOT contain per-method metric lines
-        assert "F1:" not in out
-
-    def test_verbose_minimal_string(self, small_synthetic_data, capsys):
-        """verbose='minimal' should behave like verbose=1."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose="minimal",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        assert "\u2588" in out or "\u2591" in out
-        assert "Progress" in out
-        assert "F1:" not in out
-
-    def test_verbose_2_detailed(self, small_synthetic_data, capsys):
-        """verbose=2 should show per-method metric lines."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose=2,
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        assert "F1:" in out
-        assert "Acc:" in out
-        assert "AUC:" in out
-
-    def test_verbose_detailed_string(self, small_synthetic_data, capsys):
-        """verbose='detailed' should behave like verbose=2."""
-        data, groups = small_synthetic_data
-        result = evaluate_sample_sizes(
-            data=data,
-            sample_sizes=[50],
-            groups=groups,
-            n_draws=1,
-            methods=["LOGIS"],
-            verbose="detailed",
-        )
-        out = capsys.readouterr().out
-        assert isinstance(result, pd.DataFrame)
-        assert "F1:" in out
+        for verbose in (int_form, str_form):
+            out = output_for(verbose)
+            if empty:
+                assert out == "", f"verbose={verbose!r} should be silent"
+            if requires_bar:
+                assert "\u2588" in out or "\u2591" in out, (
+                    f"verbose={verbose!r}: expected block-bar characters"
+                )
+            for s in must_contain:
+                assert s in out, f"verbose={verbose!r}: expected {s!r} in output"
+            for s in must_not_contain:
+                assert s not in out, f"verbose={verbose!r}: did not expect {s!r}"
 
     def test_verbose_invalid_raises(self, small_synthetic_data):
         """Invalid verbose values should raise ValueError."""

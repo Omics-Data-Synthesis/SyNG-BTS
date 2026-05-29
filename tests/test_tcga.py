@@ -432,28 +432,26 @@ class TestResolveName:
             ],
         }
 
-    def test_full_name_match(self, manifest_unique):
-        assert (
-            tcga._resolve_name("UCS_primary_pathology_total_pelv_lnr", manifest_unique)
-            == "UCS_primary_pathology_total_pelv_lnr"
-        )
-
-    def test_short_alias_unique(self, manifest_unique):
-        assert (
-            tcga._resolve_name("BRCA", manifest_unique)
-            == "BRCA_breast_carcinoma_estrogen_receptor_status"
-        )
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            (
+                "UCS_primary_pathology_total_pelv_lnr",
+                "UCS_primary_pathology_total_pelv_lnr",
+            ),
+            ("BRCA", "BRCA_breast_carcinoma_estrogen_receptor_status"),
+        ],
+        ids=["full_name_passthrough", "short_alias_expansion"],
+    )
+    def test_success(self, manifest_unique, query, expected):
+        assert tcga._resolve_name(query, manifest_unique) == expected
 
     def test_short_alias_ambiguous(self, manifest_with_three_entries):
         with pytest.raises(ValueError, match="Ambiguous"):
             tcga._resolve_name("BRCA", manifest_with_three_entries)
 
-    def test_unknown_name(self, manifest_unique):
-        with pytest.raises(ValueError, match="Unknown TCGA dataset"):
-            tcga._resolve_name("FAKE", manifest_unique)
-
     def test_unknown_lists_available(self, manifest_unique):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Unknown TCGA dataset") as exc_info:
             tcga._resolve_name("FAKE", manifest_unique)
         msg = str(exc_info.value)
         assert "UCS_primary_pathology_total_pelv_lnr" in msg
@@ -480,31 +478,24 @@ class TestListTcgaDatasets:
         ]
         return make_test_manifest(*entries)
 
-    def test_default_returns_full_names_sorted(
-        self, monkeypatch, network_stub, cache_root, tmp_path
+    @pytest.mark.parametrize(
+        "short,expected",
+        [
+            (False, ["BRCA_carcinoma", "LIHC_platelet", "UCS_primary_pathology"]),
+            (True, ["BRCA", "LIHC", "UCS"]),
+        ],
+        ids=["full_names", "short_aliases"],
+    )
+    def test_list_sorted(
+        self, monkeypatch, network_stub, cache_root, tmp_path, short, expected
     ):
         manifest = self._three_dataset_manifest(tmp_path)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
         monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
 
-        result = list_tcga_datasets()
+        result = list_tcga_datasets(short=short)
 
-        assert result == [
-            "BRCA_carcinoma",
-            "LIHC_platelet",
-            "UCS_primary_pathology",
-        ]
-
-    def test_short_returns_aliases_sorted_unique(
-        self, monkeypatch, network_stub, cache_root, tmp_path
-    ):
-        manifest = self._three_dataset_manifest(tmp_path)
-        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
-
-        result = list_tcga_datasets(short=True)
-
-        assert result == ["BRCA", "LIHC", "UCS"]
+        assert result == expected
 
     def test_manifest_url_override(self, network_stub, cache_root, tmp_path):
         manifest = self._three_dataset_manifest(tmp_path)
@@ -908,35 +899,43 @@ class TestConvenienceAccessors:
         monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
         return load_tcga_dataset("BRCA_carcinoma")
 
-    def test_real_default_is_DESeq(self, loaded_dataset):
-        df, groups = loaded_dataset.real()
-        # Default normalization is "DESeq"
-        assert df.equals(loaded_dataset.processed["DESeq"].expression)
-        assert groups.equals(loaded_dataset.processed["DESeq"].groups)
+    @pytest.mark.parametrize(
+        "call_kwargs,norm_key",
+        [
+            ({}, "DESeq"),
+            ({"normalization": "TC"}, "TC"),
+        ],
+        ids=["default_DESeq", "explicit_TC"],
+    )
+    def test_real(self, loaded_dataset, call_kwargs, norm_key):
+        df, groups = loaded_dataset.real(**call_kwargs)
+        assert df.equals(loaded_dataset.processed[norm_key].expression)
+        assert groups.equals(loaded_dataset.processed[norm_key].groups)
 
-    def test_real_explicit_norm(self, loaded_dataset):
-        df, groups = loaded_dataset.real(normalization="TC")
-        assert df.equals(loaded_dataset.processed["TC"].expression)
-        assert groups.equals(loaded_dataset.processed["TC"].groups)
+    @pytest.mark.parametrize(
+        "call_kwargs,norm_key,model_key",
+        [
+            ({}, "DESeq", "CVAE1_5"),
+            ({"normalization": "DESeq", "model": "CVAE1_20"}, "DESeq", "CVAE1_20"),
+        ],
+        ids=["default_DESeq_CVAE1_5", "explicit_CVAE1_20"],
+    )
+    def test_synth(self, loaded_dataset, call_kwargs, norm_key, model_key):
+        df, groups = loaded_dataset.synth(**call_kwargs)
+        assert df.equals(loaded_dataset.synthetic[norm_key][model_key].expression)
+        assert groups.equals(loaded_dataset.synthetic[norm_key][model_key].groups)
 
-    def test_real_invalid_norm_raises(self, loaded_dataset):
-        with pytest.raises(ValueError, match="normalization"):
-            loaded_dataset.real(normalization="XYZ")
-
-    def test_synth_default(self, loaded_dataset):
-        df, groups = loaded_dataset.synth()
-        # Defaults: normalization="DESeq", model="CVAE1_5"
-        assert df.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_5"].expression)
-        assert groups.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_5"].groups)
-
-    def test_synth_explicit(self, loaded_dataset):
-        df, groups = loaded_dataset.synth(normalization="DESeq", model="CVAE1_20")
-        assert df.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_20"].expression)
-        assert groups.equals(loaded_dataset.synthetic["DESeq"]["CVAE1_20"].groups)
-
-    def test_synth_invalid_model_raises(self, loaded_dataset):
-        with pytest.raises(ValueError, match="model"):
-            loaded_dataset.synth(normalization="TC", model="FAKE")
+    @pytest.mark.parametrize(
+        "method,kwargs,match",
+        [
+            ("real", {"normalization": "XYZ"}, "normalization"),
+            ("synth", {"normalization": "TC", "model": "FAKE"}, "model"),
+        ],
+        ids=["real_invalid_norm", "synth_invalid_model"],
+    )
+    def test_invalid_raises(self, loaded_dataset, method, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            getattr(loaded_dataset, method)(**kwargs)
 
     def test_repr_contains_useful_info(self, loaded_dataset):
         text = repr(loaded_dataset)

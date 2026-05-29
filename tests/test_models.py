@@ -174,43 +174,23 @@ class TestCVAEForwardPass:
 class TestCVAEWideNetwork:
     """Test CVAE wide_network architecture option."""
 
-    def test_standard_encoder_layer_count(self):
-        """wide_network=False → 3 hidden layers (256, 128, 64)."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=False)
-        # 3 hidden layers × 3 modules each (Linear + BN + ReLU) = 9
-        assert len(model.encoder) == 9
-
-    def test_wide_encoder_layer_count(self):
-        """wide_network=True → 4 hidden layers (512, 256, 128, 64)."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=True)
-        # 4 hidden layers × 3 modules each = 12
-        assert len(model.encoder) == 12
-
-    def test_standard_decoder_layer_count(self):
-        """wide_network=False → decoder has 3 hidden + 1 output + 1 ReLU = 11."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=False)
-        # 3 hidden × 3 (Linear+BN+ReLU) + Linear + ReLU = 11
-        assert len(model.decoder) == 11
-
-    def test_wide_decoder_layer_count(self):
-        """wide_network=True → decoder has 4 hidden + 1 output + 1 ReLU = 14."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=True)
-        # 4 hidden × 3 + Linear + ReLU = 14
-        assert len(model.decoder) == 14
-
-    def test_standard_encoder_first_linear_dim(self):
-        """wide_network=False → first Linear is (num_features+1, 256)."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=False)
+    @pytest.mark.parametrize(
+        "wide_network,enc_len,dec_len,enc_first_out",
+        [
+            (False, 9, 11, 256),
+            (True, 12, 14, 512),
+        ],
+    )
+    def test_layer_counts_and_first_dim(
+        self, wide_network, enc_len, dec_len, enc_first_out
+    ):
+        """Encoder/decoder layer counts and first linear dim match network width."""
+        model = CVAE(num_features=50, num_classes=2, wide_network=wide_network)
+        assert len(model.encoder) == enc_len
+        assert len(model.decoder) == dec_len
         first_linear = model.encoder[0]
-        assert first_linear.in_features == 51
-        assert first_linear.out_features == 256
-
-    def test_wide_encoder_first_linear_dim(self):
-        """wide_network=True → first Linear is (num_features+1, 512)."""
-        model = CVAE(num_features=50, num_classes=2, wide_network=True)
-        first_linear = model.encoder[0]
-        assert first_linear.in_features == 51
-        assert first_linear.out_features == 512
+        assert first_linear.in_features == 51  # num_features + 1 (class concat)
+        assert first_linear.out_features == enc_first_out
 
     def test_wide_network_forward_pass(self):
         """Forward pass works with wide_network=True."""
@@ -246,41 +226,30 @@ class TestCVAEWideNetwork:
 class TestGANForwardPass:
     """Test GAN model forward passes."""
 
-    def test_gan_generator(self):
-        """Generator produces correct output shape."""
+    @pytest.mark.parametrize(
+        "component,input_shape,expected_shape",
+        [
+            ("generator", (5, 32), (5, 50)),
+            ("discriminator", (5, 50), (5, 1)),
+            ("generator_forward", (5, 32), (5, 50)),
+            ("discriminator_forward", (5, 50), (5, 1)),
+        ],
+        ids=[
+            "generator_submodule",
+            "discriminator_submodule",
+            "generator_forward_method",
+            "discriminator_forward_method",
+        ],
+    )
+    def test_gan_component_shapes(self, component, input_shape, expected_shape):
+        """Generator/discriminator submodules and their *_forward wrappers
+        produce correct output shapes."""
         model = GAN(num_features=50, latent_dim=32)
         model.eval()
-        z = torch.randn(5, 32)
+        inp = torch.randn(*input_shape)
         with torch.no_grad():
-            generated = model.generator(z)
-        assert generated.shape == (5, 50)
-
-    def test_gan_discriminator(self):
-        """Discriminator produces single logit per sample."""
-        model = GAN(num_features=50, latent_dim=32)
-        model.eval()
-        x = torch.randn(5, 50)
-        with torch.no_grad():
-            disc_out = model.discriminator(x)
-        assert disc_out.shape == (5, 1)
-
-    def test_gan_generator_forward(self):
-        """generator_forward method works."""
-        model = GAN(num_features=50, latent_dim=32)
-        model.eval()
-        z = torch.randn(5, 32)
-        with torch.no_grad():
-            generated = model.generator_forward(z)
-        assert generated.shape == (5, 50)
-
-    def test_gan_discriminator_forward(self):
-        """discriminator_forward method works."""
-        model = GAN(num_features=50, latent_dim=32)
-        model.eval()
-        x = torch.randn(5, 50)
-        with torch.no_grad():
-            logits = model.discriminator_forward(x)
-        assert logits.shape == (5, 1)
+            out = getattr(model, component)(inp)
+        assert out.shape == expected_shape
 
     @pytest.mark.parametrize("n_feat", [10, 50, 100])
     def test_gan_varying_features(self, n_feat):

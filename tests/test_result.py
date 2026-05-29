@@ -7,7 +7,23 @@ import pandas as pd
 import pytest
 import torch
 
-from syng_bts.result import SyngResult
+from syng_bts.result import PilotResult, SyngResult
+
+
+@pytest.fixture
+def plt():
+    """Provide pyplot on the Agg backend; close all figures on teardown.
+
+    Collapses the repeated ``import matplotlib; matplotlib.use("Agg"); import
+    matplotlib.pyplot as plt`` boilerplate that every plotting test needs.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as pyplot
+
+    yield pyplot
+    pyplot.close("all")
 
 
 @pytest.fixture
@@ -41,8 +57,6 @@ def sample_generated(sample_data):
 @pytest.fixture
 def sample_result(sample_generated, sample_loss):
     """Create a minimal SyngResult for testing."""
-    from syng_bts import SyngResult
-
     return SyngResult(
         generated_data=sample_generated,
         loss=sample_loss,
@@ -58,8 +72,6 @@ def sample_result(sample_generated, sample_loss):
 @pytest.fixture
 def sample_result_full(sample_generated, sample_loss):
     """Create a SyngResult with all optional fields filled."""
-    from syng_bts import SyngResult
-
     model_state = {"weight": torch.randn(10, 5)}
     recon = sample_generated.copy()
 
@@ -82,8 +94,6 @@ class TestSyngResult:
 
     def test_construction_minimal(self, sample_generated, sample_loss):
         """Test creating a SyngResult with required fields only."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -128,13 +138,8 @@ class TestSyngResult:
         assert "Reconstructed" in s
         assert "seed" in s.lower() or "Seed" in s
 
-    def test_plot_loss_separate_figures(self, sample_result):
+    def test_plot_loss_separate_figures(self, sample_result, plt):
         """Test plot_loss returns a dict of figures, one per loss column."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         figs = sample_result.plot_loss()
         assert isinstance(figs, dict)
         # sample_result has loss columns "kl" and "recons"
@@ -143,28 +148,16 @@ class TestSyngResult:
             assert isinstance(fig, plt.Figure), f"Expected Figure for {name}"
             plt.close(fig)
 
-    def test_plot_loss_x_axis_iterations(self, sample_result):
+    def test_plot_loss_x_axis_iterations(self, sample_result, plt):
         """Test plot_loss with x_axis='iterations' uses Iterations label."""
-        import matplotlib
-
-        matplotlib.use("Agg")  # non-interactive backend
-        import matplotlib.pyplot as plt
-
         figs = sample_result.plot_loss(x_axis="iterations")
         for fig in figs.values():
             ax = fig.get_axes()[0]
             assert ax.get_xlabel() == "Iterations"
             plt.close(fig)
 
-    def test_plot_loss_x_axis_epochs(self, sample_generated):
+    def test_plot_loss_x_axis_epochs(self, sample_generated, plt):
         """Test plot_loss with x_axis='epochs' maps x to epoch space."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import SyngResult
-
         loss = pd.DataFrame({"kl": np.random.rand(500), "recons": np.random.rand(500)})
         result = SyngResult(
             generated_data=sample_generated,
@@ -178,68 +171,71 @@ class TestSyngResult:
             assert ax.get_xlabel() == "Epochs"
             plt.close(fig)
 
-    def test_plot_loss_invalid_x_axis(self, sample_result):
-        """Test plot_loss raises ValueError for unsupported x_axis."""
-        with pytest.raises(ValueError, match="x_axis must be"):
-            sample_result.plot_loss(x_axis="batches")
+    # Invalid-input cluster (sample_result cases)
 
-    def test_plot_loss_missing_num_epochs_for_epochs_axis(
-        self, sample_generated, sample_loss
+    @pytest.mark.parametrize(
+        "kwargs,exc_type,match",
+        [
+            ({"x_axis": "batches"}, ValueError, "x_axis must be"),
+            (
+                {"running_average_window": 0, "x_axis": "iterations"},
+                ValueError,
+                "running_average_window must be > 0",
+            ),
+            (
+                {"running_average_window": -5, "x_axis": "iterations"},
+                ValueError,
+                "running_average_window must be > 0",
+            ),
+        ],
+        ids=["invalid_x_axis", "window_zero", "window_negative"],
+    )
+    def test_plot_loss_invalid_args(self, sample_result, kwargs, exc_type, match):
+        """Test plot_loss raises for invalid arguments (sample_result cases)."""
+        with pytest.raises(exc_type, match=match):
+            sample_result.plot_loss(**kwargs)
+
+    @pytest.mark.parametrize(
+        "loss,metadata,kwargs,match",
+        [
+            # x_axis='epochs' but epochs_trained missing from metadata
+            (
+                None,
+                {"model": "VAE1-10"},
+                {"x_axis": "epochs"},
+                "epochs_trained",
+            ),
+            # epochs_trained present but non-numeric
+            (
+                pd.DataFrame({"loss": np.random.rand(20)}),
+                {"epochs_trained": "ten"},
+                {"x_axis": "epochs"},
+                "epochs_trained",
+            ),
+            # running_average_window larger than the loss series
+            (
+                pd.DataFrame({"loss": [1.0, 0.9, 0.8]}),
+                {"epochs_trained": 3},
+                {"running_average_window": 100},
+                "larger than",
+            ),
+        ],
+        ids=["missing_epochs", "non_numeric_epochs", "window_larger_than_series"],
+    )
+    def test_plot_loss_invalid_metadata_raises(
+        self, sample_generated, sample_loss, loss, metadata, kwargs, match
     ):
-        """Test plot_loss raises ValueError when x_axis='epochs' but epochs_trained missing."""
-        from syng_bts import SyngResult
-
-        # Create result without epochs_trained in metadata
-        result_no_epochs = SyngResult(
-            generated_data=sample_generated,
-            loss=sample_loss,
-            metadata={"model": "VAE1-10"},
-        )
-        with pytest.raises(ValueError, match="epochs_trained"):
-            result_no_epochs.plot_loss(x_axis="epochs")
-
-    def test_plot_loss_non_numeric_num_epochs_for_epochs_axis(self, sample_generated):
-        """Test plot_loss raises ValueError when epochs_trained is non-numeric."""
-        from syng_bts import SyngResult
-
-        loss = pd.DataFrame({"loss": np.random.rand(20)})
+        """Test plot_loss raises for metadata/series-dependent invalid configs."""
         result = SyngResult(
             generated_data=sample_generated,
-            loss=loss,
-            metadata={"epochs_trained": "ten"},
+            loss=sample_loss if loss is None else loss,
+            metadata=metadata,
         )
-        with pytest.raises(ValueError, match="epochs_trained"):
-            result.plot_loss(x_axis="epochs")
+        with pytest.raises(ValueError, match=match):
+            result.plot_loss(**kwargs)
 
-    def test_plot_loss_invalid_running_average_window(self, sample_result):
-        """Test plot_loss raises ValueError when running_average_window <= 0."""
-        with pytest.raises(ValueError, match="running_average_window must be > 0"):
-            sample_result.plot_loss(running_average_window=0, x_axis="iterations")
-        with pytest.raises(ValueError, match="running_average_window must be > 0"):
-            sample_result.plot_loss(running_average_window=-5, x_axis="iterations")
-
-    def test_plot_loss_window_larger_than_series(self, sample_generated):
-        """Test plot_loss raises ValueError when window exceeds series length."""
-        from syng_bts import SyngResult
-
-        short_loss = pd.DataFrame({"loss": [1.0, 0.9, 0.8]})
-        result = SyngResult(
-            generated_data=sample_generated,
-            loss=short_loss,
-            metadata={"epochs_trained": 3},
-        )
-        with pytest.raises(ValueError, match="larger than"):
-            result.plot_loss(running_average_window=100)
-
-    def test_plot_loss_ylim_scaling(self, sample_generated):
+    def test_plot_loss_ylim_scaling(self, sample_generated, plt):
         """Test plot_loss applies y-axis scaling to ignore the initial spike."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import SyngResult
-
         # Create a loss series with a huge initial spike
         vals = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
         loss = pd.DataFrame({"loss": vals})
@@ -258,54 +254,47 @@ class TestSyngResult:
         )
         plt.close(fig)
 
-    def test_plot_heatmap_generated(self, sample_result):
-        """Test plot_heatmap returns a heatmap figure for generated data."""
-        import matplotlib
+    # plot_heatmap valid which-variants
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig = sample_result.plot_heatmap("generated")
+    @pytest.mark.parametrize(
+        "which,fixture_name",
+        [
+            ("generated", "sample_result"),
+            ("reconstructed", "sample_result_full"),
+            (None, "sample_result"),
+        ],
+        ids=["generated", "reconstructed", "default"],
+    )
+    def test_plot_heatmap_which(self, request, which, fixture_name, plt):
+        """Test plot_heatmap for valid 'which' values."""
+        result = request.getfixturevalue(fixture_name)
+        if which is None:
+            fig = result.plot_heatmap()
+        else:
+            fig = result.plot_heatmap(which)
         assert isinstance(fig, plt.Figure)
-        # Title should mention "Generated"
-        ax = fig.get_axes()[0]
-        assert "Generated" in ax.get_title()
+        if which == "generated":
+            ax = fig.get_axes()[0]
+            assert "Generated" in ax.get_title()
+        elif which == "reconstructed":
+            assert len(fig.get_axes()) >= 1
         plt.close(fig)
 
-    def test_plot_heatmap_reconstructed(self, sample_result_full):
-        """Test plot_heatmap returns a heatmap figure for reconstructed data."""
-        import matplotlib
+    # plot_heatmap invalid / missing raises
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig = sample_result_full.plot_heatmap("reconstructed")
-        assert isinstance(fig, plt.Figure)
-        ax = fig.get_axes()
-        # seaborn heatmaps produce axes; just check it returned a figure
-        assert len(ax) >= 1
-        plt.close(fig)
-
-    def test_plot_heatmap_reconstructed_missing(self, sample_result):
-        """Test plot_heatmap raises ValueError when reconstructed data is None."""
-        with pytest.raises(ValueError, match="No reconstructed data"):
-            sample_result.plot_heatmap("reconstructed")
-
-    def test_plot_heatmap_invalid_which(self, sample_result):
-        """Test plot_heatmap raises ValueError for unknown 'which' value."""
-        with pytest.raises(ValueError, match="Unknown value"):
-            sample_result.plot_heatmap("invalid")
-
-    def test_plot_heatmap_default(self, sample_result):
-        """Test plot_heatmap defaults to 'generated'."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        fig = sample_result.plot_heatmap()
-        assert isinstance(fig, plt.Figure)
-        plt.close(fig)
+    @pytest.mark.parametrize(
+        "which,fixture_name,match",
+        [
+            ("invalid", "sample_result", "Unknown value"),
+            ("reconstructed", "sample_result", "No reconstructed data"),
+        ],
+        ids=["invalid_which", "reconstructed_missing"],
+    )
+    def test_plot_heatmap_raises(self, request, which, fixture_name, match):
+        """Test plot_heatmap raises ValueError for invalid or missing data."""
+        result = request.getfixturevalue(fixture_name)
+        with pytest.raises(ValueError, match=match):
+            result.plot_heatmap(which)
 
     def test_save_minimal(self, sample_result, temp_dir):
         """Test save writes generated and loss CSVs."""
@@ -381,8 +370,6 @@ class TestOriginalData:
         self, sample_generated, sample_loss
     ):
         """SyngResult.original_data defaults to None."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -394,8 +381,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss
     ):
         """SyngResult stores original_data when provided."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -409,8 +394,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss, temp_dir
     ):
         """save() writes an _original.csv when original_data is present."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -425,8 +408,6 @@ class TestOriginalData:
         self, sample_generated, sample_loss, temp_dir
     ):
         """save() does not write _original.csv when original_data is None."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -439,8 +420,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss, temp_dir
     ):
         """load() restores original_data from _original.csv."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -457,8 +436,6 @@ class TestOriginalData:
         self, sample_generated, sample_loss, temp_dir
     ):
         """load() sets original_data=None when no _original.csv exists."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -472,8 +449,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss
     ):
         """summary() mentions original-data shape when present."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -485,8 +460,6 @@ class TestOriginalData:
 
     def test_repr_shows_has_original(self, sample_data, sample_generated, sample_loss):
         """__repr__ includes has_original=True when original_data is present."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -495,15 +468,10 @@ class TestOriginalData:
         )
         assert "has_original=True" in repr(result)
 
-    def test_plot_heatmap_original(self, sample_data, sample_generated, sample_loss):
+    def test_plot_heatmap_original(
+        self, sample_data, sample_generated, sample_loss, plt
+    ):
         """plot_heatmap(which='original') works."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -516,8 +484,6 @@ class TestOriginalData:
 
     def test_plot_heatmap_original_missing_raises(self, sample_generated, sample_loss):
         """plot_heatmap(which='original') raises when no original_data."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -530,8 +496,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss
     ):
         """PilotResult stores top-level original_data."""
-        from syng_bts import PilotResult, SyngResult
-
         runs = {
             (10, 1): SyngResult(
                 generated_data=sample_generated,
@@ -547,8 +511,6 @@ class TestOriginalData:
         self, sample_data, sample_generated, sample_loss, temp_dir
     ):
         """PilotResult.save() writes top-level _original.csv."""
-        from syng_bts import PilotResult, SyngResult
-
         runs = {
             (10, 1): SyngResult(
                 generated_data=sample_generated,
@@ -572,15 +534,11 @@ class TestPilotResult:
 
     def test_no_load_method(self):
         """PilotResult intentionally does not provide a load() method."""
-        from syng_bts import PilotResult
-
         assert not hasattr(PilotResult, "load")
 
     @pytest.fixture
     def pilot_result(self, sample_generated, sample_loss):
         """Create a PilotResult with 2 pilot sizes × 2 draws."""
-        from syng_bts import PilotResult, SyngResult
-
         runs = {}
         for ps in [10, 20]:
             for draw in [1, 2]:
@@ -637,13 +595,8 @@ class TestPilotResult:
         assert "pilot10" in gen_path.name
         assert "draw1" in gen_path.name
 
-    def test_plot_loss_per_run(self, pilot_result):
+    def test_plot_loss_per_run(self, pilot_result, plt):
         """Test plot_loss(style='per_run') returns nested per-run figures."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         figs = pilot_result.plot_loss(style="per_run")
         assert isinstance(figs, dict)
         assert len(figs) == 4  # 2 pilot sizes × 2 draws
@@ -653,13 +606,8 @@ class TestPilotResult:
                 assert isinstance(fig, plt.Figure), f"Expected Figure for {key}/{col}"
                 plt.close(fig)
 
-    def test_plot_loss_overlay_runs_is_default(self, pilot_result):
+    def test_plot_loss_overlay_runs_is_default(self, pilot_result, plt):
         """Test that default style is 'overlay_runs'."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         figs = pilot_result.plot_loss()
         assert isinstance(figs, dict)
         # Default should now be overlay_runs, which returns flattened dict
@@ -667,13 +615,8 @@ class TestPilotResult:
         for fig in figs.values():
             plt.close(fig)
 
-    def test_plot_loss_overlay_runs(self, pilot_result):
+    def test_plot_loss_overlay_runs(self, pilot_result, plt):
         """Test plot_loss(style='overlay_runs') overlays all runs per loss column."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
         figs = pilot_result.plot_loss(style="overlay_runs")
         assert isinstance(figs, dict)
         assert set(figs.keys()) == {"kl", "recons"}
@@ -685,38 +628,33 @@ class TestPilotResult:
             assert len(lines) == 4, f"Expected 4 lines for {col}, got {len(lines)}"
             plt.close(fig)
 
-    def test_plot_loss_overlay_runs_x_axis_epochs(self, pilot_result):
-        """Test style='overlay_runs' with x_axis='epochs'."""
-        import matplotlib
+    # overlay/mean_band x_axis variants
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        figs = pilot_result.plot_loss(style="overlay_runs", x_axis="epochs")
+    @pytest.mark.parametrize(
+        "style,x_axis,expected_xlabel",
+        [
+            ("overlay_runs", "epochs", "Epochs"),
+            ("overlay_runs", "iterations", "Iterations"),
+            ("mean_band", "epochs", "Epochs"),
+        ],
+        ids=[
+            "overlay_runs_epochs",
+            "overlay_runs_iterations",
+            "mean_band_epochs",
+        ],
+    )
+    def test_plot_loss_x_axis_variants(
+        self, pilot_result, style, x_axis, expected_xlabel, plt
+    ):
+        """Test overlay_runs and mean_band plot_loss x_axis label variants."""
+        figs = pilot_result.plot_loss(style=style, x_axis=x_axis)
         for fig in figs.values():
             ax = fig.get_axes()[0]
-            assert ax.get_xlabel() == "Epochs"
+            assert ax.get_xlabel() == expected_xlabel
             plt.close(fig)
 
-    def test_plot_loss_overlay_runs_x_axis_iterations(self, pilot_result):
-        """Test style='overlay_runs' with x_axis='iterations'."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        figs = pilot_result.plot_loss(style="overlay_runs", x_axis="iterations")
-        for fig in figs.values():
-            ax = fig.get_axes()[0]
-            assert ax.get_xlabel() == "Iterations"
-            plt.close(fig)
-
-    def test_plot_loss_mean_band(self, pilot_result):
+    def test_plot_loss_mean_band(self, pilot_result, plt):
         """Test plot_loss(style='mean_band') produces mean ± std plot."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         from matplotlib.collections import PolyCollection
 
         figs = pilot_result.plot_loss(style="mean_band")
@@ -732,64 +670,10 @@ class TestPilotResult:
             assert len(polys) >= 1, f"No shaded std band for {col}"
             plt.close(fig)
 
-    def test_plot_loss_mean_band_x_axis_epochs(self, pilot_result):
-        """Test mean_band plot_loss supports x_axis='epochs'."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        figs = pilot_result.plot_loss(style="mean_band", x_axis="epochs")
-        for fig in figs.values():
-            ax = fig.get_axes()[0]
-            assert ax.get_xlabel() == "Epochs"
-            plt.close(fig)
-
-    def test_plot_loss_mean_band_truncate_true(self, sample_generated):
-        """Test mean_band with truncate=True uses shortest run length."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import PilotResult, SyngResult
-
-        # Create runs with different loss lengths
-        runs = {}
-        for draw, length in [(1, 100), (2, 50)]:
-            runs[(10, draw)] = SyngResult(
-                generated_data=sample_generated.copy(),
-                loss=pd.DataFrame({"loss": np.random.rand(length)}),
-                metadata={"model": "AE", "epochs_trained": length, "dataname": "t"},
-            )
-        pr = PilotResult(runs=runs, metadata={"model": "AE"})
-        figs = pr.plot_loss(
-            style="mean_band",
-            truncate=True,
-            running_average_window=5,
-            x_axis="iterations",
-        )
-        ax = figs["loss"].get_axes()[0]
-        # The shaded band x-data should extend to min length (50)
-        for child in ax.get_children():
-            from matplotlib.collections import PolyCollection
-
-            if isinstance(child, PolyCollection):
-                paths = child.get_paths()
-                if paths:
-                    verts = paths[0].vertices
-                    assert verts[:, 0].max() <= 50
-                break
-        plt.close("all")
-
-    def test_plot_loss_mean_band_truncate_false(self, sample_generated):
-        """Test mean_band with truncate=False uses longest run length."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import PilotResult, SyngResult
+    def _mean_band_max_x(self, sample_generated, truncate):
+        """Build a 2-run PilotResult (lengths 100 and 50), plot a mean_band, and
+        return the band's largest x-vertex (the run length it extends to)."""
+        from matplotlib.collections import PolyCollection
 
         runs = {}
         for draw, length in [(1, 100), (2, 50)]:
@@ -801,48 +685,86 @@ class TestPilotResult:
         pr = PilotResult(runs=runs, metadata={"model": "AE"})
         figs = pr.plot_loss(
             style="mean_band",
-            truncate=False,
+            truncate=truncate,
             running_average_window=5,
             x_axis="iterations",
         )
         ax = figs["loss"].get_axes()[0]
-        # The shaded band x-data should extend to max length (100)
         for child in ax.get_children():
-            from matplotlib.collections import PolyCollection
-
             if isinstance(child, PolyCollection):
                 paths = child.get_paths()
-                if paths:
-                    verts = paths[0].vertices
-                    # x-coords should go up to ~99 (0-indexed)
-                    assert verts[:, 0].max() >= 90
-                break
-        plt.close("all")
+                return paths[0].vertices[:, 0].max() if paths else None
+        return None
 
-    def test_plot_loss_invalid_style(self, pilot_result):
-        """Test plot_loss raises ValueError for invalid style."""
-        with pytest.raises(ValueError, match="style must be one of"):
-            pilot_result.plot_loss(style="fancy")
+    def test_plot_loss_mean_band_truncate_true(self, sample_generated, plt):
+        """truncate=True: band extends only to the shortest run length (50)."""
+        max_x = self._mean_band_max_x(sample_generated, truncate=True)
+        assert max_x is not None
+        assert max_x <= 50
 
-    def test_plot_loss_invalid_running_average_window(self, pilot_result):
-        """Test plot_loss raises ValueError when window <= 0."""
-        with pytest.raises(ValueError, match="running_average_window must be > 0"):
-            pilot_result.plot_loss(running_average_window=0)
+    def test_plot_loss_mean_band_truncate_false(self, sample_generated, plt):
+        """truncate=False: band extends to the longest run length (~99)."""
+        max_x = self._mean_band_max_x(sample_generated, truncate=False)
+        assert max_x is not None
+        assert max_x >= 90
 
-    def test_plot_loss_invalid_x_axis(self, pilot_result):
-        """Test plot_loss raises ValueError for invalid x_axis."""
-        with pytest.raises(ValueError, match="x_axis must be"):
-            pilot_result.plot_loss(x_axis="batches")
+    # PilotResult invalid-argument cluster
 
-    def test_plot_loss_individual_ylim_scaling(self, sample_generated):
-        """Test style='individual' applies y-axis spike suppression via SyngResult."""
-        import matplotlib
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"style": "fancy"}, "style must be one of"),
+            ({"running_average_window": 0}, "running_average_window must be > 0"),
+            ({"x_axis": "batches"}, "x_axis must be"),
+        ],
+        ids=["invalid_style", "invalid_window", "invalid_x_axis"],
+    )
+    def test_plot_loss_invalid_args(self, pilot_result, kwargs, match):
+        """Test PilotResult.plot_loss raises ValueError for invalid arguments."""
+        with pytest.raises(ValueError, match=match):
+            pilot_result.plot_loss(**kwargs)
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+    # ylim_scaling for multi-run styles
 
-        from syng_bts import PilotResult, SyngResult
+    @pytest.mark.parametrize(
+        "style,fig_key",
+        [
+            ("overlay_runs", "loss"),
+            ("mean_band", "loss"),
+        ],
+        ids=["overlay_runs", "mean_band"],
+    )
+    def test_plot_loss_multirun_ylim_scaling(
+        self, sample_generated, style, fig_key, plt
+    ):
+        """Test overlay_runs and mean_band styles apply y-axis spike suppression."""
+        vals1 = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
+        vals2 = np.concatenate([np.array([900.0, 700.0]), np.random.rand(200) * 5])
 
+        runs = {
+            (10, 1): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals1}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+            (10, 2): SyngResult(
+                generated_data=sample_generated.copy(),
+                loss=pd.DataFrame({"loss": vals2}),
+                metadata={"model": "AE", "epochs_trained": 100},
+            ),
+        }
+        pr = PilotResult(runs=runs, metadata={"model": "AE"})
+
+        figs = pr.plot_loss(style=style, running_average_window=10)
+        fig = figs[fig_key]
+        ylim = fig.get_axes()[0].get_ylim()
+        assert ylim[1] < 100, (
+            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
+        )
+        plt.close(fig)
+
+    def test_plot_loss_individual_ylim_scaling(self, sample_generated, plt):
+        """Test style='per_run' applies y-axis spike suppression via SyngResult."""
         vals = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
         runs = {
             (10, 1): SyngResult(
@@ -855,74 +777,6 @@ class TestPilotResult:
 
         figs = pr.plot_loss(style="per_run", running_average_window=10)
         fig = figs[(10, 1)]["loss"]
-        ylim = fig.get_axes()[0].get_ylim()
-        assert ylim[1] < 100, (
-            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
-        )
-        plt.close(fig)
-
-    def test_plot_loss_all_ylim_scaling(self, sample_generated):
-        """Test style='overlay' applies y-axis scaling to ignore initial spikes."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import PilotResult, SyngResult
-
-        vals1 = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
-        vals2 = np.concatenate([np.array([900.0, 700.0]), np.random.rand(200) * 5])
-
-        runs = {
-            (10, 1): SyngResult(
-                generated_data=sample_generated.copy(),
-                loss=pd.DataFrame({"loss": vals1}),
-                metadata={"model": "AE", "epochs_trained": 100},
-            ),
-            (10, 2): SyngResult(
-                generated_data=sample_generated.copy(),
-                loss=pd.DataFrame({"loss": vals2}),
-                metadata={"model": "AE", "epochs_trained": 100},
-            ),
-        }
-        pr = PilotResult(runs=runs, metadata={"model": "AE"})
-
-        figs = pr.plot_loss(style="overlay_runs", running_average_window=10)
-        fig = figs["loss"]
-        ylim = fig.get_axes()[0].get_ylim()
-        assert ylim[1] < 100, (
-            f"y-axis upper limit {ylim[1]} too high; spike not ignored"
-        )
-        plt.close(fig)
-
-    def test_plot_loss_mean_band_ylim_scaling(self, sample_generated):
-        """Test style='aggregate' applies y-axis scaling to ignore initial spikes."""
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        from syng_bts import PilotResult, SyngResult
-
-        vals1 = np.concatenate([np.array([1000.0, 800.0]), np.random.rand(200) * 5])
-        vals2 = np.concatenate([np.array([900.0, 700.0]), np.random.rand(200) * 5])
-
-        runs = {
-            (10, 1): SyngResult(
-                generated_data=sample_generated.copy(),
-                loss=pd.DataFrame({"loss": vals1}),
-                metadata={"model": "AE", "epochs_trained": 100},
-            ),
-            (10, 2): SyngResult(
-                generated_data=sample_generated.copy(),
-                loss=pd.DataFrame({"loss": vals2}),
-                metadata={"model": "AE", "epochs_trained": 100},
-            ),
-        }
-        pr = PilotResult(runs=runs, metadata={"model": "AE"})
-
-        figs = pr.plot_loss(style="mean_band", running_average_window=10)
-        fig = figs["loss"]
         ylim = fig.get_axes()[0].get_ylim()
         assert ylim[1] < 100, (
             f"y-axis upper limit {ylim[1]} too high; spike not ignored"
@@ -958,8 +812,6 @@ class TestSaveLoadRoundtrip:
         """Test tuples in metadata are serialised as lists in JSON."""
         import json
 
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -971,8 +823,6 @@ class TestSaveLoadRoundtrip:
 
     def test_save_no_metadata_when_empty(self, sample_generated, sample_loss, temp_dir):
         """Test save skips metadata JSON when metadata is empty dict."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -983,8 +833,6 @@ class TestSaveLoadRoundtrip:
 
     def test_load_roundtrip(self, sample_result_full, temp_dir):
         """Test save → load round-trip preserves all fields."""
-        from syng_bts import SyngResult
-
         sample_result_full.save(temp_dir)
         loaded = SyngResult.load(temp_dir)
 
@@ -1016,16 +864,12 @@ class TestSaveLoadRoundtrip:
 
     def test_load_auto_prefix(self, sample_result, temp_dir):
         """Test load auto-detects prefix from a single generated CSV."""
-        from syng_bts import SyngResult
-
         sample_result.save(temp_dir)
         loaded = SyngResult.load(temp_dir)
         assert loaded.generated_data.shape == sample_result.generated_data.shape
 
     def test_load_with_explicit_prefix(self, sample_result_full, temp_dir):
         """Test load with an explicit prefix."""
-        from syng_bts import SyngResult
-
         paths = sample_result_full.save(temp_dir)
         # Derive the stem from the generated file name
         stem = paths["generated"].name.removesuffix("_generated.csv")
@@ -1034,8 +878,6 @@ class TestSaveLoadRoundtrip:
 
     def test_load_missing_optional_files(self, sample_generated, sample_loss, temp_dir):
         """Test load works when optional files are absent."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -1048,8 +890,6 @@ class TestSaveLoadRoundtrip:
 
     def test_load_auto_prefix_ambiguous(self, sample_generated, sample_loss, temp_dir):
         """Test load raises ValueError when multiple generated files exist."""
-        from syng_bts import SyngResult
-
         r1 = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -1069,8 +909,6 @@ class TestSaveLoadRoundtrip:
         self, sample_generated, sample_loss, temp_dir
     ):
         """Test loading a pilot-output directory requires explicit run prefix."""
-        from syng_bts import PilotResult, SyngResult
-
         runs = {
             (10, 1): SyngResult(
                 generated_data=sample_generated.copy(),
@@ -1090,15 +928,11 @@ class TestSaveLoadRoundtrip:
 
     def test_load_missing_generated_raises(self, temp_dir):
         """Test load raises FileNotFoundError when no generated CSV exists."""
-        from syng_bts import SyngResult
-
         with pytest.raises(FileNotFoundError, match="generated"):
             SyngResult.load(temp_dir)
 
     def test_load_missing_loss_raises(self, sample_generated, temp_dir):
         """Test load raises FileNotFoundError when loss CSV is missing."""
-        from syng_bts import SyngResult
-
         # Write only a generated CSV (no loss)
         gen_path = temp_dir / "test_AE_generated.csv"
         sample_generated.to_csv(gen_path, index=False)
@@ -1109,8 +943,6 @@ class TestSaveLoadRoundtrip:
         self, sample_generated, sample_loss, temp_dir
     ):
         """Test that input_shape is restored as a tuple after round-trip."""
-        from syng_bts import SyngResult
-
         result = SyngResult(
             generated_data=sample_generated,
             loss=sample_loss,
@@ -1300,56 +1132,48 @@ class TestGenerateNewSamples:
         new_result = result.generate_new_samples(50)
         assert new_result.generated_data.shape == (50, sample_data.shape[1])
 
-    # --- Model families ---
+    # per-model generate_new
 
-    def test_ae_generate_new(self, trained_result):
-        """AE model: generate_new_samples works."""
-        new_result = trained_result.generate_new_samples(100)
+    @pytest.mark.parametrize(
+        "fixture_name",
+        [
+            "trained_result",
+            "trained_result_vae",
+            "trained_result_gan",
+            "trained_result_maf",
+        ],
+        ids=["ae", "vae", "gan", "maf"],
+    )
+    def test_generate_new_model_families(self, request, fixture_name):
+        """generate_new_samples works for AE, VAE, GAN, and MAF models."""
+        result = request.getfixturevalue(fixture_name)
+        new_result = result.generate_new_samples(100)
         assert new_result.generated_data.shape[0] == 100
-        assert np.isfinite(new_result.generated_data.to_numpy()).all()
+        assert new_result.generated_data.shape[1] == result.generated_data.shape[1]
+        if fixture_name != "trained_result_maf":
+            assert np.isfinite(new_result.generated_data.to_numpy()).all()
 
-    def test_vae_generate_new(self, trained_result_vae):
-        """VAE model: generate_new_samples works."""
-        new_result = trained_result_vae.generate_new_samples(100)
-        assert new_result.generated_data.shape[0] == 100
-        assert np.isfinite(new_result.generated_data.to_numpy()).all()
+    # save/load then generate pair
 
-    def test_gan_generate_new(self, trained_result_gan):
-        """GAN model: generate_new_samples works."""
-        new_result = trained_result_gan.generate_new_samples(100)
-        assert new_result.generated_data.shape[0] == 100
-        assert np.isfinite(new_result.generated_data.to_numpy()).all()
-
-    def test_maf_generate_new(self, trained_result_maf):
-        """MAF flow model: generate_new_samples works."""
-        new_result = trained_result_maf.generate_new_samples(100)
-        assert new_result.generated_data.shape[0] == 100
-        # Flow outputs may not always be finite after 2 epochs but shape is correct
-        assert (
-            new_result.generated_data.shape[1]
-            == trained_result_maf.generated_data.shape[1]
-        )
-
-    # --- Save/load then generate ---
-
-    def test_save_load_then_generate(self, trained_result, temp_dir):
+    @pytest.mark.parametrize(
+        "fixture_name,n",
+        [
+            ("trained_result", 100),
+            ("trained_result_vae", 80),
+        ],
+        ids=["ae", "vae"],
+    )
+    def test_save_load_then_generate(self, request, fixture_name, n, temp_dir):
         """generate_new_samples works after save/load round-trip."""
-        trained_result.save(temp_dir)
+        trained = request.getfixturevalue(fixture_name)
+        trained.save(temp_dir)
         loaded = SyngResult.load(temp_dir)
 
-        new_result = loaded.generate_new_samples(100)
-        assert new_result.generated_data.shape[0] == 100
+        new_result = loaded.generate_new_samples(n)
+        assert new_result.generated_data.shape[0] == n
         assert list(new_result.generated_data.columns) == list(
-            trained_result.generated_data.columns
+            trained.generated_data.columns
         )
-
-    def test_save_load_then_generate_vae(self, trained_result_vae, temp_dir):
-        """VAE: generate_new_samples works after save/load."""
-        trained_result_vae.save(temp_dir)
-        loaded = SyngResult.load(temp_dir)
-
-        new_result = loaded.generate_new_samples(80)
-        assert new_result.generated_data.shape[0] == 80
 
     # --- Error cases ---
 
@@ -1401,16 +1225,19 @@ class TestGenerateNewSamples:
                 new_result.original_data, trained_result.original_data
             )
 
-    def test_cvae_generated_labels_new_mode(self, trained_result_cvae):
-        """CVAE new mode updates generated_labels metadata for new samples."""
-        result = trained_result_cvae.generate_new_samples(40, mode="new")
-        labels = result.metadata.get("generated_labels")
-        assert isinstance(labels, pd.Series)
-        assert len(labels) == 40
+    # CVAE label modes
 
-    def test_cvae_generated_labels_overwrite_mode(self, trained_result_cvae):
-        """CVAE overwrite mode replaces generated_labels to match new rows."""
-        result = trained_result_cvae.generate_new_samples(30, mode="overwrite")
+    @pytest.mark.parametrize(
+        "mode,n",
+        [
+            ("new", 40),
+            ("overwrite", 30),
+        ],
+        ids=["new_mode", "overwrite_mode"],
+    )
+    def test_cvae_generated_labels_mode(self, trained_result_cvae, mode, n):
+        """CVAE new/overwrite mode updates generated_labels metadata correctly."""
+        result = trained_result_cvae.generate_new_samples(n, mode=mode)
         labels = result.metadata.get("generated_labels")
         assert isinstance(labels, pd.Series)
         assert len(labels) == result.generated_data.shape[0]
@@ -1476,24 +1303,24 @@ class TestGroupAttributes:
         assert set(result.original_groups.unique()) == {"A", "B"}
 
     def test_repr_shows_has_groups_true(self, sample_result_with_groups):
-        """__repr__ shows has_groups=True when groups are present."""
-        r = repr(sample_result_with_groups)
-        assert "has_groups=True" in r
+        """__repr__ reports has_groups=True when groups are present."""
+        assert "has_groups=True" in repr(sample_result_with_groups)
 
     def test_repr_shows_has_groups_false(self, sample_generated, sample_loss):
-        """__repr__ shows has_groups=False when no groups are set."""
-        result = SyngResult(generated_data=sample_generated, loss=sample_loss)
-        r = repr(result)
-        assert "has_groups=False" in r
+        """__repr__ reports has_groups=False when groups are absent."""
+        result = SyngResult(
+            generated_data=sample_generated, loss=sample_loss, metadata={}
+        )
+        assert "has_groups=False" in repr(result)
 
     def test_summary_includes_group_info(self, sample_result_with_groups):
-        """summary() mentions group classes when groups are present."""
+        """summary() reports group info and class count when groups are present."""
         s = sample_result_with_groups.summary()
         assert "Groups" in s
         assert "2 classes" in s
 
     def test_summary_no_group_info_when_none(self, sample_generated, sample_loss):
-        """summary() does not mention groups when they are None."""
+        """summary() omits group info when groups are absent."""
         result = SyngResult(
             generated_data=sample_generated, loss=sample_loss, metadata={}
         )

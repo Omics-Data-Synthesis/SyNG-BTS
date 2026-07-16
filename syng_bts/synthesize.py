@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.optimize import approx_fprime, curve_fit
+from scipy.optimize import curve_fit
 from scipy.stats import norm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegressionCV
@@ -410,6 +410,22 @@ def _power_law(x: float, a: float, b: float, c: float) -> float:
     return (1 - a) - (b * (x**c))
 
 
+def _power_law_gradient(x: float, a: float, b: float, c: float) -> np.ndarray:
+    """Gradient of :func:`_power_law` with respect to ``(a, b, c)``."""
+    x_power_c = x**c
+    return np.array([-1.0, -x_power_c, -b * x_power_c * np.log(x)])
+
+
+def _power_law_prediction_variance(
+    x: float,
+    params: np.ndarray,
+    covariance: np.ndarray,
+) -> float:
+    """Propagate parameter covariance to fitted-curve variance at ``x``."""
+    gradient = _power_law_gradient(x, *params)
+    return float(gradient @ covariance @ gradient.T)
+
+
 def _fit_curve(
     acc_table: pd.DataFrame,
     metric_name: str,
@@ -455,14 +471,13 @@ def _fit_curve(
 
         acc_table["predicted"] = _power_law(acc_table["n"], *popt)
 
-        # Confidence intervals via delta method
-        epsilon = np.sqrt(np.finfo(float).eps)
-        jacobian = np.empty((len(acc_table["n"]), len(popt)))
-        for i, x in enumerate(acc_table["n"]):
-            jacobian[i] = approx_fprime(
-                [x], lambda x_: _power_law(x_[0], *popt), epsilon
-            )
-        pred_var = np.sum((jacobian @ pcov) * jacobian, axis=1)
+        # Pointwise confidence intervals for the fitted mean curve via delta method
+        pred_var = np.array(
+            [
+                _power_law_prediction_variance(float(x), popt, pcov)
+                for x in acc_table["n"]
+            ]
+        )
         pred_std = np.sqrt(pred_var)
         t = norm.ppf(0.975)
         acc_table["ci_low"] = acc_table["predicted"] - t * pred_std

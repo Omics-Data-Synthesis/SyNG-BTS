@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import syng_bts.synthesize as synthesize
 from syng_bts.data_utils import resolve_data
 from syng_bts.result import SyngResult
 from syng_bts.synthesize import evaluate_sample_sizes, plot_sample_sizes
@@ -80,6 +81,51 @@ def small_syng_result_no_groups(small_synthetic_data) -> SyngResult:
         loss=pd.DataFrame({"loss": [1.0, 0.5]}),
         metadata={"model": "VAE", "seed": 42},
     )
+
+
+# ---------------------------------------------------------------------------
+# Inverse power-law uncertainty
+# ---------------------------------------------------------------------------
+
+
+class TestPowerLawUncertainty:
+    """Regression tests for delta-method confidence-band calculations."""
+
+    def test_parameter_gradient_matches_finite_differences(self):
+        """The analytic gradient differentiates with respect to a, b, and c."""
+        x = 10.0
+        params = np.array([0.1, 0.2, -0.5])
+        epsilon = 1e-6
+        finite_difference = np.empty(3)
+
+        for index in range(3):
+            offset = np.zeros(3)
+            offset[index] = epsilon
+            finite_difference[index] = (
+                synthesize._power_law(x, *(params + offset))
+                - synthesize._power_law(x, *(params - offset))
+            ) / (2 * epsilon)
+
+        analytic = synthesize._power_law_gradient(x, *params)
+
+        np.testing.assert_allclose(analytic, finite_difference, rtol=1e-7, atol=1e-9)
+
+    def test_prediction_variance_matches_hand_calculation(self):
+        """Parameter covariance is propagated as J Sigma J-transpose."""
+        params = np.array([0.1, 0.2, -0.5])
+        covariance = np.array(
+            [
+                [0.04, 0.002, -0.003],
+                [0.002, 0.01, 0.001],
+                [-0.003, 0.001, 0.09],
+            ]
+        )
+
+        variance = synthesize._power_law_prediction_variance(
+            10.0, params, covariance
+        )
+
+        assert variance == pytest.approx(0.043391928179533926)
 
 
 # ---------------------------------------------------------------------------

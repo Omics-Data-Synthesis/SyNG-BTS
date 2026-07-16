@@ -246,6 +246,78 @@ class TestEvaluateSampleSizesDataFrame:
 
 
 # ---------------------------------------------------------------------------
+# evaluate_sample_sizes — Preprocessing
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluationPreprocessing:
+    """Regression tests for training-fitted feature standardization."""
+
+    def test_evaluation_uses_training_fitted_standardization(self, monkeypatch):
+        """Evaluation values use training means and standard deviations."""
+        data = pd.DataFrame(
+            {
+                "shifted": [
+                    *range(5),
+                    *range(100, 105),
+                    *range(10, 15),
+                    *range(110, 115),
+                ],
+                "constant_in_training": [7] * 5 + [99] * 5 + [7] * 5 + [99] * 5,
+            }
+        )
+        groups = np.array(["A"] * 10 + ["B"] * 10)
+        train_index = np.array([0, 1, 2, 3, 4, 10, 11, 12, 13, 14])
+        test_index = np.array([5, 6, 7, 8, 9, 15, 16, 17, 18, 19])
+        captured: dict[str, np.ndarray] = {}
+
+        class SingleSplit:
+            def __init__(self, **_kwargs):
+                pass
+
+            def split(self, _data, _labels):
+                yield train_index, test_index
+
+        def capture_classifier(train_data, train_labels, test_data, test_labels):
+            captured["train_data"] = train_data.copy()
+            captured["test_data"] = test_data.copy()
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setattr(synthesize, "StratifiedKFold", SingleSplit)
+        monkeypatch.setattr(
+            synthesize.np.random,
+            "choice",
+            lambda values, size, replace: values[:size],
+        )
+        monkeypatch.setitem(
+            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
+        )
+
+        evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[20],
+            groups=groups,
+            n_draws=1,
+            apply_log=False,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+
+        raw_train = data.iloc[train_index, 0].to_numpy()
+        raw_test = data.iloc[test_index, 0].to_numpy()
+        expected_test = (raw_test - raw_train.mean()) / raw_train.std()
+
+        np.testing.assert_allclose(
+            captured["train_data"][:, 0].mean(), 0.0, atol=1e-12
+        )
+        np.testing.assert_allclose(captured["train_data"][:, 0].std(), 1.0)
+        np.testing.assert_allclose(captured["test_data"][:, 0], expected_test)
+        assert not np.isclose(captured["test_data"][:, 0].mean(), 0.0)
+        np.testing.assert_array_equal(captured["train_data"][:, 1], 7)
+        np.testing.assert_array_equal(captured["test_data"][:, 1], 99)
+
+
+# ---------------------------------------------------------------------------
 # evaluate_sample_sizes — SyngResult path
 # ---------------------------------------------------------------------------
 

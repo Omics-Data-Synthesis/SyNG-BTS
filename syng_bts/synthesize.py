@@ -34,7 +34,7 @@ from sklearn.linear_model import LogisticRegressionCV
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import scale
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from xgboost import DMatrix
 from xgboost import train as xgb_train
@@ -745,15 +745,20 @@ def evaluate_sample_sizes(
             }
 
             for train_index, test_index in skf.split(dat_candidate, labels_candidate):
-                train_data = dat_candidate[train_index]
-                test_data = dat_candidate[test_index]
+                train_data = dat_candidate[train_index].astype(np.float64, copy=True)
+                test_data = dat_candidate[test_index].astype(np.float64, copy=True)
                 train_labels = labels_candidate[train_index]
                 test_labels = labels_candidate[test_index]
 
-                # Scale non-zero-variance features
+                # Fit preprocessing on training data and reuse it for evaluation
                 non_zero_std = train_data.std(axis=0) != 0
-                train_data[:, non_zero_std] = scale(train_data[:, non_zero_std])
-                test_data[:, non_zero_std] = scale(test_data[:, non_zero_std])
+                scaler = StandardScaler()
+                train_data[:, non_zero_std] = scaler.fit_transform(
+                    train_data[:, non_zero_std]
+                )
+                test_data[:, non_zero_std] = scaler.transform(
+                    test_data[:, non_zero_std]
+                )
 
                 for method in resolved_methods:
                     clf_func = _CLASSIFIER_MAP[method]

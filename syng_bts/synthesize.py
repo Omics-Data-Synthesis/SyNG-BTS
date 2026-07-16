@@ -535,6 +535,8 @@ def evaluate_sample_sizes(
     apply_log: bool = True,
     methods: list[str] | None = None,
     verbose: int | str = "minimal",
+    test_data: pd.DataFrame | None = None,
+    test_groups: np.ndarray | pd.Series | list | None = None,
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
 
@@ -611,6 +613,13 @@ def evaluate_sample_sizes(
     # --- Resolve verbose level ---
     verbose_level = _resolve_verbose(verbose)
 
+    # --- Resolve evaluation mode ---
+    if (test_data is None) != (test_groups is None):
+        raise ValueError(
+            "'test_data' and 'test_groups' must be provided together or both omitted."
+        )
+    external_mode = test_data is not None
+
     # --- Resolve data and groups ---
     resolved_data, resolved_groups = _resolve_data_and_groups(data, groups, which)
 
@@ -627,6 +636,52 @@ def evaluate_sample_sizes(
             "'data' must contain only numeric columns; non-numeric columns: "
             f"{non_numeric_cols}"
         )
+
+    resolved_test_data: pd.DataFrame | None = None
+    test_group_arr: np.ndarray | None = None
+    if external_mode:
+        if not isinstance(test_data, pd.DataFrame):
+            raise TypeError(
+                f"'test_data' must be a pd.DataFrame, got {type(test_data).__name__}"
+            )
+        if test_data.shape[0] == 0 or test_data.shape[1] == 0:
+            raise ValueError("'test_data' must have at least 1 row and 1 column.")
+
+        non_numeric_test_cols = [
+            col
+            for col in test_data.columns
+            if not pd.api.types.is_numeric_dtype(test_data[col])
+        ]
+        if non_numeric_test_cols:
+            raise ValueError(
+                "'test_data' must contain only numeric columns; non-numeric "
+                f"columns: {non_numeric_test_cols}"
+            )
+
+        missing_test_cols = resolved_data.columns.difference(test_data.columns).tolist()
+        extra_test_cols = test_data.columns.difference(resolved_data.columns).tolist()
+        if (
+            missing_test_cols
+            or extra_test_cols
+            or len(test_data.columns) != len(resolved_data.columns)
+        ):
+            raise ValueError(
+                "'test_data' must have the same feature columns as 'data'; "
+                f"missing={missing_test_cols}, unexpected={extra_test_cols}."
+            )
+        resolved_test_data = test_data.loc[:, resolved_data.columns].copy()
+
+        test_group_arr = np.asarray(test_groups)
+        if test_group_arr.ndim != 1:
+            raise ValueError("'test_groups' must be one-dimensional.")
+        if len(test_group_arr) != len(resolved_test_data):
+            raise ValueError(
+                "Length mismatch: 'test_groups' must have one label per "
+                f"test-data row (test_groups={len(test_group_arr)}, "
+                f"rows={len(resolved_test_data)})."
+            )
+        if len(test_group_arr) == 0:
+            raise ValueError("'test_groups' must be non-empty.")
 
     group_arr = np.asarray(resolved_groups)
     if group_arr.ndim != 1:
@@ -680,6 +735,8 @@ def evaluate_sample_sizes(
     # --- Apply log transform if requested ---
     if apply_log:
         resolved_data = np.log2(resolved_data + 1)
+        if resolved_test_data is not None:
+            resolved_test_data = np.log2(resolved_test_data + 1)
 
     # Ensure float64 before sklearn scaling to avoid float32 numerical-warning
     # spam on high-range expression data.
@@ -691,6 +748,20 @@ def evaluate_sample_sizes(
     unique_groups = np.unique(group_arr)
     group_dict = {g: i for i, g in enumerate(unique_groups)}
     labels = np.array([group_dict[g] for g in group_arr])
+
+    external_data: np.ndarray | None = None
+    external_labels: np.ndarray | None = None
+    if test_group_arr is not None:
+        test_group_arr = np.array([str(item) for item in test_group_arr])
+        unknown_test_groups = sorted(set(test_group_arr) - set(group_dict))
+        if unknown_test_groups:
+            raise ValueError(
+                "'test_groups' contains labels not present in 'groups': "
+                f"{unknown_test_groups}."
+            )
+        external_labels = np.array([group_dict[g] for g in test_group_arr])
+        assert resolved_test_data is not None
+        external_data = resolved_test_data.to_numpy(dtype=np.float64, copy=True)
 
     # Compute class proportions and per-group indices
     group_counts = {g: int(np.sum(group_arr == g)) for g in unique_groups}
@@ -736,19 +807,34 @@ def evaluate_sample_sizes(
             dat_candidate = resolved_data.iloc[idx].values
             labels_candidate = labels[idx]
 
-            skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-
             # Accumulate per-fold metrics per classifier
             metrics: dict[str, dict[str, list]] = {
                 method: {"f1": [], "accuracy": [], "auc": []}
                 for method in resolved_methods
             }
 
-            for train_index, test_index in skf.split(dat_candidate, labels_candidate):
+            if external_mode:
+                split_indices = [(np.arange(len(dat_candidate)), None)]
+            else:
+                skf = StratifiedKFold(
+                    n_splits=n_splits, shuffle=True, random_state=42
+                )
+                split_indices = skf.split(dat_candidate, labels_candidate)
+
+            for train_index, test_index in split_indices:
                 train_data = dat_candidate[train_index].astype(np.float64, copy=True)
-                test_data = dat_candidate[test_index].astype(np.float64, copy=True)
                 train_labels = labels_candidate[train_index]
-                test_labels = labels_candidate[test_index]
+
+                if test_index is None:
+                    assert external_data is not None
+                    assert external_labels is not None
+                    evaluation_data = external_data.copy()
+                    evaluation_labels = external_labels
+                else:
+                    evaluation_data = dat_candidate[test_index].astype(
+                        np.float64, copy=True
+                    )
+                    evaluation_labels = labels_candidate[test_index]
 
                 # Fit preprocessing on training data and reuse it for evaluation
                 non_zero_std = train_data.std(axis=0) != 0
@@ -756,13 +842,18 @@ def evaluate_sample_sizes(
                 train_data[:, non_zero_std] = scaler.fit_transform(
                     train_data[:, non_zero_std]
                 )
-                test_data[:, non_zero_std] = scaler.transform(
-                    test_data[:, non_zero_std]
+                evaluation_data[:, non_zero_std] = scaler.transform(
+                    evaluation_data[:, non_zero_std]
                 )
 
                 for method in resolved_methods:
                     clf_func = _CLASSIFIER_MAP[method]
-                    res = clf_func(train_data, train_labels, test_data, test_labels)
+                    res = clf_func(
+                        train_data,
+                        train_labels,
+                        evaluation_data,
+                        evaluation_labels,
+                    )
                     metrics[method]["f1"].append(res["f1"])
                     metrics[method]["accuracy"].append(res["accuracy"])
                     metrics[method]["auc"].append(res["auc"])

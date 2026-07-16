@@ -318,6 +318,197 @@ class TestEvaluationPreprocessing:
 
 
 # ---------------------------------------------------------------------------
+# evaluate_sample_sizes — External evaluation set
+# ---------------------------------------------------------------------------
+
+
+class TestExternalEvaluation:
+    """Tests for evaluation against a fixed user-supplied test set."""
+
+    @pytest.mark.parametrize("missing", ["test_data", "test_groups"])
+    def test_external_arguments_must_be_paired(self, small_synthetic_data, missing):
+        """Supplying only one external argument raises a clear error."""
+        data, groups = small_synthetic_data
+        external_kwargs = {
+            "test_data": data.iloc[:10].copy(),
+            "test_groups": groups[:10],
+        }
+        external_kwargs.pop(missing)
+
+        with pytest.raises(ValueError, match="must be provided together"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[20],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=0,
+                **external_kwargs,
+            )
+
+    def test_external_feature_columns_must_match(self, small_synthetic_data):
+        """Candidate and external datasets must expose the same features."""
+        data, groups = small_synthetic_data
+        test_data = data.iloc[:10].rename(columns={"gene_0": "different_gene"})
+
+        with pytest.raises(ValueError, match="same feature columns"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[20],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                verbose=0,
+                test_data=test_data,
+                test_groups=groups[:10],
+            )
+
+    def test_internal_mode_retains_five_fold_evaluation(
+        self, small_synthetic_data, monkeypatch
+    ):
+        """Omitting an external set preserves the existing five classifier calls."""
+        data, groups = small_synthetic_data
+        calls: list[int] = []
+
+        def capture_classifier(train_data, train_labels, test_data, test_labels):
+            calls.append(len(test_data))
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setitem(
+            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
+        )
+
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[20],
+            groups=groups,
+            n_draws=1,
+            methods=["LOGIS"],
+            verbose=0,
+        )
+
+        assert len(calls) == 5
+        assert len(result) == 1
+
+    def test_external_mode_scores_fixed_rows_once(self, monkeypatch):
+        """The full candidate subset trains once and scores external rows."""
+        candidate = pd.DataFrame(
+            {
+                "gene_a": np.arange(1, 21, dtype=float),
+                "gene_b": np.arange(21, 41, dtype=float),
+            }
+        )
+        groups = np.array(["A"] * 10 + ["B"] * 10)
+        external = pd.DataFrame(
+            {
+                "gene_a": np.arange(101, 107, dtype=float),
+                "gene_b": np.arange(201, 207, dtype=float),
+            }
+        )
+        external_input = external.loc[:, ["gene_b", "gene_a"]].copy()
+        external_before = external_input.copy()
+        test_groups = np.array(["A", "B"] * 3)
+        calls: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+
+        def capture_classifier(train_data, train_labels, test_data, test_labels):
+            calls.append(
+                (
+                    train_data.copy(),
+                    train_labels.copy(),
+                    test_data.copy(),
+                    test_labels.copy(),
+                )
+            )
+            return {"f1": 0.2, "accuracy": 0.3, "auc": 0.4}
+
+        monkeypatch.setattr(
+            synthesize.np.random,
+            "choice",
+            lambda values, size, replace: values[:size],
+        )
+        monkeypatch.setitem(
+            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
+        )
+
+        result = evaluate_sample_sizes(
+            data=candidate,
+            sample_sizes=[10],
+            groups=groups,
+            n_draws=1,
+            apply_log=True,
+            methods=["LOGIS"],
+            verbose=0,
+            test_data=external_input,
+            test_groups=test_groups,
+        )
+
+        assert len(calls) == 1
+        train_data, train_labels, evaluation_data, evaluation_labels = calls[0]
+        selected_indices = [0, 1, 2, 3, 4, 10, 11, 12, 13, 14]
+        logged_train = np.log2(candidate.iloc[selected_indices] + 1).to_numpy()
+        logged_external = np.log2(external + 1).to_numpy()
+        expected_external = (
+            logged_external - logged_train.mean(axis=0)
+        ) / logged_train.std(axis=0)
+
+        assert train_data.shape == (10, 2)
+        np.testing.assert_array_equal(train_labels, [0] * 5 + [1] * 5)
+        np.testing.assert_allclose(evaluation_data, expected_external)
+        np.testing.assert_array_equal(evaluation_labels, [0, 1] * 3)
+        assert result.iloc[0]["f1_score"] == pytest.approx(0.2)
+        assert result.iloc[0]["accuracy"] == pytest.approx(0.3)
+        assert result.iloc[0]["auc"] == pytest.approx(0.4)
+        pd.testing.assert_frame_equal(external_input, external_before)
+
+    def test_same_external_set_can_score_real_and_generated_calls(self, monkeypatch):
+        """One empirical test set can be reused across independent evaluations."""
+        real = pd.DataFrame(
+            {
+                "gene_a": np.arange(1, 21, dtype=float),
+                "gene_b": np.arange(21, 41, dtype=float),
+            }
+        )
+        generated = real * 2
+        groups = np.array(["A"] * 10 + ["B"] * 10)
+        external = real.iloc[:6].copy()
+        external_before = external.copy()
+        test_groups = np.array(["A", "B", "A", "B", "A", "B"])
+        evaluation_sizes: list[int] = []
+
+        def capture_classifier(train_data, train_labels, test_data, test_labels):
+            evaluation_sizes.append(len(test_data))
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setattr(
+            synthesize.np.random,
+            "choice",
+            lambda values, size, replace: values[:size],
+        )
+        monkeypatch.setitem(
+            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
+        )
+
+        results = [
+            evaluate_sample_sizes(
+                data=candidate,
+                sample_sizes=[10],
+                groups=groups,
+                n_draws=1,
+                apply_log=False,
+                methods=["LOGIS"],
+                verbose=0,
+                test_data=external,
+                test_groups=test_groups,
+            )
+            for candidate in (real, generated)
+        ]
+
+        assert evaluation_sizes == [len(external), len(external)]
+        assert all(len(result) == 1 for result in results)
+        pd.testing.assert_frame_equal(external, external_before)
+
+
+# ---------------------------------------------------------------------------
 # evaluate_sample_sizes — SyngResult path
 # ---------------------------------------------------------------------------
 

@@ -1,13 +1,13 @@
 """SyntheSize integration — sample-size evaluation via classifier learning curves.
 
 This module provides classifier-based evaluation of synthetic data across
-candidate sample sizes, using stratified cross-validation and inverse
-power-law curve fitting.
+candidate sample sizes, using either stratified cross-validation or a fixed
+external evaluation set, plus inverse power-law curve fitting.
 
 Public API
 ----------
 - :func:`evaluate_sample_sizes` — Evaluate classifiers across candidate sample
-  sizes using stratified cross-validation.
+  sizes using stratified cross-validation or a fixed external evaluation set.
 - :func:`plot_sample_sizes` — Visualize IPLF learning curves from evaluation
   metrics.
 
@@ -540,9 +540,12 @@ def evaluate_sample_sizes(
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
 
-    For each classifier and each candidate sample size, performs *n_draws*
-    rounds of stratified sampling (proportional to class distribution),
-    applies 5-fold cross-validation, and averages metrics across folds.
+    For each classifier and candidate sample size, performs *n_draws* rounds
+    of stratified sampling proportional to the class distribution. When no
+    external test set is supplied, metrics are averaged over 5-fold stratified
+    cross-validation. When *test_data* and *test_groups* are supplied, each
+    classifier is trained on the complete candidate subset and evaluated once
+    on those fixed external rows.
 
     Parameters
     ----------
@@ -566,8 +569,8 @@ def evaluate_sample_sizes(
     n_draws : int, default 5
         Number of resampling repetitions for each sample size.
     apply_log : bool, default True
-        When ``True``, a ``log2(x + 1)`` transform is applied to the data
-        before evaluation.
+        When ``True``, a ``log2(x + 1)`` transform is applied to the candidate
+        and external data before evaluation.
     methods : list[str] or None
         Classifier names to evaluate. Accepts canonical names
         (``'LOGIS'``, ``'SVM'``, ``'KNN'``, ``'RF'``, ``'XGB'``) and
@@ -579,6 +582,13 @@ def evaluate_sample_sizes(
         across all sample sizes, draws, and methods), or ``2`` /
         ``"detailed"`` (per-draw/method metric
         lines).
+    test_data : pd.DataFrame or None
+        Fixed external evaluation data. Must have the same feature columns as
+        *data*. When supplied, *test_groups* is also required. External rows
+        are transformed using preprocessing fitted on each candidate subset.
+    test_groups : array-like or None
+        Class labels corresponding to the rows of *test_data*. Must be supplied
+        together with *test_data* and use labels present in *groups*.
 
     Returns
     -------
@@ -589,12 +599,15 @@ def evaluate_sample_sizes(
     Raises
     ------
     TypeError
-        If *data* is not a ``pd.DataFrame`` or ``SyngResult``.
+        If *data* is not a ``pd.DataFrame`` or ``SyngResult``, or supplied
+        *test_data* is not a ``pd.DataFrame``.
     ValueError
         If *groups* is missing when required, *which* is invalid,
         *methods* contains unknown names, *sample_sizes* is empty or
         contains non-positive values, or any sample size exceeds the
-        number of available rows.
+        number of available rows. Also raised when only one external argument
+        is supplied or the external rows, labels, or feature columns are
+        incompatible.
 
     Examples
     --------
@@ -609,6 +622,16 @@ def evaluate_sample_sizes(
     >>> from syng_bts import generate
     >>> sr = generate(data="BRCASubtypeSel_test", model="CVAE1-20", epoch=10)
     >>> result = evaluate_sample_sizes(sr, sample_sizes=[50], which="generated")
+
+    Evaluating candidate data on a fixed empirical test set:
+
+    >>> result = evaluate_sample_sizes(
+    ...     df,
+    ...     sample_sizes=[50, 100],
+    ...     groups=groups,
+    ...     test_data=empirical_test,
+    ...     test_groups=empirical_test_groups,
+    ... )
     """
     # --- Resolve verbose level ---
     verbose_level = _resolve_verbose(verbose)
@@ -905,7 +928,8 @@ def plot_sample_sizes(
 
     Fits inverse power-law curves to the evaluation metrics produced by
     :func:`evaluate_sample_sizes` and plots observed values, fitted curves,
-    and 95% confidence intervals.
+    and approximate pointwise 95% confidence intervals for the fitted mean
+    curves. These bands are not prediction intervals.
 
     The returned figure is never displayed automatically — call
     ``fig.savefig(...)`` or ``plt.show()`` explicitly to display or save.

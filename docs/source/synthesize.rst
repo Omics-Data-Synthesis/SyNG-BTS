@@ -9,7 +9,8 @@ reliable classification?"*
 The integration provides two public functions:
 
 - :func:`~syng_bts.evaluate_sample_sizes` — Evaluate classifiers across
-  candidate sample sizes using stratified cross-validation.
+  candidate sample sizes using stratified cross-validation or a fixed external
+  evaluation set.
 - :func:`~syng_bts.plot_sample_sizes` — Visualize inverse power-law (IPLF)
   learning curves fitted from evaluation metrics.
 
@@ -102,13 +103,43 @@ from a CVAE run), you can pass it directly and groups are auto-resolved:
    )
    fig.savefig("real_vs_generated.png")
 
+Evaluate Against a Fixed Empirical Test Set
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pass ``test_data`` and ``test_groups`` together to train each classifier on the
+complete candidate subset and evaluate it once on fixed external rows. This is
+useful for comparing real and generated candidate data against the same
+empirical observations. The external observations should not have been used to
+train the generative model.
+
+.. code-block:: python
+
+   metrics_real = evaluate_sample_sizes(
+       data=real_candidate_data,
+       sample_sizes=[50, 100, 150],
+       groups=real_candidate_groups,
+       test_data=empirical_test_data,
+       test_groups=empirical_test_groups,
+   )
+
+   metrics_generated = evaluate_sample_sizes(
+       data=generated_candidate_data,
+       sample_sizes=[50, 100, 150],
+       groups=generated_candidate_groups,
+       test_data=empirical_test_data,
+       test_groups=empirical_test_groups,
+   )
+
+Both calls return the same one-row-per-size/draw/method table used by the
+internal cross-validation mode.
+
 Workflow
 --------
 
 1. **Generate synthetic data** using :func:`~syng_bts.generate` (or load
    existing data).
 2. **Evaluate** with :func:`~syng_bts.evaluate_sample_sizes` on both real
-   and generated datasets.
+   and generated datasets, optionally using the same fixed empirical test set.
 3. **Visualize** with :func:`~syng_bts.plot_sample_sizes` to compare
    learning curves side by side.
 
@@ -140,7 +171,9 @@ The following classifiers are available via the ``methods`` parameter:
      - ``XGBOOST``
      - XGBoost gradient-boosted trees
 
-All classifiers are evaluated using 5-fold stratified cross-validation.
+Without an external test set, classifiers are evaluated using 5-fold
+stratified cross-validation. With an external test set, each classifier is
+trained on the complete candidate subset and evaluated once on the fixed rows.
 
 Metrics
 -------
@@ -157,7 +190,17 @@ Log Transform
 By default, :func:`~syng_bts.evaluate_sample_sizes` applies a
 ``log2(x + 1)`` transform (``apply_log=True``). Set ``apply_log=False``
 when your input data is already log-transformed. The default behavior matches
-the preprocessing convention used in SyNG-BTS training.
+the preprocessing convention used in SyNG-BTS training. In either evaluation
+mode, feature standardization is fitted on the candidate training data and
+then applied unchanged to the corresponding fold or external evaluation data.
+
+Curve Confidence Intervals
+--------------------------
+
+:func:`~syng_bts.plot_sample_sizes` displays approximate pointwise 95%
+confidence intervals for the fitted inverse-power-law mean curves. The bands
+propagate fitted-parameter covariance with the delta method; they are not
+prediction intervals for individual classifier results.
 
 Verbosity
 ---------

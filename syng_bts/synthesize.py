@@ -63,7 +63,7 @@ def _logis(
         "cv": 5,
         "solver": "liblinear",
         "scoring": "accuracy",
-        "random_state": 0 if random_state is None else random_state,
+        "random_state": random_state,
         "max_iter": 1000,
     }
 
@@ -601,7 +601,7 @@ def evaluate_sample_sizes(
     verbose: int | str = "minimal",
     test_data: pd.DataFrame | None = None,
     test_groups: np.ndarray | pd.Series | list | None = None,
-    random_state: int | None = None,
+    random_seed: int | None = None,
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
 
@@ -659,7 +659,7 @@ def evaluate_sample_sizes(
     test_groups : array-like or None
         Class labels corresponding to the rows of *test_data*. Must be supplied
         together with *test_data* and use labels present in *groups*.
-    random_state : int or None
+    random_seed : int or None
         Seed for candidate sampling, shuffled cross-validation, and stochastic
         classifiers.
 
@@ -812,13 +812,13 @@ def evaluate_sample_sizes(
     # --- Resolve and validate methods ---
     resolved_methods = _resolve_methods(methods)
 
-    # --- Validate random state ---
-    if random_state is not None:
-        if isinstance(random_state, bool) or not isinstance(random_state, Integral):
+    # --- Validate random seed ---
+    if random_seed is not None:
+        if isinstance(random_seed, bool) or not isinstance(random_seed, Integral):
             raise ValueError(
-                f"'random_state' must be an integer or None, got {random_state!r}."
+                f"'random_seed' must be an integer or None, got {random_seed!r}."
             )
-        random_state = int(random_state)
+        random_seed = int(random_seed)
 
     # --- Normalise sample_sizes to list[int] ---
     n_rows = len(resolved_data)
@@ -955,7 +955,7 @@ def evaluate_sample_sizes(
                     f"n={s}, groups={too_small_inner}."
                 )
 
-    rng = np.random.default_rng(random_state) if random_state is not None else None
+    rng = np.random.default_rng(random_seed) if random_seed is not None else None
     results: list[dict] = []
     total_steps_overall = len(normalized_sample_sizes) * n_draws * len(resolved_methods)
     overall_step_counter = 0
@@ -996,7 +996,7 @@ def evaluate_sample_sizes(
                 skf = StratifiedKFold(
                     n_splits=n_splits,
                     shuffle=True,
-                    random_state=random_state if random_state is not None else 42,
+                    random_state=random_seed,
                 )
                 split_indices = skf.split(dat_candidate, labels_candidate)
 
@@ -1032,7 +1032,7 @@ def evaluate_sample_sizes(
                         train_labels,
                         evaluation_data,
                         evaluation_labels,
-                        random_state,
+                        random_seed,
                     )
                     metrics[method]["f1"].append(res["f1"])
                     metrics[method]["accuracy"].append(res["accuracy"])

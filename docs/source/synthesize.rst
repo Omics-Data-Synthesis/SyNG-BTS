@@ -253,7 +253,7 @@ Example:
 Reproducibility
 ---------------
 
-Set ``random_state`` to an integer to reproduce candidate sampling, shuffled
+Set ``random_seed`` to an integer to reproduce candidate sampling, shuffled
 cross-validation splits, and stochastic classifier fits.
 
 .. code-block:: python
@@ -262,7 +262,7 @@ cross-validation splits, and stochastic classifier fits.
        data,
        sample_sizes=[50, 100],
        groups=groups,
-       random_state=42,
+       random_seed=42,
    )
 
 Sample-Size Shortcuts

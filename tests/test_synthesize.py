@@ -594,7 +594,7 @@ class TestExternalEvaluation:
 # ---------------------------------------------------------------------------
 
 
-class TestRandomState:
+class TestRandomSeed:
     """Tests for reproducible evaluation."""
 
     def test_stochastic_classifier_helpers_accept_random_state(self):
@@ -607,10 +607,10 @@ class TestRandomState:
         ):
             assert "random_state" in inspect.signature(helper).parameters
 
-    def test_random_state_reproduces_sampling_and_reaches_classifier(
+    def test_random_seed_reproduces_sampling_and_reaches_classifier(
         self, small_synthetic_data, monkeypatch
     ):
-        """One random_state reproduces subsets and seeds classifier fitting."""
+        """One random_seed reproduces subsets and seeds classifier fitting."""
         data, groups = small_synthetic_data
         captured_data: list[np.ndarray] = []
         captured_states: list[int | None] = []
@@ -639,14 +639,17 @@ class TestRandomState:
                 verbose=0,
                 test_data=data.iloc[:10],
                 test_groups=groups[:5].tolist() + groups[-5:].tolist(),
-                random_state=17,
+                random_seed=17,
             )
 
         np.testing.assert_array_equal(captured_data[0], captured_data[1])
         assert captured_states == [17, 17]
 
-    def test_random_state_controls_outer_cv(self, small_synthetic_data, monkeypatch):
-        """The public random_state is passed to shuffled outer CV."""
+    @pytest.mark.parametrize("random_seed", [None, 23])
+    def test_random_seed_controls_outer_cv(
+        self, small_synthetic_data, monkeypatch, random_seed
+    ):
+        """The public random_seed is passed directly to shuffled outer CV."""
         data, groups = small_synthetic_data
         seen_states: list[int | None] = []
         original_stratified_kfold = synthesize.StratifiedKFold
@@ -674,10 +677,10 @@ class TestRandomState:
             n_draws=1,
             methods=["RF"],
             verbose=0,
-            random_state=23,
+            random_seed=random_seed,
         )
 
-        assert seen_states == [23]
+        assert seen_states == [random_seed]
 
 
 # ---------------------------------------------------------------------------

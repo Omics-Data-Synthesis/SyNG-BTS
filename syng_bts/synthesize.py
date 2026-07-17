@@ -20,6 +20,7 @@ References
 from __future__ import annotations
 
 import inspect
+import warnings
 from collections.abc import Callable
 from numbers import Integral
 from typing import TYPE_CHECKING
@@ -27,7 +28,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.optimize import curve_fit
+from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.stats import norm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegressionCV
@@ -54,6 +55,7 @@ def _logis(
     train_labels: np.ndarray,
     test_data: np.ndarray,
     test_labels: np.ndarray,
+    random_state: int | None = None,
 ) -> dict[str, float]:
     """Ridge (L2-penalised) logistic regression classifier."""
     model_kwargs: dict[str, object] = {
@@ -61,7 +63,7 @@ def _logis(
         "cv": 5,
         "solver": "liblinear",
         "scoring": "accuracy",
-        "random_state": 0,
+        "random_state": 0 if random_state is None else random_state,
         "max_iter": 1000,
     }
 
@@ -99,9 +101,10 @@ def _svm(
     train_labels: np.ndarray,
     test_data: np.ndarray,
     test_labels: np.ndarray,
+    random_state: int | None = None,
 ) -> dict[str, float]:
     """Support Vector Machine classifier."""
-    model = SVC(probability=True)
+    model = SVC(probability=True, random_state=random_state)
     model.fit(train_data, train_labels)
 
     predictions_proba = model.predict_proba(test_data)
@@ -126,6 +129,7 @@ def _knn(
     train_labels: np.ndarray,
     test_data: np.ndarray,
     test_labels: np.ndarray,
+    random_state: int | None = None,
 ) -> dict[str, float]:
     """K-Nearest Neighbors classifier."""
     model = KNeighborsClassifier(n_neighbors=5)
@@ -153,9 +157,10 @@ def _rf(
     train_labels: np.ndarray,
     test_data: np.ndarray,
     test_labels: np.ndarray,
+    random_state: int | None = None,
 ) -> dict[str, float]:
     """Random Forest classifier."""
-    model = RandomForestClassifier(n_estimators=100)
+    model = RandomForestClassifier(n_estimators=100, random_state=random_state)
     model.fit(train_data, train_labels)
 
     predictions_proba = model.predict_proba(test_data)
@@ -180,6 +185,7 @@ def _xgb(
     train_labels: np.ndarray,
     test_data: np.ndarray,
     test_labels: np.ndarray,
+    random_state: int | None = None,
 ) -> dict[str, float]:
     """XGBoost classifier."""
     num_class = len(np.unique(train_labels))
@@ -187,13 +193,18 @@ def _xgb(
     dtest = DMatrix(test_data, label=test_labels)
 
     if num_class == 2:
-        params = {"objective": "binary:logistic", "eval_metric": "auc"}
+        params = {
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+        }
     else:
         params = {
             "objective": "multi:softprob",
             "num_class": num_class,
             "eval_metric": "mlogloss",
         }
+    if random_state is not None:
+        params["seed"] = random_state
 
     bst = xgb_train(params, dtrain, num_boost_round=10)
     predictions_proba = bst.predict(dtest)
@@ -216,7 +227,11 @@ def _xgb(
 
 # Map canonical method names to private classifier callables
 _CLASSIFIER_MAP: dict[
-    str, Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], dict[str, float]]
+    str,
+    Callable[
+        [np.ndarray, np.ndarray, np.ndarray, np.ndarray, int | None],
+        dict[str, float],
+    ],
 ] = {
     "LOGIS": _logis,
     "SVM": _svm,
@@ -429,7 +444,6 @@ def _power_law_prediction_variance(
 def _fit_curve(
     acc_table: pd.DataFrame,
     metric_name: str,
-    n_target: int | list | None = None,
     plot: bool = True,
     ax: plt.Axes | None = None,
     annotation: str = "",
@@ -442,8 +456,6 @@ def _fit_curve(
         Must contain columns ``"n"`` and *metric_name*.
     metric_name : str
         Column in *acc_table* to fit against.
-    n_target : int, list, or None
-        Unused in this implementation (reserved for future extrapolation).
     plot : bool
         Whether to create a plot.
     ax : matplotlib Axes or None
@@ -455,36 +467,85 @@ def _fit_curve(
     -------
     matplotlib Axes or None
     """
-    acc_table = acc_table.copy()
+    acc_table = acc_table.sort_values("n").copy()
     initial_params = [0, 1, -0.5]
     max_iterations = 50000
     fit_ok = False
+    ci_ok = False
+    warning_context = f" for {annotation}" if annotation else ""
 
     try:
-        popt, pcov = curve_fit(
-            _power_law,
-            acc_table["n"],
-            acc_table[metric_name],
-            p0=initial_params,
-            maxfev=max_iterations,
-        )
+        if acc_table["n"].nunique() < 3:
+            raise ValueError("at least three distinct sample sizes are required")
+        weights = np.arange(1, len(acc_table) + 1) / len(acc_table)
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always", OptimizeWarning)
+            popt, pcov = curve_fit(
+                _power_law,
+                acc_table["n"],
+                acc_table[metric_name],
+                p0=initial_params,
+                sigma=1 / np.sqrt(weights),
+                maxfev=max_iterations,
+            )
+
+        if not np.isfinite(popt).all():
+            raise ValueError("optimizer returned non-finite parameters")
 
         acc_table["predicted"] = _power_law(acc_table["n"], *popt)
-
-        # Pointwise confidence intervals for the fitted mean curve via delta method
-        pred_var = np.array(
-            [
-                _power_law_prediction_variance(float(x), popt, pcov)
-                for x in acc_table["n"]
-            ]
-        )
-        pred_std = np.sqrt(pred_var)
-        t = norm.ppf(0.975)
-        acc_table["ci_low"] = acc_table["predicted"] - t * pred_std
-        acc_table["ci_high"] = acc_table["predicted"] + t * pred_std
+        if not np.isfinite(acc_table["predicted"]).all():
+            raise ValueError("optimizer returned non-finite fitted values")
         fit_ok = True
-    except (RuntimeError, ValueError):
-        fit_ok = False
+
+        optimizer_warnings = [
+            warning
+            for warning in caught_warnings
+            if issubclass(warning.category, OptimizeWarning)
+        ]
+        if optimizer_warnings:
+            warning_messages = "; ".join(
+                str(warning.message) for warning in optimizer_warnings
+            )
+            warnings.warn(
+                f"Curve fit covariance warning{warning_context}: "
+                f"{warning_messages}; the confidence band is omitted.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        elif not np.isfinite(pcov).all():
+            warnings.warn(
+                f"Curve fit covariance is non-finite{warning_context}; "
+                "the confidence band is omitted.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            # Pointwise confidence intervals for the fitted mean curve via delta method
+            pred_var = np.array(
+                [
+                    _power_law_prediction_variance(float(x), popt, pcov)
+                    for x in acc_table["n"]
+                ]
+            )
+            if not np.isfinite(pred_var).all() or (pred_var < 0).any():
+                warnings.warn(
+                    f"Curve fit covariance is unusable{warning_context}; "
+                    "the confidence band is omitted.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            else:
+                pred_std = np.sqrt(pred_var)
+                t = norm.ppf(0.975)
+                acc_table["ci_low"] = acc_table["predicted"] - t * pred_std
+                acc_table["ci_high"] = acc_table["predicted"] + t * pred_std
+                ci_ok = True
+    except (RuntimeError, ValueError) as exc:
+        warnings.warn(
+            f"Curve fit failed{warning_context}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     if plot:
         if ax is None:
@@ -504,18 +565,18 @@ def _fit_curve(
                 color="blue",
                 linestyle="--",
             )
-            ax.fill_between(
-                acc_table["n"],
-                acc_table["ci_low"],
-                acc_table["ci_high"],
-                color="blue",
-                alpha=0.2,
-                label="95% CI",
-            )
-        ax.set_xlabel("Sample Size")
+            if ci_ok:
+                ax.fill_between(
+                    acc_table["n"],
+                    acc_table["ci_low"],
+                    acc_table["ci_high"],
+                    color="blue",
+                    alpha=0.2,
+                    label="95% CI",
+                )
+        ax.set_xlabel("Candidate subset size")
         ax.legend(loc="best")
         ax.set_title(annotation)
-        ax.set_ylim(0.4, 1)
         return ax
 
     return None
@@ -537,15 +598,16 @@ def evaluate_sample_sizes(
     verbose: int | str = "minimal",
     test_data: pd.DataFrame | None = None,
     test_groups: np.ndarray | pd.Series | list | None = None,
+    random_state: int | None = None,
 ) -> pd.DataFrame:
     r"""Evaluate classifiers across candidate sample sizes.
 
     For each classifier and candidate sample size, performs *n_draws* rounds
-    of stratified sampling proportional to the class distribution. When no
-    external test set is supplied, metrics are averaged over 5-fold stratified
-    cross-validation. When *test_data* and *test_groups* are supplied, each
-    classifier is trained on the complete candidate subset and evaluated once
-    on those fixed external rows.
+    of stratified sampling proportional to the input class distribution. When
+    no external test set is supplied, metrics are averaged over 5-fold
+    stratified cross-validation. When *test_data* and *test_groups* are
+    supplied, each classifier is trained on the complete candidate subset and
+    evaluated once on those fixed external rows.
 
     Parameters
     ----------
@@ -589,6 +651,9 @@ def evaluate_sample_sizes(
     test_groups : array-like or None
         Class labels corresponding to the rows of *test_data*. Must be supplied
         together with *test_data* and use labels present in *groups*.
+    random_state : int or None
+        Seed for candidate sampling, shuffled cross-validation, and stochastic
+        classifiers.
 
     Returns
     -------
@@ -607,7 +672,7 @@ def evaluate_sample_sizes(
         contains non-positive values, or any sample size exceeds the
         number of available rows. Also raised when only one external argument
         is supplied or the external rows, labels, or feature columns are
-        incompatible.
+        incompatible, or when numerical values are invalid.
 
     Examples
     --------
@@ -659,6 +724,11 @@ def evaluate_sample_sizes(
             "'data' must contain only numeric columns; non-numeric columns: "
             f"{non_numeric_cols}"
         )
+    data_values = resolved_data.to_numpy(dtype=np.float64, copy=False)
+    if not np.isfinite(data_values).all():
+        raise ValueError("'data' must contain only finite values.")
+    if apply_log and (data_values <= -1).any():
+        raise ValueError("'data' values must be greater than -1 for log2(x + 1).")
 
     resolved_test_data: pd.DataFrame | None = None
     test_group_arr: np.ndarray | None = None
@@ -679,6 +749,13 @@ def evaluate_sample_sizes(
             raise ValueError(
                 "'test_data' must contain only numeric columns; non-numeric "
                 f"columns: {non_numeric_test_cols}"
+            )
+        test_values = test_data.to_numpy(dtype=np.float64, copy=False)
+        if not np.isfinite(test_values).all():
+            raise ValueError("'test_data' must contain only finite values.")
+        if apply_log and (test_values <= -1).any():
+            raise ValueError(
+                "'test_data' values must be greater than -1 for log2(x + 1)."
             )
 
         missing_test_cols = resolved_data.columns.difference(test_data.columns).tolist()
@@ -705,6 +782,8 @@ def evaluate_sample_sizes(
             )
         if len(test_group_arr) == 0:
             raise ValueError("'test_groups' must be non-empty.")
+        if pd.isna(test_group_arr).any():
+            raise ValueError("'test_groups' must not contain missing labels.")
 
     group_arr = np.asarray(resolved_groups)
     if group_arr.ndim != 1:
@@ -716,12 +795,22 @@ def evaluate_sample_sizes(
         )
     if len(group_arr) == 0:
         raise ValueError("'groups' must be non-empty.")
+    if pd.isna(group_arr).any():
+        raise ValueError("'groups' must not contain missing labels.")
     unique_labels = np.unique(group_arr.astype(str))
     if len(unique_labels) < 2:
         raise ValueError("At least two unique groups are required for evaluation.")
 
     # --- Resolve and validate methods ---
     resolved_methods = _resolve_methods(methods)
+
+    # --- Validate random state ---
+    if random_state is not None:
+        if isinstance(random_state, bool) or not isinstance(random_state, Integral):
+            raise ValueError(
+                f"'random_state' must be an integer or None, got {random_state!r}."
+            )
+        random_state = int(random_state)
 
     # --- Normalise sample_sizes to list[int] ---
     n_rows = len(resolved_data)
@@ -735,7 +824,16 @@ def evaluate_sample_sizes(
         k = int(sample_sizes)
         if k <= 0:
             raise ValueError(f"'sample_sizes' as int must be positive, got {k}.")
+        if k > n_rows:
+            raise ValueError(
+                "'sample_sizes' grid count cannot exceed the number of data rows "
+                f"({n_rows}), got {k}."
+            )
         sample_sizes = np.round(np.linspace(n_rows / k, n_rows, k)).astype(int).tolist()
+        if len(set(sample_sizes)) != k or any(size <= 0 for size in sample_sizes):
+            raise ValueError(
+                "'sample_sizes' scalar grid must contain positive, unique sizes."
+            )
 
     if not sample_sizes:
         raise ValueError("'sample_sizes' must be a non-empty list of integers.")
@@ -782,6 +880,12 @@ def evaluate_sample_sizes(
                 "'test_groups' contains labels not present in 'groups': "
                 f"{unknown_test_groups}."
             )
+        missing_test_groups = sorted(set(group_dict) - set(test_group_arr))
+        if missing_test_groups:
+            raise ValueError(
+                "'test_groups' must include all classes present in 'groups'; "
+                f"missing={missing_test_groups}."
+            )
         external_labels = np.array([group_dict[g] for g in test_group_arr])
         assert resolved_test_data is not None
         external_data = resolved_test_data.to_numpy(dtype=np.float64, copy=True)
@@ -790,23 +894,60 @@ def evaluate_sample_sizes(
     group_counts = {g: int(np.sum(group_arr == g)) for g in unique_groups}
     group_indices_dict = {g: np.where(group_arr == g)[0] for g in unique_groups}
 
-    # Feasibility checks per requested sample size for stratified 5-fold CV
+    # Feasibility checks per requested sample size and evaluation mode
     for s in normalized_sample_sizes:
+        counts = _allocate_stratified_counts(s, group_counts)
+        empty_groups = [group for group, count in counts.items() if count < 1]
+        if empty_groups:
+            raise ValueError(
+                "Sample size yields no candidate rows for one or more classes: "
+                f"n={s}, groups={empty_groups}."
+            )
+
+        if external_mode:
+            if "LOGIS" in resolved_methods:
+                too_small_logis = [
+                    group for group, count in counts.items() if count < n_splits
+                ]
+                if too_small_logis:
+                    raise ValueError(
+                        "Sample size yields too few samples per class for the "
+                        "LOGIS inner 5-fold CV. "
+                        f"n={s}, groups={too_small_logis}."
+                    )
+            if "KNN" in resolved_methods and s < 5:
+                raise ValueError(
+                    f"KNN requires at least 5 candidate training rows, got n={s}."
+                )
+            continue
+
         if s < n_splits * len(unique_groups):
             raise ValueError(
                 "Sample size is too small for 5-fold stratified CV across all "
                 f"classes: n={s}, classes={len(unique_groups)}, minimum="
                 f"{n_splits * len(unique_groups)}."
             )
-        counts = _allocate_stratified_counts(s, group_counts)
-        too_small_groups = [group for group, c in counts.items() if c < n_splits]
-        if too_small_groups:
+        too_small_outer = [group for group, count in counts.items() if count < n_splits]
+        if too_small_outer:
             raise ValueError(
                 "Sample size yields too few samples per class for 5-fold "
                 "stratified CV. Increase sample size or reduce class imbalance. "
-                f"n={s}, groups={too_small_groups}."
+                f"n={s}, groups={too_small_outer}."
             )
+        if "LOGIS" in resolved_methods:
+            too_small_inner = [
+                group
+                for group, count in counts.items()
+                if count - int(np.ceil(count / n_splits)) < n_splits
+            ]
+            if too_small_inner:
+                raise ValueError(
+                    "Sample size leaves too few samples per class for the LOGIS "
+                    "inner 5-fold CV after the outer split. "
+                    f"n={s}, groups={too_small_inner}."
+                )
 
+    rng = np.random.default_rng(random_state) if random_state is not None else None
     results: list[dict] = []
     total_steps_overall = len(normalized_sample_sizes) * n_draws * len(resolved_methods)
     overall_step_counter = 0
@@ -823,7 +964,12 @@ def evaluate_sample_sizes(
             allocation = _allocate_stratified_counts(n, group_counts)
             for g in unique_groups:
                 n_g = allocation[g]
-                selected = np.random.choice(group_indices_dict[g], n_g, replace=False)
+                if rng is None:
+                    selected = np.random.choice(
+                        group_indices_dict[g], n_g, replace=False
+                    )
+                else:
+                    selected = rng.choice(group_indices_dict[g], n_g, replace=False)
                 indices.extend(selected)
             idx = np.array(indices)
 
@@ -840,7 +986,9 @@ def evaluate_sample_sizes(
                 split_indices = [(np.arange(len(dat_candidate)), None)]
             else:
                 skf = StratifiedKFold(
-                    n_splits=n_splits, shuffle=True, random_state=42
+                    n_splits=n_splits,
+                    shuffle=True,
+                    random_state=random_state if random_state is not None else 42,
                 )
                 split_indices = skf.split(dat_candidate, labels_candidate)
 
@@ -876,6 +1024,7 @@ def evaluate_sample_sizes(
                         train_labels,
                         evaluation_data,
                         evaluation_labels,
+                        random_state,
                     )
                     metrics[method]["f1"].append(res["f1"])
                     metrics[method]["accuracy"].append(res["accuracy"])
@@ -920,7 +1069,6 @@ def evaluate_sample_sizes(
 
 def plot_sample_sizes(
     metric_real: pd.DataFrame,
-    n_target: int | list,
     metric_generated: pd.DataFrame | None = None,
     metric_name: str = "f1_score",
 ) -> plt.Figure:
@@ -938,8 +1086,6 @@ def plot_sample_sizes(
     ----------
     metric_real : pd.DataFrame
         Metrics from :func:`evaluate_sample_sizes` on real data.
-    n_target : int or list
-        Target sample sizes for extrapolation reference.
     metric_generated : pd.DataFrame or None
         Metrics from :func:`evaluate_sample_sizes` on generated data.
         When provided, a second column of panels is added.
@@ -954,7 +1100,7 @@ def plot_sample_sizes(
     Examples
     --------
     >>> metrics = evaluate_sample_sizes(df, [50, 100, 200], groups=g)
-    >>> fig = plot_sample_sizes(metrics, n_target=300)
+    >>> fig = plot_sample_sizes(metrics)
     >>> fig.savefig("learning_curves.png")
     """
     valid_metric_names = {"f1_score", "accuracy", "auc"}
@@ -1010,7 +1156,6 @@ def plot_sample_sizes(
         _fit_curve(
             mean_real,
             metric_name,
-            n_target=n_target,
             plot=True,
             ax=axs[i, 0],
             annotation=f"{method}: Real ({metric_name})",
@@ -1027,7 +1172,6 @@ def plot_sample_sizes(
             _fit_curve(
                 mean_gen,
                 metric_name,
-                n_target=n_target,
                 plot=True,
                 ax=axs[i, 1],
                 annotation=f"{method}: Generated ({metric_name})",

@@ -121,11 +121,78 @@ class TestPowerLawUncertainty:
             ]
         )
 
-        variance = synthesize._power_law_prediction_variance(
-            10.0, params, covariance
-        )
+        variance = synthesize._power_law_prediction_variance(10.0, params, covariance)
 
         assert variance == pytest.approx(0.043391928179533926)
+
+    def test_curve_fit_uses_r_weights_in_sample_size_order(self, monkeypatch):
+        """Curve fitting uses the R row weights after sorting by sample size."""
+        captured: dict[str, np.ndarray] = {}
+
+        def capture_curve_fit(_func, x, y, **kwargs):
+            captured["x"] = np.asarray(x)
+            captured["y"] = np.asarray(y)
+            captured["sigma"] = kwargs.get("sigma")
+            return np.array([0.1, 0.2, -0.5]), np.eye(3) * 0.01
+
+        monkeypatch.setattr(synthesize, "curve_fit", capture_curve_fit)
+        metrics = pd.DataFrame(
+            {
+                "n": [30, 10, 20],
+                "f1_score": [0.8, 0.6, 0.7],
+            }
+        )
+
+        synthesize._fit_curve(metrics, "f1_score", plot=False)
+
+        np.testing.assert_array_equal(captured["x"], [10, 20, 30])
+        np.testing.assert_array_equal(captured["y"], [0.6, 0.7, 0.8])
+        weights = np.arange(1, 4) / 3
+        np.testing.assert_allclose(captured["sigma"], 1 / np.sqrt(weights))
+
+    def test_curve_fit_warns_when_optimizer_fails(self, monkeypatch):
+        """A failed optimizer emits a clear warning instead of failing silently."""
+
+        def fail_curve_fit(*_args, **_kwargs):
+            raise RuntimeError("did not converge")
+
+        monkeypatch.setattr(synthesize, "curve_fit", fail_curve_fit)
+        metrics = pd.DataFrame({"n": [10, 20, 30], "f1_score": [0.6, 0.7, 0.8]})
+
+        with pytest.warns(RuntimeWarning, match="Curve fit failed"):
+            synthesize._fit_curve(metrics, "f1_score", plot=False)
+
+    def test_curve_fit_warns_for_non_finite_covariance(self, monkeypatch):
+        """A fitted curve with unusable covariance warns and omits its band."""
+
+        def non_finite_covariance(*_args, **_kwargs):
+            return np.array([0.1, 0.2, -0.5]), np.full((3, 3), np.inf)
+
+        monkeypatch.setattr(synthesize, "curve_fit", non_finite_covariance)
+        metrics = pd.DataFrame({"n": [10, 20, 30], "f1_score": [0.6, 0.7, 0.8]})
+
+        with pytest.warns(RuntimeWarning, match="covariance"):
+            synthesize._fit_curve(metrics, "f1_score", plot=False)
+
+    def test_optimize_warning_retains_fitted_curve_without_band(self, monkeypatch):
+        """Finite fit parameters survive a covariance OptimizeWarning."""
+
+        def warning_with_finite_fit(*_args, **_kwargs):
+            warnings.warn(
+                "covariance unavailable", synthesize.OptimizeWarning, stacklevel=2
+            )
+            return np.array([0.1, 0.2, -0.5]), np.full((3, 3), np.inf)
+
+        monkeypatch.setattr(synthesize, "curve_fit", warning_with_finite_fit)
+        metrics = pd.DataFrame({"n": [10, 20, 30], "f1_score": [0.6, 0.7, 0.8]})
+
+        with pytest.warns(RuntimeWarning, match="covariance"):
+            ax = synthesize._fit_curve(metrics, "f1_score", plot=True)
+
+        assert ax is not None
+        assert len(ax.lines) == 1
+        assert len(ax.collections) == 1
+        plt.close(ax.figure)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +345,13 @@ class TestEvaluationPreprocessing:
             def split(self, _data, _labels):
                 yield train_index, test_index
 
-        def capture_classifier(train_data, train_labels, test_data, test_labels):
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
             captured["train_data"] = train_data.copy()
             captured["test_data"] = test_data.copy()
             return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
@@ -289,9 +362,7 @@ class TestEvaluationPreprocessing:
             "choice",
             lambda values, size, replace: values[:size],
         )
-        monkeypatch.setitem(
-            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
-        )
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier)
 
         evaluate_sample_sizes(
             data=data,
@@ -307,9 +378,7 @@ class TestEvaluationPreprocessing:
         raw_test = data.iloc[test_index, 0].to_numpy()
         expected_test = (raw_test - raw_train.mean()) / raw_train.std()
 
-        np.testing.assert_allclose(
-            captured["train_data"][:, 0].mean(), 0.0, atol=1e-12
-        )
+        np.testing.assert_allclose(captured["train_data"][:, 0].mean(), 0.0, atol=1e-12)
         np.testing.assert_allclose(captured["train_data"][:, 0].std(), 1.0)
         np.testing.assert_allclose(captured["test_data"][:, 0], expected_test)
         assert not np.isclose(captured["test_data"][:, 0].mean(), 0.0)
@@ -370,13 +439,17 @@ class TestExternalEvaluation:
         data, groups = small_synthetic_data
         calls: list[int] = []
 
-        def capture_classifier(train_data, train_labels, test_data, test_labels):
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
             calls.append(len(test_data))
             return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
 
-        monkeypatch.setitem(
-            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
-        )
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier)
 
         result = evaluate_sample_sizes(
             data=data,
@@ -410,7 +483,13 @@ class TestExternalEvaluation:
         test_groups = np.array(["A", "B"] * 3)
         calls: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
 
-        def capture_classifier(train_data, train_labels, test_data, test_labels):
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
             calls.append(
                 (
                     train_data.copy(),
@@ -426,9 +505,7 @@ class TestExternalEvaluation:
             "choice",
             lambda values, size, replace: values[:size],
         )
-        monkeypatch.setitem(
-            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
-        )
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier)
 
         result = evaluate_sample_sizes(
             data=candidate,
@@ -475,7 +552,13 @@ class TestExternalEvaluation:
         test_groups = np.array(["A", "B", "A", "B", "A", "B"])
         evaluation_sizes: list[int] = []
 
-        def capture_classifier(train_data, train_labels, test_data, test_labels):
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
             evaluation_sizes.append(len(test_data))
             return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
 
@@ -484,9 +567,7 @@ class TestExternalEvaluation:
             "choice",
             lambda values, size, replace: values[:size],
         )
-        monkeypatch.setitem(
-            synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier
-        )
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "LOGIS", capture_classifier)
 
         results = [
             evaluate_sample_sizes(
@@ -506,6 +587,97 @@ class TestExternalEvaluation:
         assert evaluation_sizes == [len(external), len(external)]
         assert all(len(result) == 1 for result in results)
         pd.testing.assert_frame_equal(external, external_before)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_sample_sizes — Reproducibility
+# ---------------------------------------------------------------------------
+
+
+class TestRandomState:
+    """Tests for reproducible evaluation."""
+
+    def test_stochastic_classifier_helpers_accept_random_state(self):
+        """Classifier helpers expose the seed propagated by the public API."""
+        for helper in (
+            synthesize._logis,
+            synthesize._svm,
+            synthesize._rf,
+            synthesize._xgb,
+        ):
+            assert "random_state" in inspect.signature(helper).parameters
+
+    def test_random_state_reproduces_sampling_and_reaches_classifier(
+        self, small_synthetic_data, monkeypatch
+    ):
+        """One random_state reproduces subsets and seeds classifier fitting."""
+        data, groups = small_synthetic_data
+        captured_data: list[np.ndarray] = []
+        captured_states: list[int | None] = []
+
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
+            captured_data.append(train_data.copy())
+            captured_states.append(random_state)
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "RF", capture_classifier)
+
+        for _ in range(2):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[20],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                apply_log=False,
+                verbose=0,
+                test_data=data.iloc[:10],
+                test_groups=groups[:5].tolist() + groups[-5:].tolist(),
+                random_state=17,
+            )
+
+        np.testing.assert_array_equal(captured_data[0], captured_data[1])
+        assert captured_states == [17, 17]
+
+    def test_random_state_controls_outer_cv(self, small_synthetic_data, monkeypatch):
+        """The public random_state is passed to shuffled outer CV."""
+        data, groups = small_synthetic_data
+        seen_states: list[int | None] = []
+        original_stratified_kfold = synthesize.StratifiedKFold
+
+        def capture_stratified_kfold(*args, **kwargs):
+            seen_states.append(kwargs.get("random_state"))
+            return original_stratified_kfold(*args, **kwargs)
+
+        def capture_classifier(
+            train_data,
+            train_labels,
+            test_data,
+            test_labels,
+            random_state=None,
+        ):
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setattr(synthesize, "StratifiedKFold", capture_stratified_kfold)
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "RF", capture_classifier)
+
+        evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[20],
+            groups=groups,
+            n_draws=1,
+            methods=["RF"],
+            verbose=0,
+            random_state=23,
+        )
+
+        assert seen_states == [23]
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +867,172 @@ class TestEvaluateValidation:
         with pytest.raises(ValueError, match="too small for 5-fold stratified CV"):
             evaluate_sample_sizes(data=data, sample_sizes=[8], groups=groups)
 
+    def test_nested_logistic_cv_infeasibility_raises_before_fitting(self, monkeypatch):
+        """Outer folds must leave five members per class for inner LOGIS CV."""
+        data = pd.DataFrame(np.arange(40, dtype=float).reshape(10, 4))
+        groups = np.array(["A"] * 5 + ["B"] * 5)
+
+        def should_not_fit(*_args, **_kwargs):
+            pytest.fail("classifier fitting should not be reached")
+
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "LOGIS", should_not_fit)
+
+        with pytest.raises(ValueError, match="inner 5-fold"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[10],
+                groups=groups,
+                n_draws=1,
+                methods=["LOGIS"],
+                apply_log=False,
+                verbose=0,
+            )
+
+    def test_external_mode_does_not_apply_outer_cv_minimum(self, monkeypatch):
+        """A non-CV external RF evaluation can use fewer than five rows per class."""
+        data = pd.DataFrame(np.arange(16, dtype=float).reshape(4, 4))
+        groups = np.array(["A", "A", "B", "B"])
+
+        def capture_classifier(*_args, **_kwargs):
+            return {"f1": 0.5, "accuracy": 0.5, "auc": 0.5}
+
+        monkeypatch.setitem(synthesize._CLASSIFIER_MAP, "RF", capture_classifier)
+
+        result = evaluate_sample_sizes(
+            data=data,
+            sample_sizes=[4],
+            groups=groups,
+            n_draws=1,
+            methods=["RF"],
+            apply_log=False,
+            verbose=0,
+            test_data=data.copy(),
+            test_groups=groups.copy(),
+        )
+
+        assert len(result) == 1
+
+    def test_external_knn_requires_five_training_rows(self):
+        """KNN feasibility is checked directly in external-evaluation mode."""
+        data = pd.DataFrame(np.arange(16, dtype=float).reshape(4, 4))
+        groups = np.array(["A", "A", "B", "B"])
+
+        with pytest.raises(ValueError, match="KNN"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[4],
+                groups=groups,
+                n_draws=1,
+                methods=["KNN"],
+                apply_log=False,
+                verbose=0,
+                test_data=data.copy(),
+                test_groups=groups.copy(),
+            )
+
+    @pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+    def test_non_finite_candidate_values_raise(self, small_synthetic_data, bad_value):
+        """Candidate feature data must contain only finite values."""
+        data, groups = small_synthetic_data
+        data = data.copy()
+        data.iloc[0, 0] = bad_value
+
+        with pytest.raises(ValueError, match="finite"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                apply_log=False,
+                verbose=0,
+            )
+
+    def test_non_finite_external_values_raise(self, small_synthetic_data):
+        """External feature data receives the same finite-value validation."""
+        data, groups = small_synthetic_data
+        test_data = data.iloc[:10].copy()
+        test_data.iloc[0, 0] = np.nan
+        test_groups = np.array(["A"] * 5 + ["B"] * 5)
+
+        with pytest.raises(ValueError, match="test_data.*finite"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                verbose=0,
+                test_data=test_data,
+                test_groups=test_groups,
+            )
+
+    def test_invalid_log_input_raises_before_transform(self, small_synthetic_data):
+        """Values outside the log2(x + 1) domain fail before transformation."""
+        data, groups = small_synthetic_data
+        data = data.copy()
+        data.iloc[0, 0] = -1
+
+        with pytest.raises(ValueError, match=r"log2\(x \+ 1\)"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                apply_log=True,
+                verbose=0,
+            )
+
+    def test_missing_candidate_labels_raise(self, small_synthetic_data):
+        """Missing candidate labels are rejected rather than becoming a class."""
+        data, groups = small_synthetic_data
+        groups = groups.astype(object)
+        groups[0] = None
+
+        with pytest.raises(ValueError, match="groups.*missing"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                verbose=0,
+            )
+
+    def test_missing_external_labels_raise(self, small_synthetic_data):
+        """Missing external labels are rejected before string conversion."""
+        data, groups = small_synthetic_data
+        test_groups = np.array(["A"] * 5 + ["B"] * 4 + [None], dtype=object)
+
+        with pytest.raises(ValueError, match="test_groups.*missing"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                verbose=0,
+                test_data=data.iloc[:10].copy(),
+                test_groups=test_groups,
+            )
+
+    def test_external_labels_must_cover_candidate_classes(self, small_synthetic_data):
+        """Metric evaluation requires every candidate class in the external set."""
+        data, groups = small_synthetic_data
+
+        with pytest.raises(ValueError, match="test_groups.*all classes"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=[50],
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                verbose=0,
+                test_data=data.iloc[:10].copy(),
+                test_groups=np.array(["A"] * 10),
+            )
+
 
 # ---------------------------------------------------------------------------
 # evaluate_sample_sizes — Method aliases
@@ -807,7 +1145,6 @@ class TestEvaluateBRCABaselines:
 
         fig = plot_sample_sizes(
             metric_real=metric_real,
-            n_target=150,
             metric_generated=metric_gen,
             metric_name="f1_score",
         )
@@ -831,6 +1168,29 @@ class TestPlotSampleSizes:
         yield
         matplotlib.use(backend)
 
+    def test_n_target_is_removed_from_plotting_api(self):
+        """The unused n_target argument is absent from public and private APIs."""
+        assert "n_target" not in inspect.signature(plot_sample_sizes).parameters
+        assert "n_target" not in inspect.signature(synthesize._fit_curve).parameters
+
+    def test_plot_uses_candidate_size_label_and_does_not_hide_low_values(
+        self, monkeypatch
+    ):
+        """Curve panels identify candidate size and allow low values to remain visible."""
+
+        def stable_curve_fit(*_args, **_kwargs):
+            return np.array([0.6, 0.2, -0.5]), np.eye(3) * 0.001
+
+        monkeypatch.setattr(synthesize, "curve_fit", stable_curve_fit)
+        metrics = pd.DataFrame({"n": [10, 20, 30], "f1_score": [0.2, 0.25, 0.3]})
+
+        ax = synthesize._fit_curve(metrics, "f1_score", plot=True)
+
+        assert ax is not None
+        assert ax.get_xlabel() == "Candidate subset size"
+        assert ax.get_ylim()[0] < 0.2
+        plt.close(ax.figure)
+
     def test_always_returns_figure(self, small_synthetic_data):
         """plot_sample_sizes always returns a Figure."""
         data, groups = small_synthetic_data
@@ -843,7 +1203,6 @@ class TestPlotSampleSizes:
         )
         fig = plot_sample_sizes(
             metric_real=metrics,
-            n_target=100,
             metric_name="f1_score",
         )
         assert isinstance(fig, plt.Figure)
@@ -871,7 +1230,6 @@ class TestPlotSampleSizes:
         )
         fig = plot_sample_sizes(
             metric_real=metrics,
-            n_target=100,
             metric_generated=metrics if with_generated else None,
             metric_name="f1_score",
         )
@@ -893,7 +1251,6 @@ class TestPlotSampleSizes:
         monkeypatch.setattr(plt, "show", lambda: show_called.append(True))
         fig = plot_sample_sizes(
             metric_real=metrics,
-            n_target=100,
             metric_name="f1_score",
         )
         assert isinstance(fig, plt.Figure)
@@ -911,7 +1268,7 @@ class TestPlotSampleSizes:
             methods=["LOGIS"],
         )
         with pytest.raises(ValueError, match="Invalid metric_name"):
-            plot_sample_sizes(metric_real=metrics, n_target=100, metric_name="bad")
+            plot_sample_sizes(metric_real=metrics, metric_name="bad")
 
     def test_missing_required_columns_raises(self):
         """metric_real missing required columns should raise ValueError."""
@@ -919,7 +1276,7 @@ class TestPlotSampleSizes:
             {"total_size": [40], "method": ["LOGIS"], "f1_score": [0.9]}
         )
         with pytest.raises(ValueError, match="missing required columns"):
-            plot_sample_sizes(metric_real=bad_metrics, n_target=100)
+            plot_sample_sizes(metric_real=bad_metrics)
 
     def test_missing_generated_method_raises(self, small_synthetic_data):
         """metric_generated must include every method present in metric_real."""
@@ -941,7 +1298,6 @@ class TestPlotSampleSizes:
         with pytest.raises(ValueError, match="Missing method"):
             plot_sample_sizes(
                 metric_real=metric_real,
-                n_target=100,
                 metric_generated=metric_generated,
             )
 
@@ -1102,6 +1458,20 @@ class TestSampleSizesInput:
             verbose=0,
         )
         assert list(result["total_size"].unique()) == [100]
+
+    def test_single_int_grid_count_cannot_exceed_rows(self, small_synthetic_data):
+        """A scalar grid cannot request more unique sizes than available rows."""
+        data, groups = small_synthetic_data
+
+        with pytest.raises(ValueError, match="cannot exceed.*rows"):
+            evaluate_sample_sizes(
+                data=data,
+                sample_sizes=101,
+                groups=groups,
+                n_draws=1,
+                methods=["RF"],
+                verbose=0,
+            )
 
     @pytest.mark.parametrize("bad_size", [0, -1])
     def test_single_int_non_positive_raises(self, small_synthetic_data, bad_size):

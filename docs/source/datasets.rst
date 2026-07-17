@@ -113,8 +113,9 @@ These can be used together to compare real vs. generated learning curves:
    real, groups_real = resolve_data("BRCASubtypeSel_test")
    gen, groups_gen = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
 
-   metrics_real = evaluate_sample_sizes(real, [50, 100], groups=groups_real)
-   metrics_gen = evaluate_sample_sizes(gen, [50, 100], groups=groups_gen)
+   sample_sizes = [50, 100, 150, 200]
+   metrics_real = evaluate_sample_sizes(real, sample_sizes, groups=groups_real)
+   metrics_gen = evaluate_sample_sizes(gen, sample_sizes, groups=groups_gen)
 
    fig = plot_sample_sizes(metrics_real, metric_generated=metrics_gen)
   fig.savefig("brca_learning_curves.png")

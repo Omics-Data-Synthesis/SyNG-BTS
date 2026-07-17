@@ -182,7 +182,7 @@ data, groups = resolve_data("BRCASubtypeSel_test")
 # Evaluate classifiers at increasing sample sizes
 metrics = evaluate_sample_sizes(
     data=data,
-    sample_sizes=[50, 100, 150],
+    sample_sizes=[50, 100, 150, 200],
     groups=groups,
     n_draws=5,
     methods=["LOGIS", "RF", "XGB"],

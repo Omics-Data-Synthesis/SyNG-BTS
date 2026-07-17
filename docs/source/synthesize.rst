@@ -210,6 +210,11 @@ confidence intervals for the fitted inverse-power-law mean curves. The bands
 propagate fitted-parameter covariance with the delta method; they are not
 prediction intervals for individual classifier results.
 
+Three distinct sample sizes are sufficient to fit the three-parameter curve,
+but at least four fitted points are required to estimate parameter covariance
+and display a confidence band. With exactly three points, the fitted curve is
+shown without a band and a warning explains why.
+
 The nonlinear fit uses the same increasing row weights as the R
 implementation. After ordering the *m* curve points by candidate size, their
 weights are ``1/m, 2/m, ..., m/m``, giving larger candidate sizes greater

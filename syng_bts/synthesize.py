@@ -1085,7 +1085,9 @@ def plot_sample_sizes(
     Fits weighted inverse power-law curves to the evaluation metrics produced by
     :func:`evaluate_sample_sizes` and plots observed values, fitted curves,
     and approximate pointwise 95% confidence intervals for the fitted mean
-    curves. These bands are not prediction intervals.
+    curves. These bands are not prediction intervals. Three distinct sample
+    sizes are sufficient to fit the curve, but at least four fitted points are
+    required to estimate parameter covariance and display a confidence band.
 
     The returned figure is never displayed automatically — call
     ``fig.savefig(...)`` or ``plt.show()`` explicitly to display or save.
@@ -1107,7 +1109,7 @@ def plot_sample_sizes(
 
     Examples
     --------
-    >>> metrics = evaluate_sample_sizes(df, [50, 100, 200], groups=g)
+    >>> metrics = evaluate_sample_sizes(df, [50, 100, 150, 200], groups=g)
     >>> fig = plot_sample_sizes(metrics)
     >>> fig.savefig("learning_curves.png")
     """

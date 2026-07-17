@@ -252,7 +252,7 @@ data is already log-transformed.
    # Evaluate classifiers at different sample sizes
    metrics = evaluate_sample_sizes(
        data=data,
-       sample_sizes=[50, 100, 150],
+       sample_sizes=[50, 100, 150, 200],
        groups=groups,
        n_draws=5,
    )
@@ -280,4 +280,3 @@ Next Steps
 - See :doc:`api` for the complete API reference
 - See :doc:`datasets` for information about bundled datasets
 - See :doc:`migration` for upgrading from v2.x
-

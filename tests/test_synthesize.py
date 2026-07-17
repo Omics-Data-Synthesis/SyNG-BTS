@@ -1127,7 +1127,7 @@ class TestEvaluateBRCABaselines:
         real_data, real_groups = brca_test_data
         gen_data, gen_groups = brca_generated_data
 
-        sample_sizes = [40, 80, 120]
+        sample_sizes = [40, 80, 120, 160]
 
         metric_real = evaluate_sample_sizes(
             data=real_data,
@@ -1164,8 +1164,16 @@ class TestPlotSampleSizes:
     """Tests for plot_sample_sizes (redesigned API)."""
 
     @pytest.fixture(autouse=True)
-    def _use_agg_backend(self):
-        """Use non-interactive matplotlib backend for tests."""
+    def _use_stable_plot_environment(self, monkeypatch):
+        """Use deterministic curve fitting and a non-interactive backend."""
+        monkeypatch.setattr(
+            synthesize,
+            "curve_fit",
+            lambda *_args, **_kwargs: (
+                np.array([0.6, 0.2, -0.5]),
+                np.eye(3) * 0.001,
+            ),
+        )
         backend = matplotlib.get_backend()
         matplotlib.use("Agg")
         yield
@@ -1176,15 +1184,8 @@ class TestPlotSampleSizes:
         assert "n_target" not in inspect.signature(plot_sample_sizes).parameters
         assert "n_target" not in inspect.signature(synthesize._fit_curve).parameters
 
-    def test_plot_uses_candidate_size_label_and_does_not_hide_low_values(
-        self, monkeypatch
-    ):
+    def test_plot_uses_candidate_size_label_and_does_not_hide_low_values(self):
         """Curve panels identify candidate size and allow low values to remain visible."""
-
-        def stable_curve_fit(*_args, **_kwargs):
-            return np.array([0.6, 0.2, -0.5]), np.eye(3) * 0.001
-
-        monkeypatch.setattr(synthesize, "curve_fit", stable_curve_fit)
         metrics = pd.DataFrame({"n": [10, 20, 30], "f1_score": [0.2, 0.25, 0.3]})
 
         ax = synthesize._fit_curve(metrics, "f1_score", plot=True)

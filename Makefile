@@ -96,7 +96,7 @@ check: lint test
 # =============================================================================
 
 docs:
-	cd docs && make html
+	$(PYTHON) -m sphinx -M html docs/source docs/build
 	@echo ""
 	@echo "Documentation built: docs/build/html/index.html"
 

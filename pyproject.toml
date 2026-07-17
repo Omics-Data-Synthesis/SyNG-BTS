@@ -149,8 +149,7 @@ python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short -m \"not slow and not real_data\""
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::UserWarning",
+    "ignore:Could not find the number of physical cores:UserWarning:joblib.externals.loky.backend.context",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

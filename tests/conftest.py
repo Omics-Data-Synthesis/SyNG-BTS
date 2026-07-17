@@ -39,7 +39,7 @@ def sample_data():
     # Create a small dataset similar to transcriptomics data
     # 20 samples, 50 features
     data = pd.DataFrame(
-        np.random.rand(20, 50) * 10,
+        np.random.randint(0, 11, size=(20, 50)).astype(float),
         columns=[f"gene_{i}" for i in range(50)],
     )
     return data

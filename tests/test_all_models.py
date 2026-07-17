@@ -49,7 +49,7 @@ def sample_data():
     """Small (20×50) sample DataFrame for fast tests."""
     np.random.seed(42)
     return pd.DataFrame(
-        np.random.rand(NUM_SAMPLES, NUM_FEATURES) * 10,
+        np.random.randint(0, 11, size=(NUM_SAMPLES, NUM_FEATURES)).astype(float),
         columns=[f"gene_{i}" for i in range(NUM_FEATURES)],
     )
 

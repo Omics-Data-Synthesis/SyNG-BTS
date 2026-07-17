@@ -12,6 +12,7 @@ Tests cover:
 
 import inspect
 import warnings
+from contextlib import nullcontext
 
 import pandas as pd
 import pytest
@@ -599,7 +600,8 @@ class TestComputeNewSize:
     def test_rounding_indivisible(self):
         """When new_size cannot be evenly split, total still equals new_size."""
         labels = torch.tensor([0.0] * 7 + [1.0] * 3)
-        result = _compute_new_size(labels, 10, 11)
+        with pytest.warns(UserWarning, match="preserves the original class ratio"):
+            result = _compute_new_size(labels, 10, 11)
         assert isinstance(result, list)
         assert sum(result) == 11  # total preserved exactly
         # 7/10 * 11 = 7.7 → round → 8; 11 - 8 = 3
@@ -926,15 +928,21 @@ class TestGenerate:
     ):
         """Non-CVAE grouped generation maps new_size to per-group counts (total implied)."""
         groups = pd.Series([0] * 12 + [1] * 8)
-        result = generate(
-            data=sample_data,
-            model="VAE1-10",
-            new_size=new_size,
-            groups=groups,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
+        warning_context = (
+            pytest.warns(UserWarning, match="preserves the original class ratio")
+            if isinstance(new_size, int)
+            else nullcontext()
         )
+        with warning_context:
+            result = generate(
+                data=sample_data,
+                model="VAE1-10",
+                new_size=new_size,
+                groups=groups,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
         counts = result.generated_groups.value_counts()
         assert counts.loc[0] == expected_counts[0]
         assert counts.loc[1] == expected_counts[1]
@@ -944,15 +952,21 @@ class TestGenerate:
     def test_generate_cvae_grouped_total_row_count(self, sample_data, new_size):
         """CVAE grouped generation returns the requested total row count."""
         groups = pd.Series([0] * 12 + [1] * 8)
-        result = generate(
-            data=sample_data,
-            model="CVAE1-10",
-            new_size=new_size,
-            groups=groups,
-            epoch=FAST_EPOCHS,
-            batch_frac=BATCH_FRAC,
-            learning_rate=LR,
+        warning_context = (
+            pytest.warns(UserWarning, match="preserves the original class ratio")
+            if isinstance(new_size, int)
+            else nullcontext()
         )
+        with warning_context:
+            result = generate(
+                data=sample_data,
+                model="CVAE1-10",
+                new_size=new_size,
+                groups=groups,
+                epoch=FAST_EPOCHS,
+                batch_frac=BATCH_FRAC,
+                learning_rate=LR,
+            )
         expected_total = new_size if isinstance(new_size, int) else sum(new_size)
         assert len(result.generated_data) == expected_total
 

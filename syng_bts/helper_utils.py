@@ -161,7 +161,7 @@ def create_labels_mul(
 
     groups_cat = groups.astype("category")
     codes = groups_cat.cat.codes
-    group_tensor = torch.from_numpy(codes.copy().values)
+    group_tensor = torch.from_numpy(np.array(codes, copy=True))
     labels = group_tensor.float().unsqueeze(1)
     blurlabels = labels + torch.rand(labels.shape, generator=_rng)
     return labels, blurlabels

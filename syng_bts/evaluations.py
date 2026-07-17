@@ -155,7 +155,7 @@ def UMAP_eval(
         real_data_processed = np.log2(real_data_processed + 1)
 
     if generated_data is None:
-        reducer = UMAP(random_state=random_seed)
+        reducer = UMAP(random_state=random_seed, n_jobs=1)
         embedding = reducer.fit_transform(real_data_processed.values)
 
         umap_df = pd.DataFrame(embedding, columns=["UMAP1", "UMAP2"])
@@ -167,6 +167,7 @@ def UMAP_eval(
                 data=umap_df,
                 x="UMAP1",
                 y="UMAP2",
+                hue="Group",
                 style="Group",
                 palette="bright",
                 ax=ax,
@@ -196,7 +197,7 @@ def UMAP_eval(
         ["Real"] * real_filtered.shape[0] + ["Generated"] * gen_filtered.shape[0]
     )
 
-    reducer = UMAP(random_state=random_seed)
+    reducer = UMAP(random_state=random_seed, n_jobs=1)
     embedding = reducer.fit_transform(combined_data)
 
     umap_df = pd.DataFrame(embedding, columns=["UMAP1", "UMAP2"])

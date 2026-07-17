@@ -189,7 +189,7 @@ metrics = evaluate_sample_sizes(
 )
 
 # Plot inverse power-law learning curves
-fig = plot_sample_sizes(metrics, n_target=200)
+fig = plot_sample_sizes(metrics)
 fig.savefig("learning_curves.png")
 ```
 
@@ -306,4 +306,3 @@ SyNG-BTS is licensed under the [GNU Affero General Public License v3.0](LICENSE)
 ## Acknowledgments
 
 This package was developed at Memorial Sloan Kettering Cancer Center. We thank Sebastian Raschka for the [STAT 453 course materials](https://sebastianraschka.com/teaching/stat453-ss2021/) that provided foundational concepts for the deep generative models.
-

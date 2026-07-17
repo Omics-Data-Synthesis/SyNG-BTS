@@ -448,7 +448,10 @@ def _fit_curve(
     ax: plt.Axes | None = None,
     annotation: str = "",
 ) -> plt.Axes | None:
-    """Fit an inverse power-law curve to evaluation metrics.
+    """Fit a weighted inverse power-law curve to evaluation metrics.
+
+    After sorting by candidate size, applies the R implementation's increasing
+    row weights ``1/m, 2/m, ..., m/m`` for *m* curve points.
 
     Parameters
     ----------
@@ -609,6 +612,10 @@ def evaluate_sample_sizes(
     supplied, each classifier is trained on the complete candidate subset and
     evaluated once on those fixed external rows.
 
+    The returned ``total_size`` is the candidate subset size. Internal
+    cross-validation trains each fold on about 80% of that subset; external
+    evaluation trains on the complete subset.
+
     Parameters
     ----------
     data : pd.DataFrame or SyngResult
@@ -621,6 +628,7 @@ def evaluate_sample_sizes(
         provided it is interpreted as the *number* of equidistant sizes to
         create — the maximum equals the number of data rows.  For example,
         ``sample_sizes=3`` with 15-row data produces ``[5, 10, 15]``.
+        The grid count cannot exceed the number of data rows.
     groups : array-like or None
         Class labels corresponding to the rows of *data*. **Required**
         when *data* is a ``pd.DataFrame``. When provided alongside a
@@ -1074,7 +1082,7 @@ def plot_sample_sizes(
 ) -> plt.Figure:
     r"""Visualize IPLF learning curves fitted from evaluation metrics.
 
-    Fits inverse power-law curves to the evaluation metrics produced by
+    Fits weighted inverse power-law curves to the evaluation metrics produced by
     :func:`evaluate_sample_sizes` and plots observed values, fitted curves,
     and approximate pointwise 95% confidence intervals for the fitted mean
     curves. These bands are not prediction intervals.

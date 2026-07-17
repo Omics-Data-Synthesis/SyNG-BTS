@@ -2,9 +2,9 @@ Sample-Size Evaluation (SyntheSize)
 ====================================
 
 SyNG-BTS integrates the `SyntheSize <https://github.com/LXQin/SyntheSize>`_
-methodology for evaluating how classifier performance scales with sample size.
-This is useful for answering the question: *"How many samples do I need for
-reliable classification?"*
+methodology for exploring how classifier performance changes across candidate
+subset sizes. It visualizes learning-curve behavior; it does not calculate a
+required or optimal sample size.
 
 The integration provides two public functions:
 
@@ -24,8 +24,9 @@ Background
 The SyntheSize approach trains multiple classifiers (logistic regression, SVM,
 KNN, random forest, XGBoost) at varying sample sizes and fits inverse power-law
 curves to the resulting metrics (F1, accuracy, AUC). This reveals how
-classification performance scales with data volume and helps determine whether
-generating more synthetic samples would improve downstream analyses.
+classification performance changes with data volume and supports exploratory
+assessment of whether generating more synthetic samples could improve
+downstream analyses.
 
 For more details on the methodology, see:
 
@@ -60,7 +61,7 @@ Evaluate a DataFrame
    print(metrics.head())
 
    # Plot learning curves
-   fig = plot_sample_sizes(metrics, n_target=200)
+   fig = plot_sample_sizes(metrics)
    fig.savefig("learning_curves.png")
 
 Evaluate a SyngResult
@@ -91,14 +92,13 @@ from a CVAE run), you can pass it directly and groups are auto-resolved:
 
    # Compare real vs generated learning curves
    metrics_real = evaluate_sample_sizes(
-       data=data,
+       data=result,
        sample_sizes=np.arange(25, 201, 25),
        which="original",
    )
 
    fig = plot_sample_sizes(
        metric_real=metrics_real,
-       n_target=200,
        metric_generated=metrics_gen,
    )
    fig.savefig("real_vs_generated.png")
@@ -175,6 +175,14 @@ Without an external test set, classifiers are evaluated using 5-fold
 stratified cross-validation. With an external test set, each classifier is
 trained on the complete candidate subset and evaluated once on the fixed rows.
 
+Meaning of Candidate Size
+-------------------------
+
+The ``total_size`` value and plotted x-axis represent the candidate subset
+size before evaluation. In internal cross-validation mode, each classifier is
+trained on about 80% of that subset in each fold. In external-evaluation mode,
+each classifier is trained on the complete candidate subset.
+
 Metrics
 -------
 
@@ -194,13 +202,18 @@ the preprocessing convention used in SyNG-BTS training. In either evaluation
 mode, feature standardization is fitted on the candidate training data and
 then applied unchanged to the corresponding fold or external evaluation data.
 
-Curve Confidence Intervals
---------------------------
+Curve Fitting and Confidence Intervals
+--------------------------------------
 
 :func:`~syng_bts.plot_sample_sizes` displays approximate pointwise 95%
 confidence intervals for the fitted inverse-power-law mean curves. The bands
 propagate fitted-parameter covariance with the delta method; they are not
 prediction intervals for individual classifier results.
+
+The nonlinear fit uses the same increasing row weights as the R
+implementation. After ordering the *m* curve points by candidate size, their
+weights are ``1/m, 2/m, ..., m/m``, giving larger candidate sizes greater
+weight.
 
 Verbosity
 ---------
@@ -237,13 +250,28 @@ Example:
    metrics = evaluate_sample_sizes(data, sample_sizes=[50, 100],
                                    groups=groups, verbose="detailed")
 
+Reproducibility
+---------------
+
+Set ``random_state`` to an integer to reproduce candidate sampling, shuffled
+cross-validation splits, and stochastic classifier fits.
+
+.. code-block:: python
+
+   metrics = evaluate_sample_sizes(
+       data,
+       sample_sizes=[50, 100],
+       groups=groups,
+       random_state=42,
+   )
+
 Sample-Size Shortcuts
 ---------------------
 
 ``sample_sizes`` accepts a **list**, **numpy array**, **pandas Series**, or a
 **single integer**.  When a single integer *k* is provided it is interpreted as
 the desired *number* of equidistant sizes — the maximum equals the number of
-rows in the input data.
+rows in the input data. The grid count *k* cannot exceed the number of rows.
 
 .. code-block:: python
 

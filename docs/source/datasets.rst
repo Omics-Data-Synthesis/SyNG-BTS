@@ -116,7 +116,7 @@ These can be used together to compare real vs. generated learning curves:
    metrics_real = evaluate_sample_sizes(real, [50, 100], groups=groups_real)
    metrics_gen = evaluate_sample_sizes(gen, [50, 100], groups=groups_gen)
 
-   fig = plot_sample_sizes(metrics_real, n_target=200, metric_generated=metrics_gen)
+   fig = plot_sample_sizes(metrics_real, metric_generated=metrics_gen)
   fig.savefig("brca_learning_curves.png")
 
 LIHC Subtype Case Study

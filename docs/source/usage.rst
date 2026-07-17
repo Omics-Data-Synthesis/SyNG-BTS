@@ -258,7 +258,7 @@ data is already log-transformed.
    )
 
    # Plot inverse power-law learning curves
-   fig = plot_sample_sizes(metrics, n_target=200)
+   fig = plot_sample_sizes(metrics)
    fig.savefig("learning_curves.png")
 
 You can also pass a :class:`~syng_bts.SyngResult` directly — groups are
@@ -280,5 +280,4 @@ Next Steps
 - See :doc:`api` for the complete API reference
 - See :doc:`datasets` for information about bundled datasets
 - See :doc:`migration` for upgrading from v2.x
-
 

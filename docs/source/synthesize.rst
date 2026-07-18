@@ -192,6 +192,21 @@ Each evaluation returns three metrics per classifier per sample size:
 - **Accuracy** (``accuracy``) — Overall classification accuracy
 - **AUC** (``auc``) — Area under ROC curve (one-vs-one, macro-averaged for multiclass)
 
+Plot Scaling
+------------
+
+By default, :func:`~syng_bts.plot_sample_sizes` fixes every panel's y-axis to
+``(0.4, 1)``. Pass a different two-value tuple with ``y_limits`` to choose a
+custom range, or pass ``None`` to let Matplotlib choose limits automatically:
+
+.. code-block:: python
+
+   # Show the full metric range automatically
+   fig = plot_sample_sizes(metrics, y_limits=None)
+
+   # Use a custom fixed range for every panel
+   fig = plot_sample_sizes(metrics, y_limits=(0.6, 1))
+
 Log Transform
 -------------
 

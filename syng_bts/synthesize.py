@@ -1079,6 +1079,7 @@ def plot_sample_sizes(
     metric_real: pd.DataFrame,
     metric_generated: pd.DataFrame | None = None,
     metric_name: str = "f1_score",
+    y_limits: tuple[float, float] | None = (0.4, 1),
 ) -> plt.Figure:
     r"""Visualize IPLF learning curves fitted from evaluation metrics.
 
@@ -1101,6 +1102,9 @@ def plot_sample_sizes(
         When provided, a second column of panels is added.
     metric_name : str, default ``"f1_score"``
         Metric to visualize (``"f1_score"``, ``"accuracy"``, or ``"auc"``).
+    y_limits : tuple of float or None, default ``(0.4, 1)``
+        Limits applied to the y-axis of every panel. Set to ``None`` to use
+        Matplotlib's automatic scaling.
 
     Returns
     -------
@@ -1170,6 +1174,8 @@ def plot_sample_sizes(
             ax=axs[i, 0],
             annotation=f"{method}: Real ({metric_name})",
         )
+        if y_limits is not None:
+            axs[i, 0].set_ylim(y_limits)
 
         if metric_generated is not None:
             df_gen = metric_generated[metric_generated["method"] == method]
@@ -1186,6 +1192,8 @@ def plot_sample_sizes(
                 ax=axs[i, 1],
                 annotation=f"{method}: Generated ({metric_name})",
             )
+            if y_limits is not None:
+                axs[i, 1].set_ylim(y_limits)
 
     fig.tight_layout()
     return fig

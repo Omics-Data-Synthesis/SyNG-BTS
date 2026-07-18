@@ -1195,6 +1195,46 @@ class TestPlotSampleSizes:
         assert ax.get_ylim()[0] < 0.2
         plt.close(ax.figure)
 
+    def test_y_limits_default_and_override(self):
+        """Plot panels default to fixed limits and accept custom limits."""
+        metrics = pd.DataFrame(
+            {
+                "total_size": [10, 20, 30],
+                "draw": [1, 1, 1],
+                "method": ["LOGIS", "LOGIS", "LOGIS"],
+                "f1_score": [0.5, 0.6, 0.7],
+            }
+        )
+
+        assert inspect.signature(plot_sample_sizes).parameters["y_limits"].default == (
+            0.4,
+            1,
+        )
+
+        fig = plot_sample_sizes(metrics)
+        assert fig.axes[0].get_ylim() == pytest.approx((0.4, 1))
+        plt.close(fig)
+
+        fig = plot_sample_sizes(metrics, y_limits=(0.2, 0.8))
+        assert fig.axes[0].get_ylim() == pytest.approx((0.2, 0.8))
+        plt.close(fig)
+
+    def test_y_limits_none_uses_automatic_scaling(self):
+        """None leaves each panel's y-axis to Matplotlib's automatic scaling."""
+        metrics = pd.DataFrame(
+            {
+                "total_size": [10, 20, 30],
+                "draw": [1, 1, 1],
+                "method": ["LOGIS", "LOGIS", "LOGIS"],
+                "f1_score": [0.2, 0.25, 0.3],
+            }
+        )
+
+        fig = plot_sample_sizes(metrics, y_limits=None)
+
+        assert fig.axes[0].get_ylim()[0] < 0.2
+        plt.close(fig)
+
     def test_always_returns_figure(self, small_synthetic_data):
         """plot_sample_sizes always returns a Figure."""
         data, groups = small_synthetic_data

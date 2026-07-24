@@ -67,9 +67,7 @@ class TestBundledDatasets:
         expected subtype labels in its groups sidecar."""
         from syng_bts import resolve_data
 
-        data, groups = resolve_data(
-            "BRCASubtypeSel_train_epoch285_CVAE1-20_generated"
-        )
+        data, groups = resolve_data("BRCASubtypeSel_train_epoch285_CVAE1-20_generated")
 
         assert isinstance(data, pd.DataFrame)
         assert len(data) == 1000

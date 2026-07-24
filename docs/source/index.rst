@@ -62,7 +62,7 @@ Run a pilot study with :func:`~syng_bts.pilot_study`:
    )
    print(result.summary())
 
-Browse and load full TCGA cohorts with :func:`~syng_bts.list_tcga_datasets` and :func:`~syng_bts.load_tcga_dataset`:
+Browse and load full TCGA cohorts — 24 miRNA and 5 bulk RNA-seq (``modality="rnaseq"``) — with :func:`~syng_bts.list_tcga_datasets` and :func:`~syng_bts.load_tcga_dataset`:
 
 .. code-block:: python
 

@@ -436,3 +436,62 @@ class TestLoadRnaseqDataset:
             / "1.0"
             / "SKCM_initial_pathologic_dx_year.h5"
         ).exists()
+
+
+@pytest.mark.real_data
+class TestRealDataRnaseq:
+    """Validates against the live data-rnaseq-v1.0 release.
+
+    Run with: pytest tests/test_tcga_rnaseq.py -m real_data
+    """
+
+    EXPECTED = {
+        "COAD": (467, 723, "CVAE", 1000),
+        "LAML": (151, 850, "VAE", 10000),
+        "PAAD": (182, 866, "VAE", 10000),
+        "READ": (174, 633, "VAE", 10000),
+        "SKCM": (361, 1091, "CVAE", 1000),
+    }
+
+    def test_manifest_lists_five_cohorts(self):
+        assert list_tcga_datasets(modality="rnaseq") == sorted(self.EXPECTED)
+
+    def test_every_cohort_matches_expected_shape(self):
+        for name, (n, p, family, new_size) in self.EXPECTED.items():
+            ds = load_tcga_dataset(name, modality="rnaseq")
+            assert ds.modality == "rnaseq"
+            assert ds.schema_version == "2.0"
+            assert ds.model_family == family
+            assert ds.raw is None
+
+            expr, groups = ds.real("DESeq")
+            assert expr.shape == (n, p), name
+            assert len(groups) == n, name
+            assert expr.index.equals(groups.index), name
+
+            synth, sgroups = ds.synth("DESeq")
+            assert synth.shape == (new_size, p), name
+            assert (sgroups is not None) == (family == "CVAE"), name
+
+            aug, _ = ds.synth("DESeq", off_aug="AE_head")
+            assert aug.shape == (new_size, p), name
+
+    def test_pipeline_integration_with_smallest_cohort(self):
+        from syng_bts import generate
+
+        ds = load_tcga_dataset("LAML", modality="rnaseq")
+        real_df, real_groups = ds.real("DESeq")
+
+        result = generate(
+            data=real_df,
+            groups=real_groups,
+            model="VAE1-10",
+            new_size=[5, 5],
+            apply_log=False,
+            batch_frac=0.1,
+            learning_rate=0.0005,
+            epoch=2,
+            random_seed=42,
+        )
+        assert len(result.generated_data) == 10
+        assert list(result.generated_data.columns) == list(real_df.columns)

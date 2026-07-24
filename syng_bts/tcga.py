@@ -1,7 +1,8 @@
-"""TCGA miRNA dataset loader.
+"""TCGA dataset loader.
 
-Downloads, caches, and exposes 24 packaged TCGA miRNA HDF5 datasets through a
-small, ergonomic Python API.
+Downloads, caches, and exposes two packaged TCGA HDF5 bundles through a
+small, ergonomic Python API: 24 miRNA cohorts (``modality="mirna"``, the
+default) and 5 bulk RNA-seq cohorts (``modality="rnaseq"``).
 
 Quick start::
 
@@ -11,8 +12,8 @@ Quick start::
     real_df, real_groups = ds.real("TC")
 
 Files are downloaded once on first access and cached under
-``~/.cache/syng-bts/tcga/`` (override with the ``SYNG_BTS_CACHE_DIR`` environment
-variable).
+``~/.cache/syng-bts/tcga/<modality>/`` (override with the
+``SYNG_BTS_CACHE_DIR`` environment variable).
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ def tcga_cache_dir() -> Path:
 
     Returns:
         The cache root for TCGA datasets. Versioned dataset files live under
-        ``tcga_cache_dir() / <manifest-version>``.
+        ``tcga_cache_dir() / <modality> / <manifest-version>``.
 
     Example:
         >>> from syng_bts import tcga_cache_dir
@@ -443,10 +444,16 @@ class Subset:
 class TCGADataset:
     """A loaded TCGA cohort with real and synthetic accessors.
 
-    Returned by :func:`load_tcga_dataset`. Wraps a single HDF5 file
-    containing the raw expression matrix, three normalizations
-    (``raw_norm``, ``TC``, ``DESeq``), and nine synthetic groups (three
-    CVAE models × three normalizations).
+    Returned by :func:`load_tcga_dataset`. Wraps a single HDF5 file whose
+    layout depends on ``modality``:
+
+    - ``modality="mirna"`` (schema 1.0): a raw expression matrix (``raw``),
+      three normalizations (``raw_norm``, ``TC``, ``DESeq``), and nine
+      synthetic groups (three CVAE models × three normalizations).
+    - ``modality="rnaseq"`` (schema 2.0): no raw matrix (``raw`` is
+      ``None``); three normalizations, each with synthetic data nested one
+      level deeper — by offline-augmentation setting, then by the cohort's
+      own model family (CVAE or VAE) and KL weight.
 
     Use :meth:`real` to access real expression data and :meth:`synth` to
     access a synthetic counterpart.
@@ -916,8 +923,8 @@ def load_tcga_dataset(
 
     On first call for a given dataset, the loader fetches the manifest,
     downloads the corresponding HDF5 file, verifies its sha256, and caches
-    the file under ``tcga_cache_dir() / <version>``. Subsequent calls reuse
-    the cached file.
+    the file under ``tcga_cache_dir() / <modality> / <manifest-version>``.
+    Subsequent calls reuse the cached file.
 
     Args:
         name: Cohort code (e.g. ``"BRCA"``) or full dataset name from the

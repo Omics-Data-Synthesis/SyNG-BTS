@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 import urllib.error
@@ -21,6 +20,7 @@ from syng_bts.tcga import (
     load_tcga_dataset,
     tcga_cache_dir,
 )
+from tests.conftest import _FakeResponse
 
 
 class TestTcgaCacheDir:
@@ -214,63 +214,6 @@ def make_test_manifest(*entries: dict, version: str = "1.0") -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Pytest fixtures
-# ---------------------------------------------------------------------------
-
-
-class _FakeResponse:
-    """Minimal response object compatible with `urllib.request.urlopen`."""
-
-    def __init__(self, data: bytes):
-        self._buf = io.BytesIO(data)
-        self.headers = {"Content-Length": str(len(data))}
-
-    def read(self, n: int = -1) -> bytes:
-        return self._buf.read(n)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self._buf.close()
-        return False
-
-
-class NetworkStub:
-    """Container for served bytes and a log of fetched URLs."""
-
-    def __init__(self):
-        self.served: dict[str, bytes] = {}
-        self.calls: list[str] = []
-
-    def serve(self, url: str, content: bytes) -> None:
-        self.served[url] = content
-
-
-@pytest.fixture
-def network_stub(monkeypatch) -> NetworkStub:
-    """Replace `urllib.request.urlopen` with a stub that serves from a dict."""
-    stub = NetworkStub()
-
-    def fake_urlopen(url, timeout=None):  # noqa: ARG001
-        url_str = url if isinstance(url, str) else url.full_url
-        stub.calls.append(url_str)
-        if url_str not in stub.served:
-            raise urllib.error.URLError(f"Stub: no fixture for {url_str}")
-        return _FakeResponse(stub.served[url_str])
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    return stub
-
-
-@pytest.fixture
-def cache_root(monkeypatch, tmp_path) -> Path:
-    """Point ``SYNG_BTS_CACHE_DIR`` at ``tmp_path`` for the test."""
-    monkeypatch.setenv("SYNG_BTS_CACHE_DIR", str(tmp_path))
-    return tmp_path
-
-
 # A canonical fixture URL used across tests.
 FIXTURE_BASE_URL = "https://fixture.test/data-v1.0"
 FIXTURE_MANIFEST_URL = f"{FIXTURE_BASE_URL}/manifest.json"
@@ -329,7 +272,9 @@ class TestFetchManifest:
         manifest = make_test_manifest(entry)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
 
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         # Act
         result = tcga._fetch_manifest(None)
@@ -337,11 +282,11 @@ class TestFetchManifest:
         # Assert
         assert result == manifest
         assert network_stub.calls == [FIXTURE_MANIFEST_URL]
-        cached_path = cache_root / "tcga" / "1.0" / "manifest.json"
+        cached_path = cache_root / "tcga" / "mirna" / "1.0" / "manifest.json"
         assert cached_path.exists()
         assert json.loads(cached_path.read_text()) == manifest
 
-        index_path = cache_root / "tcga" / ".url_index.json"
+        index_path = cache_root / "tcga" / "mirna" / ".url_index.json"
         assert index_path.exists()
         assert json.loads(index_path.read_text()) == {FIXTURE_MANIFEST_URL: "1.0"}
 
@@ -354,7 +299,9 @@ class TestFetchManifest:
         manifest = make_test_manifest(entry)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
 
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         tcga._fetch_manifest(None)
         n_first = len(network_stub.calls)
@@ -382,20 +329,24 @@ class TestFetchManifest:
 
         assert network_stub.calls == [override_url, override_url]
         # Override does NOT write to cache.
-        assert not (cache_root / "tcga" / "1.0" / "manifest.json").exists()
-        assert not (cache_root / "tcga" / ".url_index.json").exists()
+        assert not (cache_root / "tcga" / "mirna" / "1.0" / "manifest.json").exists()
+        assert not (cache_root / "tcga" / "mirna" / ".url_index.json").exists()
 
     def test_malformed_json_raises_value_error(
         self, monkeypatch, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
         network_stub.serve(FIXTURE_MANIFEST_URL, b"not json {{{")
 
         with pytest.raises(ValueError, match="manifest"):
             tcga._fetch_manifest(None)
 
     def test_network_failure_raises_network_error(self, monkeypatch, cache_root):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
         # No `network_stub` fixture in this test, so urlopen will hit the real
         # network; instead, install a stub that always fails.
 
@@ -406,6 +357,54 @@ class TestFetchManifest:
 
         with pytest.raises(tcga._NetworkError, match="Failed to download"):
             tcga._fetch_manifest(None)
+
+    def test_cache_path_includes_modality(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
+
+        tcga._fetch_manifest(None)
+
+        assert (cache_root / "tcga" / "mirna" / "1.0" / "manifest.json").exists()
+        assert (cache_root / "tcga" / "mirna" / ".url_index.json").exists()
+
+    def test_unknown_modality_raises(self):
+        with pytest.raises(ValueError, match="Invalid modality"):
+            tcga._fetch_manifest(None, modality="proteomics")
+
+    def test_manifest_modality_mismatch_raises(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        manifest["modality"] = "rnaseq"
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+
+        with pytest.raises(ValueError, match="declares modality"):
+            tcga._fetch_manifest(FIXTURE_MANIFEST_URL, modality="mirna")
+
+    def test_manifest_without_modality_field_is_accepted(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        """The published data-v1.0 manifest has no modality key."""
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        assert "modality" not in manifest
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+
+        result = tcga._fetch_manifest(FIXTURE_MANIFEST_URL, modality="mirna")
+        assert result == manifest
 
 
 class TestResolveName:
@@ -491,7 +490,9 @@ class TestListTcgaDatasets:
     ):
         manifest = self._three_dataset_manifest(tmp_path)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         result = list_tcga_datasets(short=short)
 
@@ -759,7 +760,9 @@ class TestLoadTcgaDataset:
     def test_load_full_name(
         self, monkeypatch, two_dataset_setup, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         ds = load_tcga_dataset("BRCA_carcinoma")
 
@@ -767,13 +770,15 @@ class TestLoadTcgaDataset:
         assert ds.name == "BRCA_carcinoma"
 
         # Cached on disk
-        cached = cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5"
+        cached = cache_root / "tcga" / "mirna" / "1.0" / "BRCA_carcinoma.h5"
         assert cached.exists()
 
     def test_load_short_alias(
         self, monkeypatch, two_dataset_setup, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         ds = load_tcga_dataset("BRCA")
 
@@ -782,7 +787,9 @@ class TestLoadTcgaDataset:
     def test_unknown_name_raises(
         self, monkeypatch, two_dataset_setup, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         with pytest.raises(ValueError, match="Unknown TCGA dataset"):
             load_tcga_dataset("FAKE")
@@ -790,7 +797,9 @@ class TestLoadTcgaDataset:
     def test_cache_hit_no_network(
         self, monkeypatch, two_dataset_setup, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         load_tcga_dataset("BRCA_carcinoma")
         n_first = len(network_stub.calls)
@@ -804,7 +813,9 @@ class TestLoadTcgaDataset:
     def test_force_redownload(
         self, monkeypatch, two_dataset_setup, network_stub, cache_root
     ):
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         load_tcga_dataset("BRCA_carcinoma")
         n_first = len(network_stub.calls)
@@ -823,11 +834,13 @@ class TestLoadTcgaDataset:
     ):
         """If a cached HDF5 file is unreadable, the loader wraps the h5py
         error with a hint to pass force=True."""
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         # Populate the cache normally.
         load_tcga_dataset("BRCA_carcinoma")
-        cached = cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5"
+        cached = cache_root / "tcga" / "mirna" / "1.0" / "BRCA_carcinoma.h5"
         assert cached.exists()
 
         # Corrupt the cached file (truncate to garbage that h5py rejects).
@@ -853,12 +866,14 @@ class TestClearTcgaCache:
         manifest = make_test_manifest(entry)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
         network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         load_tcga_dataset("BRCA_carcinoma")
-        assert (cache_root / "tcga" / "1.0" / "BRCA_carcinoma.h5").exists()
-        assert (cache_root / "tcga" / "1.0" / "manifest.json").exists()
-        assert (cache_root / "tcga" / ".url_index.json").exists()
+        assert (cache_root / "tcga" / "mirna" / "1.0" / "BRCA_carcinoma.h5").exists()
+        assert (cache_root / "tcga" / "mirna" / "1.0" / "manifest.json").exists()
+        assert (cache_root / "tcga" / "mirna" / ".url_index.json").exists()
 
         clear_tcga_cache()
 
@@ -874,7 +889,9 @@ class TestClearTcgaCache:
         manifest = make_test_manifest(entry)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
         network_stub.serve(_dataset_url("BRCA_carcinoma.h5"), brca_path.read_bytes())
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
 
         load_tcga_dataset("BRCA_carcinoma")
         n_before_clear = len(network_stub.calls)
@@ -896,7 +913,9 @@ class TestConvenienceAccessors:
         manifest = make_test_manifest(entry)
         network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
         network_stub.serve(_dataset_url(entry["file"]), path.read_bytes())
-        monkeypatch.setattr(tcga, "_DEFAULT_MANIFEST_URL", FIXTURE_MANIFEST_URL)
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
         return load_tcga_dataset("BRCA_carcinoma")
 
     @pytest.mark.parametrize(
@@ -946,6 +965,86 @@ class TestConvenienceAccessors:
         # Synthetic count is read dynamically from metadata, not hardcoded.
         # The fixture builds with n_synthetic=8 (see make_test_h5).
         assert "8 samples each" in text
+
+
+class TestSchemaDispatch:
+    def test_unsupported_schema_version_raises_schema_error(
+        self, tmp_path, cache_root
+    ):
+        path = tmp_path / "BRCA_carcinoma.h5"
+        make_test_h5(path, dataset_name="BRCA_carcinoma")
+        with h5py.File(path, "r+") as f:
+            f.attrs["version"] = "99.0"
+
+        with pytest.raises(ValueError, match="schema version"):
+            tcga._build_dataset_from_h5(path)
+
+    def test_unsupported_schema_error_is_not_corrupt_message(
+        self, tmp_path, cache_root
+    ):
+        path = tmp_path / "BRCA_carcinoma.h5"
+        make_test_h5(path, dataset_name="BRCA_carcinoma")
+        with h5py.File(path, "r+") as f:
+            f.attrs["version"] = "99.0"
+
+        with pytest.raises(ValueError) as exc:
+            tcga._build_dataset_from_h5(path)
+        assert "force=True" not in str(exc.value)
+
+    def test_mirna_schema_still_builds(self, tmp_path, cache_root):
+        path = tmp_path / "BRCA_carcinoma.h5"
+        make_test_h5(path, dataset_name="BRCA_carcinoma")
+        ds = tcga._build_dataset_from_h5(path)
+        assert ds.schema_version == "1.0"
+        assert ds.modality == "mirna"
+
+    def test_manifest_schema_version_checked_before_download(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        h5_path = tmp_path / "_fixture" / "BRCA_carcinoma.h5"
+        h5_path.parent.mkdir()
+        entry = make_test_h5(h5_path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        manifest["schema_version"] = "99.0"
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
+
+        with pytest.raises(ValueError, match="schema version"):
+            load_tcga_dataset("BRCA_carcinoma")
+
+        # The h5 must never have been requested.
+        assert network_stub.calls == [FIXTURE_MANIFEST_URL]
+
+    def test_manifest_without_schema_version_is_accepted(
+        self, monkeypatch, network_stub, cache_root, tmp_path
+    ):
+        """The published data-v1.0 manifest has no schema_version key."""
+        h5_dir = tmp_path / "_fixture"
+        h5_dir.mkdir()
+        path = h5_dir / "BRCA_carcinoma.h5"
+        entry = make_test_h5(path, dataset_name="BRCA_carcinoma")
+        manifest = make_test_manifest(entry)
+        assert "schema_version" not in manifest
+        network_stub.serve(FIXTURE_MANIFEST_URL, json.dumps(manifest).encode())
+        network_stub.serve(_dataset_url(entry["file"]), path.read_bytes())
+        monkeypatch.setattr(
+            tcga, "_DEFAULT_MANIFEST_URL", {"mirna": FIXTURE_MANIFEST_URL}
+        )
+
+        ds = load_tcga_dataset("BRCA_carcinoma")
+        assert ds.schema_version == "1.0"
+
+
+class TestModalityArgument:
+    def test_list_rejects_unknown_modality(self):
+        with pytest.raises(ValueError, match="Invalid modality"):
+            list_tcga_datasets(modality="proteomics")
+
+    def test_load_rejects_unknown_modality(self):
+        with pytest.raises(ValueError, match="Invalid modality"):
+            load_tcga_dataset("BRCA", modality="proteomics")
 
 
 class TestPackageExports:
@@ -1029,7 +1128,7 @@ class TestRealDataAllTcgaDatasets:
             assert ds.n_filtered_features == entry["n_filtered_features"], name
 
             # 3. Cached HDF5 sha256 matches the manifest entry
-            cached = tcga.tcga_cache_dir() / "1.0" / entry["file"]
+            cached = tcga.tcga_cache_dir() / "mirna" / "1.0" / entry["file"]
             assert cached.exists(), name
             assert tcga._sha256_of_file(cached) == entry["sha256"], name
 
@@ -1140,3 +1239,42 @@ class TestSlowIntegration:
                     ds.synthetic[norm][model].expression.shape[1]
                     == ds.n_filtered_features
                 )
+
+
+class TestOptionalGroups:
+    def test_missing_groups_dataset_yields_none(self, tmp_path):
+        path = tmp_path / "nogroups.h5"
+        with h5py.File(path, "w") as f:
+            g = f.create_group("blob")
+            g.create_dataset(
+                "expression", data=np.zeros((3, 2)), dtype=np.float64
+            )
+            g.create_dataset(
+                "feature_names", data=["a", "b"], dtype=h5py.string_dtype()
+            )
+
+        with h5py.File(path, "r") as f:
+            sub = tcga._build_subset_from_group(f["blob"], expect_groups=False)
+
+        assert sub.groups is None
+        assert sub.expression.shape == (3, 2)
+        assert list(sub.expression.columns) == ["a", "b"]
+
+    def test_expect_groups_true_still_reads_groups(self, tmp_path):
+        path = tmp_path / "withgroups.h5"
+        with h5py.File(path, "w") as f:
+            g = f.create_group("blob")
+            g.create_dataset(
+                "expression", data=np.zeros((2, 2)), dtype=np.float64
+            )
+            g.create_dataset(
+                "groups", data=["A", "B"], dtype=h5py.string_dtype()
+            )
+            g.create_dataset(
+                "feature_names", data=["a", "b"], dtype=h5py.string_dtype()
+            )
+
+        with h5py.File(path, "r") as f:
+            sub = tcga._build_subset_from_group(f["blob"])
+
+        assert list(sub.groups) == ["A", "B"]

@@ -97,8 +97,8 @@ Load TCGA Cohorts
 ~~~~~~~~~~~~~~~~~
 
 For the full 24 TCGA miRNA cohorts (real + CVAE-synthesized, downloaded
-on demand), use :func:`~syng_bts.list_tcga_datasets` and
-:func:`~syng_bts.load_tcga_dataset`:
+on demand) and 5 bulk RNA-seq cohorts (``modality="rnaseq"``), use
+:func:`~syng_bts.list_tcga_datasets` and :func:`~syng_bts.load_tcga_dataset`:
 
 .. code-block:: python
 
@@ -118,6 +118,9 @@ on demand), use :func:`~syng_bts.list_tcga_datasets` and
    # CVAE-synthesized counterpart
    synth_df, synth_groups = ds.synth()
    print(f"Synthetic shape: {synth_df.shape}")
+
+   # Load a bulk RNA-seq cohort instead
+   ds_rnaseq = load_tcga_dataset("SKCM", modality="rnaseq")
 
 See :doc:`tcga` for the full guide (catalog, normalizations, caching,
 custom mirrors) and :doc:`notebooks/tcga_quickstart` for a runnable

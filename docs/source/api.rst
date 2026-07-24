@@ -105,10 +105,11 @@ list_bundled_datasets
 TCGA Datasets
 -------------
 
-The TCGA loader downloads, caches, and exposes 24 packaged TCGA miRNA
-cohorts (raw + normalized + CVAE-synthesized). See :doc:`tcga` for the
-narrative guide and :doc:`notebooks/tcga_quickstart` for a runnable
-example.
+The TCGA loader downloads, caches, and exposes two packaged TCGA bundles:
+24 miRNA cohorts (raw + normalized + CVAE-synthesized) and 5 bulk
+RNA-seq cohorts (normalized + synthesized), selected via the
+``modality`` argument. See :doc:`tcga` for the narrative guide and
+:doc:`notebooks/tcga_quickstart` for a runnable example.
 
 load_tcga_dataset
 ~~~~~~~~~~~~~~~~~

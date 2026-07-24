@@ -5,10 +5,10 @@ SyNG-BTS includes bundled datasets for testing and experimentation.
 
 .. note::
 
-   For full TCGA cohorts (24 cancer types, real + synthetic, downloaded
-   on demand), see :doc:`tcga`. The bundled datasets on this page are
-   small parquet files shipped inside the package for quick examples
-   and case studies.
+   For full TCGA cohorts (24 miRNA and 5 bulk RNA-seq cancer types, real +
+   synthetic, downloaded on demand), see :doc:`tcga`. The bundled
+   datasets on this page are small parquet files shipped inside the
+   package for quick examples and case studies.
 
 .. contents:: Table of Contents
    :local:

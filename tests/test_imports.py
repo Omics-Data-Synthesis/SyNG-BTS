@@ -94,6 +94,10 @@ class TestPackageImports:
             "resolve_data",
             "SyngResult",
             "PilotResult",
+            "evaluate_sample_sizes",
+            "fit_sample_sizes",
+            "LearningCurveFit",
+            "plot_sample_sizes",
         ]
 
         for name in expected:

@@ -77,6 +77,10 @@ format:
 	$(PYTHON) -m ruff format syng_bts/ tests/
 	$(PYTHON) -m ruff check --fix syng_bts/ tests/
 
+# Set before Python imports native libraries: avoids the macOS OpenMP crash
+# when the tests combine sklearn and XGBoost. This affects test processes only.
+test test-all test-cov: export OMP_NUM_THREADS = 1
+
 test:
 	$(PYTHON) -m pytest tests/ -v
 

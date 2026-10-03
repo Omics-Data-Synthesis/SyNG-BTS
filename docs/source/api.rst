@@ -82,6 +82,18 @@ evaluate_sample_sizes
 
 .. autofunction:: syng_bts.evaluate_sample_sizes
 
+fit_sample_sizes
+~~~~~~~~~~~~~~~~
+
+.. autofunction:: syng_bts.fit_sample_sizes
+
+LearningCurveFit
+~~~~~~~~~~~~~~~~
+
+.. autoclass:: syng_bts.LearningCurveFit
+   :members:
+   :exclude-members: __init__
+
 plot_sample_sizes
 ~~~~~~~~~~~~~~~~~
 

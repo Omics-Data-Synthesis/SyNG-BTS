@@ -23,9 +23,17 @@ tests/
 
 ### Basic Usage
 
+The Makefile test targets limit OpenMP to one thread before Python starts.
+This avoids a native segmentation fault observed when sklearn and XGBoost run
+in the same process with the macOS dependency stack. It does not change package
+runtime settings. For direct pytest invocations, set the same environment variable.
+
 ```bash
-# Run all tests (281 pass, 1 skip)
-pytest tests/ -v
+# Run the default suite (excludes slow and real_data)
+make test
+
+# Set this before the direct pytest commands below
+export OMP_NUM_THREADS=1
 
 # Run fast tests only (skip slow integration tests)
 pytest tests/ -m "not slow"

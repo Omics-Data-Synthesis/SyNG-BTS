@@ -112,6 +112,7 @@ Contents
    :caption: Reference
 
    api
+   releases
 
 Links
 -----
@@ -127,4 +128,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-   

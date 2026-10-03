@@ -140,7 +140,8 @@ Workflow
    existing data).
 2. **Evaluate** with :func:`~syng_bts.evaluate_sample_sizes` on both real
    and generated datasets, optionally using the same fixed empirical test set.
-3. **Visualize** with :func:`~syng_bts.plot_sample_sizes` to compare
+3. **Fit** with :func:`~syng_bts.fit_sample_sizes` to obtain numerical results.
+4. **Visualize** with :func:`~syng_bts.plot_sample_sizes` to compare
    learning curves side by side.
 
 Available Classifiers
@@ -220,6 +221,14 @@ then applied unchanged to the corresponding fold or external evaluation data.
 Curve Fitting and Confidence Intervals
 --------------------------------------
 
+The numerical implementation is :func:`~syng_bts.fit_sample_sizes`;
+plotting calls it directly. Each classifier is fitted separately after averaging
+rows at each distinct candidate size. Every supplied row has equal weight within
+its mean, even if draw labels repeat. The between-size fit weights depend on size
+rank, not draw count or draw SD. Input rows must contain positive integral sizes,
+finite numeric values for the selected metric, non-empty string method labels
+and non-missing draw labels. Missing values are rejected rather than dropped.
+
 :func:`~syng_bts.plot_sample_sizes` displays approximate pointwise 95%
 confidence intervals for the fitted inverse-power-law mean curves. The bands
 propagate fitted-parameter covariance with the delta method; they are not
@@ -234,6 +243,83 @@ The nonlinear fit uses the same increasing row weights as the R
 implementation. After ordering the *m* curve points by candidate size, their
 weights are ``1/m, 2/m, ..., m/m``, giving larger candidate sizes greater
 weight.
+
+The curve is ``1 - a - b*n**c``, with unconstrained parameters, starting values
+``[0, 1, -0.5]`` and at most 50,000 function evaluations. SciPy ``curve_fit``
+receives ``sigma=1/sqrt(weight)`` and ``absolute_sigma=False``. The covariance
+therefore uses the weighted residual variance and ``m - 3`` residual degrees of
+freedom; the draw SDs do not set the covariance scale. Predictions and intervals
+are not clipped to the metric range, and monotonicity is not imposed.
+
+For each size, the parameter gradient is
+``J = [-1, -n**c, -b*n**c*log(n)]``. The fitted-mean variance is
+``J @ covariance @ J.T``; limits use the standard normal 0.975 quantile.
+These are local nonlinear approximations. They do not account for all dependence
+between cross-validation folds, draws or overlapping candidate subsets, nor do
+they establish the validity of extrapolation.
+
+Reusable Numerical Results
+--------------------------
+
+.. versionadded:: 3.6.0
+
+.. code-block:: python
+
+   import json
+   import numpy as np
+   from syng_bts import fit_sample_sizes
+
+   fits = fit_sample_sizes(metrics, metric_name="auc")
+   fit = fits["LOGIS"]
+   print(fit.fit_status, fit.interval_status)
+   print(fit.message)
+   fit.observed.to_csv("observed.csv", index=False)
+   fit.predictions.to_csv("predictions.csv", index=False)
+   grid = np.linspace(fit.observed.n.min(), fit.observed.n.max(), 100)
+   dense = fit.predict(grid)  # no optimizer call
+   payload = json.dumps(fit.to_dict(), allow_nan=False)
+
+The returned dictionary preserves first-seen classifier order. Result fields are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Field
+     - Meaning
+   * - ``observed``
+     - DataFrame: sorted ``n``, ``observed_mean``, ``observed_std`` (sample SD,
+       ddof=1), ``n_draws`` (row count), ``weight``. One draw gives unknown SD.
+   * - ``parameters``
+     - NumPy vector in ``a, b, c`` order, or None when unavailable.
+   * - ``covariance``
+     - NumPy 3-by-3 matrix in the same order, or None when unavailable.
+       Unusable optimizer covariance is retained for inspection.
+   * - ``predictions``
+     - Stored DataFrame at observed sizes: ``n``, ``predicted``, ``ci_low``,
+       ``ci_high``. Calculated once during fitting.
+   * - ``fit_status``, ``interval_status``
+     - Fit: ``ok`` or ``failed``. Intervals: ``ok`` or ``unavailable``.
+       ``fit_ok`` and ``ci_ok`` are convenience booleans for status ``ok``.
+   * - ``message``
+     - Reason for a failed fit or unavailable intervals; empty on full success.
+
+Treat attributes as read-only. Accessing ``predictions`` or exporting results
+reuses the stored observed-size values without recalculating them.
+``predict(grid)`` evaluates the fitted parameters at new sizes, returning only
+the four numerical columns in the requested order. Repeated and fractional sizes
+are allowed; the grid must be non-empty, one-dimensional, positive and finite.
+A failed fit returns NaN predictions; unavailable intervals remain NaN. If a
+previously usable curve or band cannot be evaluated on the new grid (for example,
+because extrapolation overflows), ``predict`` raises ValueError and leaves the
+stored results unchanged. Extrapolation is permitted, but remains unvalidated.
+
+``to_dict()`` returns the observed data, fitted parameters, covariance,
+predictions and fit status in a dictionary ready to save as JSON. Missing or
+non-finite values become JSON ``null``; DataFrames use NaN for unavailable values.
+The method does not write files. When saving results, also record the package
+version and study settings used to produce them.
+
 
 Verbosity
 ---------
@@ -305,4 +391,11 @@ API Reference
    :no-index:
 
 .. autofunction:: syng_bts.plot_sample_sizes
+   :no-index:
+
+.. autofunction:: syng_bts.fit_sample_sizes
+   :no-index:
+
+.. autoclass:: syng_bts.LearningCurveFit
+   :members: predict, to_dict, fit_ok, ci_ok
    :no-index:

@@ -8,6 +8,8 @@ Public API
 ----------
 - :func:`evaluate_sample_sizes` — Evaluate classifiers across candidate sample
   sizes using stratified cross-validation or a fixed external evaluation set.
+- :func:`fit_sample_sizes` — Return reusable numerical learning-curve results.
+- :class:`LearningCurveFit` — Parameters, covariance, predictions and fit status.
 - :func:`plot_sample_sizes` — Visualize IPLF learning curves from evaluation
   metrics.
 
@@ -22,6 +24,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from numbers import Integral
 from typing import TYPE_CHECKING
 
@@ -441,6 +444,333 @@ def _power_law_prediction_variance(
     return float(gradient @ covariance @ gradient.T)
 
 
+@dataclass
+class LearningCurveFit:
+    """Numerical inverse power-law result for one classifier and metric.
+
+    Obtain instances from :func:`fit_sample_sizes`. ``observed`` has columns
+    ``n``, ``observed_mean``, ``observed_std`` (sample SD; NaN for one draw),
+    ``n_draws`` and ``weight``. ``predictions`` stores ``n``, ``predicted``,
+    ``ci_low`` and ``ci_high`` at observed sizes, calculated once during fitting.
+    Parameters and covariance use order ``a, b, c``; missing values are None.
+    Unusable optimizer covariance is retained for inspection.
+
+    ``fit_status`` is ``"ok"`` or ``"failed"``; ``interval_status`` is ``"ok"``
+    or ``"unavailable"``. ``message`` explains a failed fit or omitted band.
+    Treat result attributes as read-only. Intervals are approximate pointwise
+    95% fitted-mean intervals, not prediction intervals.
+    """
+
+    method: str
+    metric_name: str
+    observed: pd.DataFrame
+    predictions: pd.DataFrame
+    parameters: np.ndarray | None = None
+    covariance: np.ndarray | None = None
+    fit_status: str = "failed"
+    interval_status: str = "unavailable"
+    message: str = ""
+
+    @property
+    def fit_ok(self) -> bool:
+        """Whether parameters and fitted values at observed sizes are usable."""
+        return self.fit_status == "ok"
+
+    @property
+    def ci_ok(self) -> bool:
+        """Whether intervals at observed sizes are usable."""
+        return self.interval_status == "ok"
+
+    def predict(
+        self, sample_sizes: list[float] | np.ndarray | pd.Series
+    ) -> pd.DataFrame:
+        """Evaluate the stored fit on another grid without refitting.
+
+        Return ``n``, ``predicted``, ``ci_low`` and ``ci_high``, preserving grid
+        order. Sizes must be positive finite numbers; fractional and repeated
+        sizes are allowed. Missing fits/bands remain NaN. If an otherwise usable
+        fit or band cannot be evaluated on this grid, raise ValueError without
+        changing stored results. Extrapolation is allowed but unvalidated.
+        """
+        xs = _numeric_vector(sample_sizes, "sample_sizes")
+        if (xs <= 0).any():
+            raise ValueError("sample_sizes must be positive.")
+        table = _empty_predictions(xs)
+        if self.fit_ok:
+            table["predicted"] = _predict_values(xs, self.parameters)
+            if self.ci_ok:
+                table["ci_low"], table["ci_high"] = _confidence_limits(
+                    xs, self.parameters, self.covariance, table["predicted"].to_numpy()
+                )
+        return table
+
+    def to_dict(self) -> dict:
+        """Return a JSON-compatible export, replacing non-finite values by null.
+
+        Includes schema/method metadata, observations, parameters, covariance,
+        predictions and statuses. No files are written. Use
+        ``json.dumps(fit.to_dict(), allow_nan=False)`` for strict JSON.
+        """
+
+        def finite_or_none(value: object) -> object:
+            if isinstance(value, dict):
+                return {key: finite_or_none(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [finite_or_none(item) for item in value]
+            if isinstance(value, float) and not np.isfinite(value):
+                return None
+            return value
+
+        return finite_or_none(
+            {
+                "schema_version": 1,
+                "model": "1 - a - b * n**c",
+                "weighting": "sorted_size_rank",
+                "absolute_sigma": False,
+                "confidence_level": 0.95,
+                "interval_method": "parameter_delta_normal",
+                "method": self.method,
+                "metric_name": self.metric_name,
+                "parameter_names": ["a", "b", "c"],
+                "parameters": None
+                if self.parameters is None
+                else self.parameters.tolist(),
+                "covariance": None
+                if self.covariance is None
+                else self.covariance.tolist(),
+                "fit_status": self.fit_status,
+                "interval_status": self.interval_status,
+                "message": self.message,
+                "observed": self.observed.to_dict(orient="records"),
+                "predictions": self.predictions.to_dict(orient="records"),
+            }
+        )
+
+
+def _numeric_vector(values: object, name: str) -> np.ndarray:
+    """Validate finite real numeric data without coercing strings or booleans."""
+    array = np.asarray(values)
+    if array.ndim != 1 or not len(array) or array.dtype.kind not in "iuf":
+        raise ValueError(f"{name} must be a non-empty one-dimensional numeric array.")
+    array = array.astype(float)
+    if not np.isfinite(array).all():
+        raise ValueError(f"{name} must contain only finite values.")
+    return array
+
+
+def _empty_predictions(xs: np.ndarray) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"n": xs, "predicted": np.nan, "ci_low": np.nan, "ci_high": np.nan}
+    )
+
+
+def _predict_values(xs: np.ndarray, params: np.ndarray) -> np.ndarray:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        predicted = _power_law(xs, *params)
+    if not np.isfinite(predicted).all():
+        raise ValueError("non-finite predictions on the requested grid")
+    return predicted
+
+
+def _confidence_limits(
+    xs: np.ndarray,
+    params: np.ndarray,
+    covariance: np.ndarray,
+    predicted: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        variance = np.array(
+            [_power_law_prediction_variance(float(x), params, covariance) for x in xs]
+        )
+        if not np.isfinite(variance).all() or (variance < 0).any():
+            raise ValueError(
+                "parameter covariance gives non-finite or negative variance"
+            )
+        half_width = norm.ppf(0.975) * np.sqrt(variance)
+        low, high = predicted - half_width, predicted + half_width
+    if not (np.isfinite(low).all() and np.isfinite(high).all()):
+        raise ValueError("non-finite confidence limits on the requested grid")
+    return low, high
+
+
+def _fit_observed(
+    observed: pd.DataFrame, method: str, metric_name: str
+) -> LearningCurveFit:
+    """Fit once, retaining observations or a usable curve if later steps fail."""
+    xs = observed["n"].to_numpy()
+    result = LearningCurveFit(method, metric_name, observed, _empty_predictions(xs))
+    try:
+        if len(observed) < 3:
+            raise ValueError("at least three distinct sample sizes are required")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", OptimizeWarning)
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                params, covariance = curve_fit(
+                    _power_law,
+                    xs,
+                    observed["observed_mean"],
+                    p0=[0, 1, -0.5],
+                    sigma=1 / np.sqrt(observed["weight"]),
+                    absolute_sigma=False,
+                    maxfev=50000,
+                )
+        if not np.isfinite(params).all():
+            raise ValueError("optimizer returned non-finite parameters")
+        result.parameters, result.covariance = params, covariance
+        result.predictions["predicted"] = _predict_values(xs, params)
+        result.fit_status = "ok"
+    except (RuntimeError, ValueError, np.linalg.LinAlgError) as exc:
+        result.message = str(exc)
+        return result
+
+    try:
+        if len(observed) == 3:
+            raise ValueError(
+                "at least four sizes are required to estimate parameter covariance"
+            )
+        covariance_warnings = "; ".join(
+            str(w.message) for w in caught if issubclass(w.category, OptimizeWarning)
+        )
+        if covariance_warnings:
+            raise ValueError(covariance_warnings)
+        if not np.isfinite(covariance).all():
+            raise ValueError("optimizer returned non-finite covariance")
+        result.predictions["ci_low"], result.predictions["ci_high"] = (
+            _confidence_limits(
+                xs, params, covariance, result.predictions["predicted"].to_numpy()
+            )
+        )
+        result.interval_status = "ok"
+    except ValueError as exc:
+        result.message = str(exc)
+    return result
+
+
+def fit_sample_sizes(
+    metrics: pd.DataFrame,
+    metric_name: str = "f1_score",
+) -> dict[str, LearningCurveFit]:
+    """Fit reusable weighted learning curves from evaluation rows.
+
+    Parameters
+    ----------
+    metrics : pandas.DataFrame
+        Non-empty output of :func:`evaluate_sample_sizes`, with columns
+        ``total_size``, ``draw``, ``method`` and the selected metric. Sizes must
+        be positive finite integers and metric values finite real numbers.
+        Method labels must be non-empty strings and draw labels non-missing.
+        Every row contributes equally to its size/method mean, including
+        repeated draw labels. No rows are silently dropped. Inputs are unchanged.
+    metric_name : str, default "f1_score"
+        One of ``"f1_score"``, ``"accuracy"`` or ``"auc"``.
+
+    Returns
+    -------
+    dict[str, LearningCurveFit]
+        Results in first-seen classifier order. Each curve aggregates rows by
+        size (mean, sample SD and row count), sorts distinct sizes and assigns
+        weights ``1/m, ..., 1``. The fit minimizes weighted squared residuals
+        with an unconstrained inverse power law. Covariance is residual-scaled,
+        not estimated from the observed draw SDs.
+
+    Raises
+    ------
+    ValueError
+        For empty, malformed or non-finite input. Numerical fit/interval
+        failures instead return observations and explicit result statuses.
+    """
+    if metric_name not in {"f1_score", "accuracy", "auc"}:
+        raise ValueError(f"Invalid metric_name {metric_name!r}.")
+    if not isinstance(metrics, pd.DataFrame):
+        raise TypeError("metrics must be a pandas DataFrame.")
+    required = {"total_size", "draw", "method", metric_name}
+    missing = required - set(metrics.columns)
+    if missing:
+        raise ValueError(f"metrics is missing required columns: {sorted(missing)}")
+    if not metrics.columns.is_unique:
+        raise ValueError("metrics must have unique column names.")
+    if metrics.empty:
+        raise ValueError("metrics must be non-empty.")
+    sizes = _numeric_vector(metrics["total_size"], "total_size")
+    if (sizes <= 0).any() or (sizes != np.floor(sizes)).any():
+        raise ValueError("total_size must contain positive integers.")
+    values = _numeric_vector(metrics[metric_name], metric_name)
+    if (
+        not metrics["method"]
+        .map(lambda value: isinstance(value, str) and bool(value.strip()))
+        .all()
+    ):
+        raise ValueError("method must contain non-empty strings.")
+    if metrics["draw"].isna().any():
+        raise ValueError("draw must not contain missing labels.")
+    # Use validated float64 values without modifying the caller's frame.
+    table = pd.DataFrame(
+        {"n": sizes, "method": metrics["method"].to_numpy(), "value": values}
+    )
+    fits = {}
+    for method, rows in table.groupby("method", sort=False, observed=True):
+        observed = (
+            rows.groupby("n", sort=True)
+            .agg(
+                observed_mean=("value", "mean"),
+                observed_std=("value", "std"),
+                n_draws=("value", "size"),
+            )
+            .reset_index()
+        )
+        if not np.isfinite(observed["observed_mean"]).all():
+            raise ValueError("aggregation produced non-finite metric means.")
+        observed["weight"] = np.arange(1, len(observed) + 1) / len(observed)
+        fits[method] = _fit_observed(observed, method, metric_name)
+    return fits
+
+
+def _warn_fit(result: LearningCurveFit, annotation: str) -> None:
+    context = f" for {annotation}" if annotation else ""
+    if not result.fit_ok:
+        warnings.warn(
+            f"Curve fit failed{context}: {result.message}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    elif not result.ci_ok:
+        warnings.warn(
+            f"Curve fit covariance is unusable{context}: {result.message}; "
+            "the confidence band is omitted.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _plot_fit(result: LearningCurveFit, ax: plt.Axes, annotation: str) -> plt.Axes:
+    _warn_fit(result, annotation)
+    observed, predictions = result.observed, result.predictions
+    ax.scatter(
+        observed["n"], observed["observed_mean"], label="Actual Data", color="red"
+    )
+    if result.fit_ok:
+        ax.plot(
+            predictions["n"],
+            predictions["predicted"],
+            label="Fitted",
+            color="blue",
+            linestyle="--",
+        )
+        if result.ci_ok:
+            ax.fill_between(
+                predictions["n"],
+                predictions["ci_low"],
+                predictions["ci_high"],
+                color="blue",
+                alpha=0.2,
+                label="95% CI",
+            )
+    ax.set_xlabel("Candidate subset size")
+    ax.legend(loc="best")
+    ax.set_title(annotation)
+    return ax
+
+
 def _fit_curve(
     acc_table: pd.DataFrame,
     metric_name: str,
@@ -448,141 +778,17 @@ def _fit_curve(
     ax: plt.Axes | None = None,
     annotation: str = "",
 ) -> plt.Axes | None:
-    """Fit a weighted inverse power-law curve to evaluation metrics.
-
-    After sorting by candidate size, applies the R implementation's increasing
-    row weights ``1/m, 2/m, ..., m/m`` for *m* curve points.
-
-    Parameters
-    ----------
-    acc_table : pd.DataFrame
-        Must contain columns ``"n"`` and *metric_name*.
-    metric_name : str
-        Column in *acc_table* to fit against.
-    plot : bool
-        Whether to create a plot.
-    ax : matplotlib Axes or None
-        Axes to draw on; a new figure is created when ``None``.
-    annotation : str
-        Subplot title.
-
-    Returns
-    -------
-    matplotlib Axes or None
-    """
-    acc_table = acc_table.sort_values("n").copy()
-    initial_params = [0, 1, -0.5]
-    max_iterations = 50000
-    fit_ok = False
-    ci_ok = False
-    warning_context = f" for {annotation}" if annotation else ""
-
-    try:
-        if acc_table["n"].nunique() < 3:
-            raise ValueError("at least three distinct sample sizes are required")
-        weights = np.arange(1, len(acc_table) + 1) / len(acc_table)
-        with warnings.catch_warnings(record=True) as caught_warnings:
-            warnings.simplefilter("always", OptimizeWarning)
-            popt, pcov = curve_fit(
-                _power_law,
-                acc_table["n"],
-                acc_table[metric_name],
-                p0=initial_params,
-                sigma=1 / np.sqrt(weights),
-                maxfev=max_iterations,
-            )
-
-        if not np.isfinite(popt).all():
-            raise ValueError("optimizer returned non-finite parameters")
-
-        acc_table["predicted"] = _power_law(acc_table["n"], *popt)
-        if not np.isfinite(acc_table["predicted"]).all():
-            raise ValueError("optimizer returned non-finite fitted values")
-        fit_ok = True
-
-        optimizer_warnings = [
-            warning
-            for warning in caught_warnings
-            if issubclass(warning.category, OptimizeWarning)
-        ]
-        if optimizer_warnings:
-            warning_messages = "; ".join(
-                str(warning.message) for warning in optimizer_warnings
-            )
-            warnings.warn(
-                f"Curve fit covariance warning{warning_context}: "
-                f"{warning_messages}; the confidence band is omitted.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        elif not np.isfinite(pcov).all():
-            warnings.warn(
-                f"Curve fit covariance is non-finite{warning_context}; "
-                "the confidence band is omitted.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        else:
-            # Pointwise confidence intervals for the fitted mean curve via delta method
-            pred_var = np.array(
-                [
-                    _power_law_prediction_variance(float(x), popt, pcov)
-                    for x in acc_table["n"]
-                ]
-            )
-            if not np.isfinite(pred_var).all() or (pred_var < 0).any():
-                warnings.warn(
-                    f"Curve fit covariance is unusable{warning_context}; "
-                    "the confidence band is omitted.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            else:
-                pred_std = np.sqrt(pred_var)
-                t = norm.ppf(0.975)
-                acc_table["ci_low"] = acc_table["predicted"] - t * pred_std
-                acc_table["ci_high"] = acc_table["predicted"] + t * pred_std
-                ci_ok = True
-    except (RuntimeError, ValueError) as exc:
-        warnings.warn(
-            f"Curve fit failed{warning_context}: {exc}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-    if plot:
-        if ax is None:
-            _, ax = plt.subplots(figsize=(10, 6))
-
-        ax.scatter(
-            acc_table["n"],
-            acc_table[metric_name],
-            label="Actual Data",
-            color="red",
-        )
-        if fit_ok:
-            ax.plot(
-                acc_table["n"],
-                acc_table["predicted"],
-                label="Fitted",
-                color="blue",
-                linestyle="--",
-            )
-            if ci_ok:
-                ax.fill_between(
-                    acc_table["n"],
-                    acc_table["ci_low"],
-                    acc_table["ci_high"],
-                    color="blue",
-                    alpha=0.2,
-                    label="95% CI",
-                )
-        ax.set_xlabel("Candidate subset size")
-        ax.legend(loc="best")
-        ax.set_title(annotation)
-        return ax
-
-    return None
+    """Compatibility wrapper for the former private plotting helper."""
+    metrics = acc_table.rename(columns={"n": "total_size"}).assign(
+        method="curve", draw=0
+    )
+    result = fit_sample_sizes(metrics, metric_name)["curve"]
+    if not plot:
+        _warn_fit(result, annotation)
+        return None
+    if ax is None:
+        _, ax = plt.subplots(figsize=(10, 6))
+    return _plot_fit(result, ax, annotation)
 
 
 # ---------------------------------------------------------------------------
@@ -1143,6 +1349,20 @@ def plot_sample_sizes(
 
     methods = metric_real["method"].unique()
     num_methods = len(methods)
+    if metric_generated is not None:
+        for method in methods:
+            if method not in set(metric_generated["method"]):
+                raise ValueError(
+                    "metric_generated must include rows for every method in "
+                    f"metric_real. Missing method: {method!r}."
+                )
+
+    real_fits = fit_sample_sizes(metric_real, metric_name)
+    generated_fits = (
+        fit_sample_sizes(metric_generated, metric_name)
+        if metric_generated is not None
+        else {}
+    )
 
     cols = 2 if metric_generated is not None else 1
     fig, axs = plt.subplots(num_methods, cols, figsize=(15, 5 * num_methods))
@@ -1155,42 +1375,15 @@ def plot_sample_sizes(
     elif cols == 1:
         axs = axs.reshape(-1, 1)
 
-    def _mean_metrics(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-        return (
-            df.groupby(["total_size", "method"])
-            .agg({metric: "mean"})
-            .reset_index()
-            .rename(columns={"total_size": "n"})
-        )
-
     for i, method in enumerate(methods):
-        df_real = metric_real[metric_real["method"] == method]
-        mean_real = _mean_metrics(df_real, metric_name)
-
-        _fit_curve(
-            mean_real,
-            metric_name,
-            plot=True,
-            ax=axs[i, 0],
-            annotation=f"{method}: Real ({metric_name})",
-        )
+        _plot_fit(real_fits[method], axs[i, 0], f"{method}: Real ({metric_name})")
         if y_limits is not None:
             axs[i, 0].set_ylim(y_limits)
-
         if metric_generated is not None:
-            df_gen = metric_generated[metric_generated["method"] == method]
-            if df_gen.empty:
-                raise ValueError(
-                    "metric_generated must include rows for every method in "
-                    f"metric_real. Missing method: {method!r}."
-                )
-            mean_gen = _mean_metrics(df_gen, metric_name)
-            _fit_curve(
-                mean_gen,
-                metric_name,
-                plot=True,
-                ax=axs[i, 1],
-                annotation=f"{method}: Generated ({metric_name})",
+            _plot_fit(
+                generated_fits[method],
+                axs[i, 1],
+                f"{method}: Generated ({metric_name})",
             )
             if y_limits is not None:
                 axs[i, 1].set_ylim(y_limits)

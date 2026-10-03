@@ -40,7 +40,7 @@ try:
     __version__ = version("syng-bts")
 except PackageNotFoundError:
     # Package is not installed (running from source)
-    __version__ = "3.5.0"
+    __version__ = "3.6.0"
 
 __author__ = "Li-Xuan Qin, Yunhui Qi, Xinyi Wang, Yannick Dueren"
 __email__ = "qinl@mskcc.org"
@@ -76,7 +76,12 @@ from .helper_models import (
 from .result import PilotResult, SyngResult
 
 # Import synthesize (sample-size evaluation)
-from .synthesize import evaluate_sample_sizes, plot_sample_sizes
+from .synthesize import (
+    LearningCurveFit,
+    evaluate_sample_sizes,
+    fit_sample_sizes,
+    plot_sample_sizes,
+)
 
 # Import TCGA loader
 from .tcga import (
@@ -105,6 +110,8 @@ __all__ = [
     "evaluation",
     # Sample-size evaluation (SyntheSize)
     "evaluate_sample_sizes",
+    "fit_sample_sizes",
+    "LearningCurveFit",
     "plot_sample_sizes",
     # Model classes (for advanced usage)
     "AE",

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.linalg import qr, solve_triangular
 from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.stats import norm
 from sklearn.ensemble import RandomForestClassifier
@@ -428,20 +429,53 @@ def _power_law(x: float, a: float, b: float, c: float) -> float:
     return (1 - a) - (b * (x**c))
 
 
-def _power_law_gradient(x: float, a: float, b: float, c: float) -> np.ndarray:
+def _power_law_gradient(
+    x: float | np.ndarray, a: float, b: float, c: float
+) -> np.ndarray:
     """Gradient of :func:`_power_law` with respect to ``(a, b, c)``."""
     x_power_c = x**c
-    return np.array([-1.0, -x_power_c, -b * x_power_c * np.log(x)])
+    return np.stack([-np.ones_like(x), -x_power_c, -b * x_power_c * np.log(x)], axis=-1)
 
 
-def _power_law_prediction_variance(
-    x: float,
+def _curve_uncertainty(
+    observed: pd.DataFrame,
     params: np.ndarray,
-    covariance: np.ndarray,
-) -> float:
-    """Propagate parameter covariance to fitted-curve variance at ``x``."""
-    gradient = _power_law_gradient(x, *params)
-    return float(gradient @ covariance @ gradient.T)
+    xs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Analytic delta covariance and variances without dense propagation.
+
+    For A = sqrt(W) J D and A[:, pivot] = Q R, solve R.T z = (g D)[pivot].
+    Then Var(f(x)) = s² ||z||². This retains every parameter direction; the
+    usual floating-point rank test rejects an unresolved Jacobian altogether.
+    It is not a statistical identifiability or forward-accuracy guarantee.
+    """
+    ns = observed["n"].to_numpy()
+    weights = observed["weight"].to_numpy()
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        weighted = _power_law_gradient(ns, *params) * np.sqrt(weights)[:, None]
+        scales = np.linalg.norm(weighted, axis=0)
+        if not np.isfinite(scales).all() or (scales == 0).any():
+            raise ValueError("analytic Jacobian has a zero or non-finite column")
+        _, r, pivot = qr(weighted / scales, mode="economic", pivoting=True)
+        singular_values = np.linalg.svd(r, compute_uv=False)
+        tolerance = np.finfo(float).eps * max(weighted.shape) * singular_values[0]
+        if singular_values[-1] <= tolerance:
+            raise ValueError("analytic Jacobian is numerically rank deficient")
+        residual = observed["observed_mean"].to_numpy() - _predict_values(ns, params)
+        residual_variance = np.sum(weights * residual**2) / (len(ns) - 3)
+        # Undo the column permutation/scaling when exporting parameter covariance.
+        factor = np.empty((3, 3))
+        factor[pivot] = solve_triangular(r, np.eye(3))
+        factor *= np.sqrt(residual_variance) / scales[:, None]
+        covariance = factor @ factor.T
+        gradient = _power_law_gradient(xs, *params) / scales
+        if not np.isfinite(gradient).all():
+            raise ValueError("non-finite parameter gradient on the requested grid")
+        projected = solve_triangular(r.T, gradient[:, pivot].T, lower=True)
+        variance = residual_variance * np.sum(projected**2, axis=0)
+    if not np.isfinite(covariance).all():
+        raise ValueError("analytic parameter covariance is non-finite")
+    return covariance, variance
 
 
 @dataclass
@@ -453,7 +487,9 @@ class LearningCurveFit:
     ``n_draws`` and ``weight``. ``predictions`` stores ``n``, ``predicted``,
     ``ci_low`` and ``ci_high`` at observed sizes, calculated once during fitting.
     Parameters and covariance use order ``a, b, c``; missing values are None.
-    Unusable optimizer covariance is retained for inspection.
+    Covariance uses the analytic Jacobian; if its calculation is unavailable,
+    optimizer covariance is retained for inspection. Dense covariance rounding
+    can lose information in ill-conditioned fits, so intervals use QR factors.
 
     ``fit_status`` is ``"ok"`` or ``"failed"``; ``interval_status`` is ``"ok"``
     or ``"unavailable"``. ``message`` explains a failed fit or omitted band.
@@ -499,8 +535,9 @@ class LearningCurveFit:
         if self.fit_ok:
             table["predicted"] = _predict_values(xs, self.parameters)
             if self.ci_ok:
+                _, variance = _curve_uncertainty(self.observed, self.parameters, xs)
                 table["ci_low"], table["ci_high"] = _confidence_limits(
-                    xs, self.parameters, self.covariance, table["predicted"].to_numpy()
+                    table["predicted"].to_numpy(), variance
                 )
         return table
 
@@ -573,15 +610,10 @@ def _predict_values(xs: np.ndarray, params: np.ndarray) -> np.ndarray:
 
 
 def _confidence_limits(
-    xs: np.ndarray,
-    params: np.ndarray,
-    covariance: np.ndarray,
     predicted: np.ndarray,
+    variance: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        variance = np.array(
-            [_power_law_prediction_variance(float(x), params, covariance) for x in xs]
-        )
         if not np.isfinite(variance).all() or (variance < 0).any():
             raise ValueError(
                 "parameter covariance gives non-finite or negative variance"
@@ -635,13 +667,12 @@ def _fit_observed(
             raise ValueError(covariance_warnings)
         if not np.isfinite(covariance).all():
             raise ValueError("optimizer returned non-finite covariance")
+        result.covariance, variance = _curve_uncertainty(observed, params, xs)
         result.predictions["ci_low"], result.predictions["ci_high"] = (
-            _confidence_limits(
-                xs, params, covariance, result.predictions["predicted"].to_numpy()
-            )
+            _confidence_limits(result.predictions["predicted"].to_numpy(), variance)
         )
         result.interval_status = "ok"
-    except ValueError as exc:
+    except (ValueError, np.linalg.LinAlgError) as exc:
         result.message = str(exc)
     return result
 

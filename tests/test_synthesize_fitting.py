@@ -2,6 +2,7 @@
 
 import json
 import warnings
+from decimal import Decimal, localcontext
 from io import StringIO
 
 import matplotlib.pyplot as plt
@@ -50,6 +51,144 @@ def stub_optimizer(monkeypatch, params=None, covariance=None):
     return params, covariance
 
 
+def decimal_uncertainty(observed, params, xs):
+    """Independent 70-digit normal-equation reference; standard library only."""
+    with localcontext() as context:
+        context.prec = 70
+        a, b, c = [Decimal.from_float(float(value)) for value in params]
+        ns, ys, weights = [
+            [Decimal.from_float(float(value)) for value in observed[column]]
+            for column in ["n", "observed_mean", "weight"]
+        ]
+
+        def gradient(n):
+            power = (c * n.ln()).exp()
+            return [-Decimal(1), -power, -b * power * n.ln()]
+
+        jacobian = [gradient(n) for n in ns]
+        augmented = [
+            [
+                sum(w * g[i] * g[j] for w, g in zip(weights, jacobian, strict=True))
+                for j in range(3)
+            ]
+            + [Decimal(i == j) for j in range(3)]
+            for i in range(3)
+        ]
+        # Pivoted Gauss-Jordan inversion, independently of the production QR.
+        for j in range(3):
+            pivot = max(range(j, 3), key=lambda i: abs(augmented[i][j]))
+            augmented[j], augmented[pivot] = augmented[pivot], augmented[j]
+            divisor = augmented[j][j]
+            augmented[j] = [value / divisor for value in augmented[j]]
+            for i in range(3):
+                if i != j:
+                    multiplier = augmented[i][j]
+                    augmented[i] = [
+                        x - multiplier * y
+                        for x, y in zip(augmented[i], augmented[j], strict=True)
+                    ]
+        scale = sum(
+            w * (y - (1 - a - b * (c * n.ln()).exp())) ** 2
+            for n, y, w in zip(ns, ys, weights, strict=True)
+        ) / (len(ns) - 3)
+        covariance = [[v * scale for v in row[3:]] for row in augmented]
+        variance = []
+        for x in xs:
+            g = gradient(Decimal.from_float(float(x)))
+            variance.append(
+                sum(g[i] * covariance[i][j] * g[j] for i in range(3) for j in range(3))
+            )
+        return np.array(covariance, dtype=float), np.array(variance, dtype=float)
+
+
+@pytest.mark.parametrize(
+    "c,tolerance", [(-0.5, 1e-10), (-0.001, 1e-8), (-0.0001, 5e-7)]
+)
+def test_qr_uncertainty_matches_high_precision_on_arbitrary_grids(
+    monkeypatch, c, tolerance
+):
+    ns = np.array([20, 35, 60, 100, 180, 300, 500, 800])
+    params = np.array([0.2 - 0.05 / abs(c), 0.05 / abs(c), c])
+    means = synthesize._power_law(ns, *params) + np.array(
+        [0.004, -0.0025, 0.0012, -0.0009, 0.0007, -0.0005, 0.0004, -0.0003]
+    )
+    metrics = pd.DataFrame(
+        {"total_size": ns, "draw": 0, "method": "RF", "f1_score": means}
+    )
+    stub_optimizer(monkeypatch, params=params)
+    fit = fit_sample_sizes(metrics)["RF"]
+    assert fit.ci_ok
+    xs = np.r_[ns, 1, 10, 40.5, 40.5, 1600, 8000]
+    covariance, variance = decimal_uncertainty(fit.observed, params, xs)
+    predictions = fit.predict(xs)
+    np.testing.assert_allclose(fit.covariance, covariance, rtol=tolerance)
+    half_width = predictions.ci_high - predictions.predicted
+    np.testing.assert_allclose(
+        half_width**2 / norm.ppf(0.975) ** 2, variance, rtol=tolerance
+    )
+    pd.testing.assert_frame_equal(fit.predict(ns), fit.predictions)
+    assert predictions.iloc[-3].equals(predictions.iloc[-4])
+
+    # Existing exported fields suffice to reproduce uncertainty without an optimizer.
+    payload = json.loads(json.dumps(fit.to_dict(), allow_nan=False))
+    restored = LearningCurveFit(
+        payload["method"],
+        payload["metric_name"],
+        pd.DataFrame(payload["observed"]),
+        pd.DataFrame(payload["predictions"]),
+        np.array(payload["parameters"]),
+        np.array(payload["covariance"]),
+        payload["fit_status"],
+        payload["interval_status"],
+        payload["message"],
+    )
+    pd.testing.assert_frame_equal(restored.predict(xs), predictions)
+
+    # Paired row/weight permutation and uniform weight scaling preserve the estimator.
+    for observed in [
+        fit.observed.iloc[::-1],
+        fit.observed.assign(weight=fit.observed.weight * 1e4),
+    ]:
+        actual_covariance, actual_variance = synthesize._curve_uncertainty(
+            observed, params, xs
+        )
+        np.testing.assert_allclose(actual_covariance, covariance, rtol=tolerance)
+        np.testing.assert_allclose(actual_variance, variance, rtol=tolerance)
+
+
+@pytest.mark.parametrize(
+    "params,sizes",
+    [
+        ([0.1, 0.0, -0.5], [20, 35, 60, 100, 180, 300, 500, 800]),
+        ([0.1, 1.0, 0.0], [20, 35, 60, 100, 180, 300, 500, 800]),
+        ([0.1, 1.0, -1e-9], [20, 35, 60, 100, 180, 300, 500, 800]),
+        ([0.1, 1.0, -0.5], list(range(100000000, 100000008))),
+    ],
+)
+def test_rank_deficiency_retains_curve_without_truncating_directions(
+    metrics, monkeypatch, params, sizes
+):
+    stub_optimizer(monkeypatch, params=np.array(params))
+    table = metrics.assign(total_size=np.repeat(sizes, 2))
+    fit = fit_sample_sizes(table)["RF"]
+    assert fit.fit_ok and not fit.ci_ok
+    assert "Jacobian" in fit.message
+    assert fit.predictions.ci_low.isna().all()
+    assert fit.predict([25, 100]).ci_low.isna().all()
+    json.dumps(fit.to_dict(), allow_nan=False)
+
+
+def test_finite_optimizer_covariance_does_not_set_analytic_intervals(
+    metrics, monkeypatch
+):
+    stub_optimizer(monkeypatch, covariance=np.eye(3))
+    first = fit_sample_sizes(metrics)["RF"]
+    stub_optimizer(monkeypatch, covariance=np.eye(3) * 1e12)
+    second = fit_sample_sizes(metrics)["RF"]
+    np.testing.assert_array_equal(first.covariance, second.covariance)
+    pd.testing.assert_frame_equal(first.predictions, second.predictions)
+
+
 def test_weighted_fit_matches_independent_reference(metrics):
     result = fit_sample_sizes(metrics)["RF"]
     assert isinstance(result, LearningCurveFit)
@@ -60,7 +199,7 @@ def test_weighted_fit_matches_independent_reference(metrics):
     def model(n, a, b, c):
         return 1 - a - b * n**c
 
-    weighted, covariance = curve_fit(
+    weighted, _ = curve_fit(
         model,
         observed.n,
         observed.observed_mean,
@@ -73,7 +212,13 @@ def test_weighted_fit_matches_independent_reference(metrics):
         model, observed.n, observed.observed_mean, p0=[0, 1, -0.5], maxfev=50000
     )
     np.testing.assert_allclose(result.parameters, weighted)
-    np.testing.assert_allclose(result.covariance, covariance)
+    covariance, variance = decimal_uncertainty(result.observed, weighted, observed.n)
+    np.testing.assert_allclose(result.covariance, covariance, rtol=1e-10)
+    np.testing.assert_allclose(
+        (result.predictions.ci_high - result.predictions.predicted) ** 2,
+        norm.ppf(0.975) ** 2 * variance,
+        rtol=1e-10,
+    )
     np.testing.assert_allclose(observed.weight, weights)
     weighted_loss = np.sum(
         weights * (model(observed.n, *weighted) - observed.observed_mean) ** 2
@@ -115,7 +260,7 @@ def test_classifier_order_and_metric_selection(metrics):
 
 
 def test_parameter_intervals_and_new_grid_do_not_refit(metrics, monkeypatch):
-    params, covariance = stub_optimizer(monkeypatch)
+    params, _ = stub_optimizer(monkeypatch)
     fit = fit_sample_sizes(metrics)["RF"]
 
     def unexpected(*args, **kwargs):
@@ -126,14 +271,8 @@ def test_parameter_intervals_and_new_grid_do_not_refit(metrics, monkeypatch):
     prediction = fit.predict(xs)
     np.testing.assert_array_equal(prediction.n, xs)
     expected = 1 - params[0] - params[1] * xs ** params[2]
-    jac = np.column_stack(
-        [
-            -np.ones(len(xs)),
-            -(xs ** params[2]),
-            -params[1] * xs ** params[2] * np.log(xs),
-        ]
-    )
-    variance = np.einsum("ij,jk,ik->i", jac, covariance, jac)
+    covariance, variance = decimal_uncertainty(fit.observed, params, xs)
+    np.testing.assert_allclose(fit.covariance, covariance, rtol=1e-10)
     np.testing.assert_allclose(prediction.predicted, expected)
     np.testing.assert_allclose(
         prediction.ci_low, expected - norm.ppf(0.975) * np.sqrt(variance)
@@ -179,7 +318,6 @@ def test_optimizer_failure_preserves_observations_and_serializes(metrics, monkey
     [
         np.full((3, 3), np.inf),
         np.full((3, 3), np.nan),
-        np.diag([-1.0, 0.0, 0.0]),
     ],
 )
 def test_unusable_covariance_retains_curve(metrics, monkeypatch, covariance):
@@ -232,7 +370,9 @@ def test_invalid_optimizer_values(metrics, monkeypatch, params, message):
 def test_unusable_propagated_variance_is_not_clipped(metrics, monkeypatch, variance):
     stub_optimizer(monkeypatch)
     monkeypatch.setattr(
-        synthesize, "_power_law_prediction_variance", lambda *args: variance
+        synthesize,
+        "_curve_uncertainty",
+        lambda *args: (np.eye(3), np.full(len(args[2]), variance)),
     )
     fit = fit_sample_sizes(metrics)["RF"]
     assert fit.fit_ok
@@ -399,7 +539,9 @@ def test_bad_new_grid_intervals_raise_without_mutating_fit(metrics, monkeypatch)
     fit = fit_sample_sizes(metrics)["RF"]
     stored = fit.predictions.copy()
     monkeypatch.setattr(
-        synthesize, "_power_law_prediction_variance", lambda *args: -1.0
+        synthesize,
+        "_curve_uncertainty",
+        lambda *args: (np.eye(3), np.full(len(args[2]), -1.0)),
     )
     with pytest.raises(ValueError, match="negative variance"):
         fit.predict([25, 50])

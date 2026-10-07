@@ -221,42 +221,32 @@ then applied unchanged to the corresponding fold or external evaluation data.
 Curve Fitting and Confidence Intervals
 --------------------------------------
 
-The numerical implementation is :func:`~syng_bts.fit_sample_sizes`;
-plotting calls it directly. Each classifier is fitted separately after averaging
-rows at each distinct candidate size. Every supplied row has equal weight within
-its mean, even if draw labels repeat. The between-size fit weights depend on size
-rank, not draw count or draw SD. Input rows must contain positive integral sizes,
-finite numeric values for the selected metric, non-empty string method labels
-and non-missing draw labels. Missing values are rejected rather than dropped.
+:func:`~syng_bts.fit_sample_sizes` fits each classifier separately, averaging
+metric rows at each candidate size with equal weight per row. It fits
+``1 - a - b*n**c`` to the *m* sorted means using weights ``1/m, ..., 1``,
+independent of draw counts or SDs. Plotting uses the same implementation.
 
-:func:`~syng_bts.plot_sample_sizes` displays approximate pointwise 95%
-confidence intervals for the fitted inverse-power-law mean curves. The bands
-propagate fitted-parameter covariance with the delta method; they are not
-prediction intervals for individual classifier results.
+SciPy ``curve_fit`` uses unconstrained parameters, starting values
+``[0, 1, -0.5]``, at most 50,000 function evaluations,
+``sigma=1/sqrt(weight)`` and ``absolute_sigma=False``. Neither predictions nor
+intervals are clipped to the metric range, and monotonicity is not imposed.
 
-Three distinct sample sizes are sufficient to fit the three-parameter curve,
-but at least four fitted points are required to estimate parameter covariance
-and display a confidence band. With exactly three points, the fitted curve is
-shown without a band and a warning explains why.
+Bands are approximate pointwise 95% confidence intervals for the fitted mean,
+not prediction intervals for individual classifier results. The delta method
+uses the analytic parameter Jacobian, weighted residual variance with ``m - 3``
+degrees of freedom, and the standard normal 0.975 quantile. Scaled, pivoted QR
+and triangular solves reduce cancellation; exported covariance comes from the
+same factorization.
 
-The nonlinear fit uses the same increasing row weights as the R
-implementation. After ordering the *m* curve points by candidate size, their
-weights are ``1/m, 2/m, ..., m/m``, giving larger candidate sizes greater
-weight.
+At least three distinct sizes are required to fit a curve and four to estimate
+intervals. Optimizer covariance warnings, non-finite covariance or a numerically
+rank-deficient Jacobian leave the curve available without a band. Weak parameter
+directions are never silently discarded.
 
-The curve is ``1 - a - b*n**c``, with unconstrained parameters, starting values
-``[0, 1, -0.5]`` and at most 50,000 function evaluations. SciPy ``curve_fit``
-receives ``sigma=1/sqrt(weight)`` and ``absolute_sigma=False``. The covariance
-therefore uses the weighted residual variance and ``m - 3`` residual degrees of
-freedom; the draw SDs do not set the covariance scale. Predictions and intervals
-are not clipped to the metric range, and monotonicity is not imposed.
-
-For each size, the parameter gradient is
-``J = [-1, -n**c, -b*n**c*log(n)]``. The fitted-mean variance is
-``J @ covariance @ J.T``; limits use the standard normal 0.975 quantile.
-These are local nonlinear approximations. They do not account for all dependence
-between cross-validation folds, draws or overlapping candidate subsets, nor do
-they establish the validity of extrapolation.
+Finite bands can still be unreliable for ill-conditioned or poorly identified
+fits, including nearly zero exponents and effectively constant curves. These
+local approximations do not account for all dependence between folds, draws or
+overlapping subsets, and do not validate extrapolation.
 
 Reusable Numerical Results
 --------------------------
@@ -294,7 +284,8 @@ The returned dictionary preserves first-seen classifier order. Result fields are
      - NumPy vector in ``a, b, c`` order, or None when unavailable.
    * - ``covariance``
      - NumPy 3-by-3 matrix in the same order, or None when unavailable.
-       Unusable optimizer covariance is retained for inspection.
+       Analytic-Jacobian covariance when calculable; otherwise the optimizer's
+       covariance is retained for inspection. See the rounding limitation below.
    * - ``predictions``
      - Stored DataFrame at observed sizes: ``n``, ``predicted``, ``ci_low``,
        ``ci_high``. Calculated once during fitting.
@@ -313,6 +304,14 @@ A failed fit returns NaN predictions; unavailable intervals remain NaN. If a
 previously usable curve or band cannot be evaluated on the new grid (for example,
 because extrapolation overflows), ``predict`` raises ValueError and leaves the
 stored results unchanged. Extrapolation is permitted, but remains unvalidated.
+The small QR calculation is repeated from the stored observations and parameters
+when evaluating a new grid; the nonlinear optimizer is not run again.
+
+For ill-conditioned fits, rounding the dense covariance can lose information
+needed to reproduce the intervals, even if its entries are individually accurate.
+Use ``predict`` or the stored predictions instead of multiplying the exported
+matrix by gradients. The exported observations, weights and parameters retain
+the inputs needed to reconstruct the factorized calculation without refitting.
 
 ``to_dict()`` returns the observed data, fitted parameters, covariance,
 predictions and fit status in a dictionary ready to save as JSON. Missing or

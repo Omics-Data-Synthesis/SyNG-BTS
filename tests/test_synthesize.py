@@ -110,21 +110,6 @@ class TestPowerLawUncertainty:
 
         np.testing.assert_allclose(analytic, finite_difference, rtol=1e-7, atol=1e-9)
 
-    def test_prediction_variance_matches_hand_calculation(self):
-        """Parameter covariance is propagated as J Sigma J-transpose."""
-        params = np.array([0.1, 0.2, -0.5])
-        covariance = np.array(
-            [
-                [0.04, 0.002, -0.003],
-                [0.002, 0.01, 0.001],
-                [-0.003, 0.001, 0.09],
-            ]
-        )
-
-        variance = synthesize._power_law_prediction_variance(10.0, params, covariance)
-
-        assert variance == pytest.approx(0.043391928179533926)
-
     def test_curve_fit_uses_r_weights_in_sample_size_order(self, monkeypatch):
         """Curve fitting uses the R row weights after sorting by sample size."""
         captured: dict[str, np.ndarray] = {}

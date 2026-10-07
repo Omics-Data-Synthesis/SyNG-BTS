@@ -1,6 +1,13 @@
 Release Notes
 =============
 
+Unreleased
+----------
+
+Improve numerical stability of SyntheSize confidence intervals using the analytic
+Jacobian and scaled QR factorization. Intervals may change, while fitted curves
+and the public API remain unchanged.
+
 3.6.0
 -----
 
